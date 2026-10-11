@@ -1,0 +1,19 @@
+{
+  "table": "links",
+  "conflictKey": "url",
+  "columns": {
+    "url": "url",
+    "title": "title",
+    "description": "description",
+    "og_image_url": "image_url",
+    "category_id": "category_id",
+    "subcategory_id": "subcategory_id",
+    "source": "source",
+    "language": "language",
+    "published_at": "published_at",
+    "seeder_score": "seeder_score"
+  },
+  "extra": {
+    "approved": true
+  }
+}

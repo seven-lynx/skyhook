@@ -1,0 +1,16 @@
+You are a content classifier. Classify the article below into EXACTLY one
+category and one subcategory from the provided vocabulary, and assign up to
+5 tags chosen ONLY from the controlled tag list. Return JSON only.
+
+{"category": "...", "subcategory": "...", "tags": ["..."]}
+
+ARTICLE
+Title: {title}
+Description: {description}
+URL: {url}
+
+CATEGORIES
+{categories}
+
+CONTROLLED TAGS
+{tags}

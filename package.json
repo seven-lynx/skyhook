@@ -1,0 +1,44 @@
+{
+  "name": "skyhook",
+  "version": "0.1.0",
+  "description": "Self-hosted content seeder — discover, enrich, tag, and push web content to your own database.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "skyhook": "./bin/skyhook.js"
+  },
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./core": "./src/core/seed.js",
+    "./engine": "./src/engine/seeder-engine.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "seeder",
+    "crawler",
+    "rss",
+    "sitemap",
+    "content",
+    "self-hosted",
+    "llm",
+    "tagging"
+  ],
+  "dependencies": {
+    "@inquirer/prompts": "^8.7.3",
+    "better-sqlite3": "^13.0.3",
+    "crawlee": "^3.17.0",
+    "dotenv": "^17.4.2",
+    "node-fetch": "^3.3.2",
+    "playwright": "^1.61.1"
+  },
+  "optionalDependencies": {
+    "@supabase/supabase-js": "^2.104.1",
+    "pg": "^8.13.0"
+  }
+}

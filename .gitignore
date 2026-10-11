@@ -1,0 +1,15 @@
+node_modules/
+.env
+.cache/
+dist/
+coverage/
+*.log
+
+# User config — the example lives in config/, but a live config at the root is gitignored.
+skyhook.config.json
+config/skyhook.config.json
+
+# Local SQLite state / logs
+*.db
+*.db-wal
+*.db-shm
