@@ -24,8 +24,12 @@ reach out across the web and beam content down into your database.
 
 ## Status
 
-**v0.1 — in active extraction.** The engine is being de-coupled from its
-original host. See `docs/` (coming) for the extraction plan and authoring guide.
+**v0.1 — in active extraction.**
+
+- ✅ **Core** (`src/core/seed.js`) + **engine** (`src/engine/seeder-engine.js`) ported and
+  de-coupled from the original host.
+- ✅ **Adapters** — storage (Supabase / Postgres / SQLite / stage), categories, tagging, log.
+- ⏳ **Interfaces** (CLI / TUI / HTTP API / GUI) — Phase 4, not yet ported.
 
 ## Quick start
 
