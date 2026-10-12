@@ -351,7 +351,7 @@ export async function upsertUrls(rows, {
   const log = verbose ? console.log : () => {};
 
   // Offline staging mode: when SKYHOOK_STAGE_ONLY=1 (or --stage-only is passed),
-  // redirect the whole pipeline to write JSONL to scripts/.cache/staged/ instead
+  // redirect the whole pipeline to write JSONL to .skyhook/staged/ instead
   // of touching Supabase. This lets the Raspberry Pi harvest + enrich URLs with
   // no DB access, so the PC can pull them over the LAN, tag them with the local
   // LLM, and perform the single tagged-only Supabase write.
@@ -624,10 +624,10 @@ export async function upsertUrls(rows, {
  *
  * Mirrors `upsertUrls()`'s prepare pipeline (normalise → local-business filter →
  * per-domain cap → liveness → OG/canonical → title gate) but instead of a DB
- * dedup + upsert it appends normalised rows to `scripts/.cache/staged/<source>.jsonl`.
+ * dedup + upsert it appends normalised rows to `.skyhook/staged/<source>.jsonl`.
  *
  * Each staged line is a JSON object with the same shape the PC's
- * `import-staged-urls.mjs` consumes:
+ * `push` command (sync.js) consumes:
  *   { url, title, description, og_image_url, category_id, subcategory_id,
  *     source, language, published_at, seeder_score, staged_at }
  *

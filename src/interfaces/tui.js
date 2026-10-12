@@ -1,9 +1,9 @@
 /**
- * tui.mjs — interactive control center (terminal UI) for skyhook.
+ * tui.js — interactive control center (terminal UI) for skyhook.
  *
  * Driven by @inquirer/prompts (fuzzy-searchable selects), so 606 seeders are
- * easy to navigate. All logic lives in seeder-engine.mjs — this module is a
- * thin interactive front-end. Launched via `node skyhook.mjs tui`.
+ * easy to navigate. All logic lives in seeder-engine.js — this module is a
+ * thin interactive front-end. Launched via `node bin/skyhook.js tui`.
  */
 import { select, checkbox, confirm, input, Separator } from "@inquirer/prompts";
 import { spawn, spawnSync } from "child_process";

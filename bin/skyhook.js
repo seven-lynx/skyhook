@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * skyhook.mjs — Skyhook Control Center (CLI).
+ * skyhook.js — Skyhook Control Center (CLI).
  *
  * One entry point for ALL seeding management: browse the 606 seeders, see what
  * is due, run seeders, edit the schedule, inspect history, and regenerate the

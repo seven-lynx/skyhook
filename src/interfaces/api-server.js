@@ -1,8 +1,8 @@
 /**
- * api-server.mjs — HTTP JSON API over the seeder engine.
+ * api-server.js — HTTP JSON API over the seeder engine.
  *
  * This is the centralisation layer: the Windows/Pi web GUI (served from / via
- * scripts/gui/), a browser, or curl can drive seeding over the LAN with no SSH.
+ * src/gui/), a browser, or curl can drive seeding over the LAN with no SSH.
  * Zero framework — Node's built-in http server. CORS is open so the GUI (any
  * origin) can call it.
  *

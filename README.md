@@ -67,6 +67,16 @@ node bin/skyhook.js sync pull pi               # merge the Pi's results (PC)
 node bin/skyhook.js push                       # push merged staged → storage
 ```
 
+## Requirements
+
+- **Node.js ≥ 20** (CI runs Node 20).
+- `npm install` works out of the box on Windows/macOS/Linux — no C++ toolchain
+  required. `better-sqlite3` is pinned to **12.x** because v13's build setup
+  (removed install script + `gypfile:false` not honoured by npm) forces a
+  source build on clean installs.
+- The **headless-browser** discovery tier is optional and off by default. To use
+  it, run `npx playwright install chromium` once.
+
 Docs: [quickstart](docs/quickstart.md) · [authoring seeders](docs/authoring-seeders.md) · [storage](docs/storage.md) · [tagging](docs/tagging.md) · [multi-node](docs/multi-node.md)
 
 ## Layout

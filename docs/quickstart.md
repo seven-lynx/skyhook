@@ -23,11 +23,14 @@ node bin/skyhook.js tui            # interactive terminal menu
 node bin/skyhook.js serve          # web GUI + JSON API at http://localhost:4173
 ```
 
+The headless-browser discovery tier is optional and off by default. If you want
+it, install its browser once: `npx playwright install chromium`.
+
 ## 3. Connect your database
 
-Edit `skyhook.config.json` (copy from `config/` examples) to pick a storage
-provider. See [docs/storage.md](storage.md) for the full mapping. Example
-(Supabase):
+Create a `skyhook.config.json` at the repo root to pick a storage provider (the
+file is gitignored, so a fresh clone starts without one). See
+[docs/storage.md](storage.md) for the full mapping. Example (Supabase):
 
 ```json
 {

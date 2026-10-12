@@ -1,9 +1,9 @@
 /**
- * seeder-engine.mjs — headless core for all seeding management.
+ * seeder-engine.js — headless core for all seeding management.
  *
  * Single source of truth for: seeder discovery, schedule (manifest overlay),
  * run execution with result capture, and run history. No UI of its own — the
- * CLI (skyhook.mjs), the TUI, and the future Windows/Pi GUI all call into this.
+ * CLI (skyhook.js), the TUI, and the future Windows/Pi GUI all call into this.
  *
  * Runs identically on the Raspberry Pi (stage-only, no Supabase) and the PC.
  */
@@ -519,7 +519,7 @@ export function runOne(seeder, opts = {}) {
 
       // Record failures in the central master log (seeding-runs.jsonl) so they
       // reach Supabase seeding_runs. Successes are self-logged by the seeders
-      // via lib/seed.js, so only failures are logged here to avoid duplicates.
+      // via the seed core (src/core/seed.js), so only failures are logged here to avoid duplicates.
       if (error && !stopped) {
         try {
           await logCrash({

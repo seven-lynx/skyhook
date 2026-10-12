@@ -1,7 +1,7 @@
 "use strict";
 
 /* Skyhook Control — browser GUI over the skyhook HTTP API.
- * Zero dependencies; served from scripts/gui/ by lib/api-server.mjs. */
+ * Zero dependencies; served from src/gui/ by interfaces/api-server.js. */
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
