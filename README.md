@@ -9,9 +9,9 @@ reach out across the web and beam content down into your database.
 
 ## What it does
 
-- **Discover** — a 9-tier discovery chain (RSS/Atom, JSON Feed, sitemap,
-  WordPress REST, Wayback CDX, RSS autodiscovery, archive scraping, headless
-  browser) finds article URLs for a site.
+- **Discover** — a 5-tier discovery chain (RSS/Atom, sitemap, Wayback CDX,
+  RSS autodiscovery, headless browser) finds article URLs for a site, with an
+  adaptive short-circuit that skips lower tiers once ≥50 URLs are found.
 - **Enrich** — normalise URLs, drop storefronts, check liveness, fetch
   Open-Graph metadata, gate on title quality.
 - **Tag (optional)** — classify each item into your category taxonomy and assign
@@ -37,7 +37,7 @@ reach out across the web and beam content down into your database.
 - ✅ **Adapters** — storage (Supabase / SQLite / stage), categories, tagging, log.
 - ✅ **Multi-node** — node identity, remote toggle, peer routing, sync/merge.
 - ✅ **Curation + analytics** — `cache` / `stats` commands + API.
-- ⏳ **GUI tabs** for Settings / Curation / Stats (fast-follow; CLI + API cover them today).
+- ✅ **GUI** — dashboard, seeders, timer, pipeline, stats, curation, and settings tabs.
 
 ## Quick start
 
@@ -74,6 +74,7 @@ Docs: [quickstart](docs/quickstart.md) · [authoring seeders](docs/authoring-see
 ```
 src/
 ├─ core/          # discovery chain + enrich pipeline
+│  ├─ seed.js       # seedRssWithFallbacks / seedWaybackCdx / upsertUrls
 │  ├─ staged.js     # staged JSONL helpers (read/merge/filter/group)
 │  ├─ sync.js       # merge Pi ⇄ PC + push to storage
 │  ├─ analytics.js  # totals + percentages

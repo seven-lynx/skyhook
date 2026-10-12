@@ -615,7 +615,7 @@ function cmdInit(a) {
 // ── tui ─────────────────────────────────────────────────────────────────────
 async function cmdTui() {
   try {
-    const { runTui } = await import("./lib/tui.mjs");
+    const { runTui } = await import("../src/interfaces/tui.js");
     await runTui();
   } catch (err) {
     if (err.code === "ERR_MODULE_NOT_FOUND") {
@@ -630,7 +630,7 @@ async function cmdTui() {
 // ── serve ───────────────────────────────────────────────────────────────────
 async function cmdServe(a) {
   const port = parseInt(val(a, "--port", "4173"), 10) || 4173;
-  const { startServer } = await import("./lib/api-server.mjs");
+  const { startServer } = await import("../src/interfaces/api-server.js");
   startServer(port); // blocks until Ctrl+C
 }
 

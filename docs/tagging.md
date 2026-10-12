@@ -23,7 +23,7 @@ tagging:
   providers:
     - { id: ollama,   baseUrl: "http://localhost:11434" }
     - { id: lmstudio, baseUrl: "http://localhost:1234/v1" }
-    - { id: openai,   baseUrl: "https://api.openai.com/v1", apiKeyEnv: OPENAI_API_KEY }
+    - { id: openai,   baseUrl: "https://api.openai.com/v1", apiKey: "sk-..." }
   model: "llama3.1:8b"                 # chosen after detectModels()
   promptFile: "config/tagging-prompt.txt"
   vocabFile:  "config/tags.json"

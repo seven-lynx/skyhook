@@ -10,7 +10,7 @@ in `skyhook.config.json` → `storage.provider`.
 | `stage` (default) | nothing | offline JSONL staging (air-gapped / test runs) |
 | `sqlite` | nothing (local) | fully self-contained local database |
 | `supabase` | `url` + `serviceRoleKey` | hosted Postgres via Supabase |
-| `postgres` | (fast-follow) | direct Postgres connection |
+| `postgres` | `connectionString` (or `POSTGRES_URL` / `DATABASE_URL` / `PG*` env) | direct Postgres connection |
 
 ## schema.json — field mapping
 
