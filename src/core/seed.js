@@ -442,7 +442,7 @@ export async function upsertUrls(rows, {
     log(`[seed] Liveness check for ${fresh.length} URLs (checkpoint: ${cpId})...`);
     const LIVE_TIMEOUT_MS = 5000;
     const LIVE_CONCURRENCY = 15;
-    const __cacheDir = resolve(__dirname, "..", ".cache");
+    const __cacheDir = getConfig().dataDir;
     const LIVE_CHECKPOINT = resolve(__cacheDir, `liveness-${cpId}.json`);
     const alive = [];
     let processed = 0;
@@ -651,7 +651,7 @@ export async function stageUrls(rows, {
   const log = verbose ? console.log : () => {};
   const outDir = stageDir
     ? resolve(__dirname, "..", stageDir)
-    : resolve(__dirname, "../.cache/staged");
+    : getConfig().stagedDir;
   mkdirSync(outDir, { recursive: true });
   const safeName = (s) => String(s).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
 
@@ -1436,7 +1436,7 @@ export async function seedWaybackCdx(config) {
     maxPages = 40,
   } = config;
 
-  const CACHE_DIR = resolve(__dirname, "../.cache");
+  const CACHE_DIR = getConfig().dataDir;
   const CACHE_FILE = resolve(CACHE_DIR, cacheFileName);
   mkdirSync(CACHE_DIR, { recursive: true });
 
@@ -1980,7 +1980,7 @@ export async function seedRssWithFallbacks(config) {
     minUrlsToShortCircuit = 50,
   } = config;
 
-  const CACHE_DIR = resolve(__dirname, "../.cache");
+  const CACHE_DIR = getConfig().dataDir;
   const CACHE_FILE = resolve(CACHE_DIR, cacheFileName);
   mkdirSync(CACHE_DIR, { recursive: true });
 
