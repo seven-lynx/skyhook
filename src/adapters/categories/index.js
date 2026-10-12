@@ -9,8 +9,8 @@
  *   subcategory_id: SUBCATEGORY.SPACE_ASTRONOMY
  *
  * If a category has an `externalId` (e.g. a UUID or FK your DB expects), that
- * value is used instead of the string id — this is how Roam's overlay maps the
- * same constants back onto its UUIDs without touching any seeder.
+ * value is used instead of the string id — this is how an overlay maps the
+ * same constants back onto its own DB ids without touching any seeder.
  */
 import { readFileSync, existsSync } from "fs";
 
@@ -38,16 +38,18 @@ export function loadCategories(file) {
 
   for (const c of raw.categories || []) {
     const id = String(c.id);
-    CATEGORY[id] = c.externalId ?? id;
-    SUBCATEGORY_BY_CATEGORY[id] = [];
+    const value = c.externalId ?? id;
+    CATEGORY[id] = value;
+    SUBCATEGORY_BY_CATEGORY[value] = [];
     categories.push({ id, label: c.label || humanize(id), externalId: c.externalId ?? null });
   }
   for (const s of raw.subcategories || []) {
     const id = String(s.id);
-    const parent = String(s.category);
-    SUBCATEGORY[id] = s.externalId ?? id;
-    if (SUBCATEGORY_BY_CATEGORY[parent]) SUBCATEGORY_BY_CATEGORY[parent].push(id);
-    subcategories.push({ id, label: s.label || humanize(id), category: parent, externalId: s.externalId ?? null });
+    const value = s.externalId ?? id;
+    SUBCATEGORY[id] = value;
+    const parentValue = CATEGORY[String(s.category)];
+    if (SUBCATEGORY_BY_CATEGORY[parentValue]) SUBCATEGORY_BY_CATEGORY[parentValue].push(value);
+    subcategories.push({ id, label: s.label || humanize(id), category: String(s.category), externalId: s.externalId ?? null });
   }
 
   _cat = { CATEGORY, SUBCATEGORY, SUBCATEGORY_BY_CATEGORY, categories, subcategories };

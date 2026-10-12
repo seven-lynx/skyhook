@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, rmSync } from "fs";
+import { readFileSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { loadCategories } from "../src/adapters/categories/index.js";
 import { createStorage } from "../src/adapters/storage/index.js";
@@ -47,4 +47,22 @@ test("tagging prompt placeholders are substituted", () => {
   assert.ok(out.includes("SCIENCE (Science)"));
   assert.ok(out.includes("news"));
   assert.ok(!out.includes("{title}"));
+});
+
+test("categories externalId maps constants and grouping to external ids", () => {
+  const dir = join(root, ".tmp-cat");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "categories.json");
+  writeFileSync(file, JSON.stringify({
+    categories: [{ id: "SCIENCE", label: "Science", externalId: "uuid-cat-1" }],
+    subcategories: [
+      { id: "SPACE_ASTRONOMY", category: "SCIENCE", externalId: "uuid-sub-1" },
+      { id: "BIOLOGY_EVOLUTION", category: "SCIENCE", externalId: "uuid-sub-2" },
+    ],
+  }));
+  const cats = loadCategories(file);
+  assert.equal(cats.CATEGORY.SCIENCE, "uuid-cat-1");
+  assert.equal(cats.SUBCATEGORY.SPACE_ASTRONOMY, "uuid-sub-1");
+  assert.deepEqual(cats.SUBCATEGORY_BY_CATEGORY["uuid-cat-1"], ["uuid-sub-1", "uuid-sub-2"]);
+  rmSync(dir, { recursive: true, force: true });
 });
