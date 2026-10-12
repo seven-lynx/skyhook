@@ -19,10 +19,14 @@ export function mergedRows({ key = "url" } = {}) {
 /** Push the merged staged set into the configured storage. */
 export async function pushStagedToStorage({ key = "url" } = {}) {
   const storage = await createStorage(getConfig());
-  const rows = mergedRows({ key });
-  if (!rows.length) return { pushed: 0, skipped: 0, total: 0 };
-  const result = await storage.upsert(rows);
-  return { pushed: result.inserted ?? 0, skipped: result.skipped ?? 0, total: rows.length };
+  try {
+    const rows = mergedRows({ key });
+    if (!rows.length) return { pushed: 0, skipped: 0, total: 0 };
+    const result = await storage.upsert(rows);
+    return { pushed: result.inserted ?? 0, skipped: result.skipped ?? 0, total: rows.length };
+  } finally {
+    await storage.close?.();
+  }
 }
 
 /** Merge a peer's staged rows into local staged files (dedup by URL). */

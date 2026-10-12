@@ -25,7 +25,11 @@ import { statsFromStaged } from "../src/core/analytics.js";
 import { listCache, pruneStaged, clearDiscovery, clearStaged } from "../src/core/data.js";
 import { mergeRemoteRows, pushStagedToStorage } from "../src/core/sync.js";
 import { spawnSync } from "child_process";
-import { join } from "path";
+import { join, resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+import { existsSync, mkdirSync, writeFileSync, copyFileSync } from "fs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const COMMANDS = [
   ["list",       "Show all seeders with schedule, last run, result, and next run"],
@@ -44,6 +48,7 @@ const COMMANDS = [
   ["sync",       "Merge staged results with a peer (Pi ⇄ PC) with URL dedup"],
   ["push",       "Push the merged staged set into the configured storage"],
   ["settings",   "View or toggle node settings (allowRemote, peers)"],
+  ["init",       "Scaffold a new Skyhook setup (config, config/, seeders/, .skyhook/)"],
   ["tui",        "Interactive menu (terminal control center)"],
   ["serve",      "Start the HTTP JSON API (for the GUI / remote control)"],
   ["help",       "Show help (help <cmd> for one command)"],
@@ -80,6 +85,7 @@ function helpFor(cmd) {
     sync:       "sync pull <peer-id>            (merge a peer's staged results locally)  |  sync peers (list peers)",
     push:       "push",
     settings:   "settings                       (view)  |  settings allow-remote on|off",
+    init:       "init [--provider stage|sqlite|supabase|postgres]",
     tui: "tui",
     serve:     "serve [--port N]  (default 4173)",
     help:      "help [<command>]",
@@ -547,6 +553,65 @@ function cmdSettings(a) {
   console.log(`\n  Toggle: skyhook settings allow-remote on|off\n`);
 }
 
+// ── init ────────────────────────────────────────────────────────────────────
+function cmdInit(a) {
+  const providers = ["stage", "sqlite", "supabase", "postgres"];
+  const provider = val(a, "--provider", "stage");
+  if (!providers.includes(provider)) {
+    console.error(`Unknown provider "${provider}". Use: ${providers.join(" | ")}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const dir = process.cwd();
+  const configFile = join(dir, "skyhook.config.json");
+  if (existsSync(configFile)) {
+    console.error(`skyhook.config.json already exists in ${dir}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const bundled = resolve(__dirname, "..");
+  const config = {
+    name: "skyhook",
+    node: { id: "local", allowRemote: false },
+    seedersDir: "seeders",
+    dataDir: ".skyhook",
+    categoriesFile: "config/categories.json",
+    manifestFile: ".skyhook/seeders-manifest.json",
+    descriptionsFile: ".skyhook/seeders-descriptions.json",
+    stateDb: ".skyhook/seeder-state.db",
+    logDir: ".skyhook/logs",
+    stagedDir: ".skyhook/staged",
+    settingsFile: ".skyhook/settings.json",
+    storage: { provider, schemaFile: "config/schema.json" },
+  };
+  if (provider === "sqlite") config.storage.dbFile = ".skyhook/skyhook.db";
+
+  writeFileSync(configFile, JSON.stringify(config, null, 2) + "\n");
+
+  mkdirSync(join(dir, "config"), { recursive: true });
+  for (const f of ["categories.json", "schema.json"]) {
+    const src = join(bundled, "config", f);
+    const dst = join(dir, "config", f);
+    if (existsSync(src) && !existsSync(dst)) copyFileSync(src, dst);
+  }
+
+  mkdirSync(join(dir, "seeders"), { recursive: true });
+  const exampleSrc = join(bundled, "seeders", "seed-example.js");
+  const exampleDst = join(dir, "seeders", "seed-example.js");
+  if (existsSync(exampleSrc) && !existsSync(exampleDst)) copyFileSync(exampleSrc, exampleDst);
+
+  mkdirSync(join(dir, ".skyhook"), { recursive: true });
+
+  console.log(`\n✓ Initialized Skyhook (storage=${provider}) in ${dir}`);
+  console.log(`  → skyhook list        # discover + list seeders`);
+  console.log(`  → skyhook serve       # web GUI + JSON API on :4173`);
+  if (provider === "supabase") console.log(`  → set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in .env`);
+  if (provider === "postgres") console.log(`  → set POSTGRES_URL (or PG* env vars) in .env`);
+  console.log("");
+}
+
 // ── tui ─────────────────────────────────────────────────────────────────────
 async function cmdTui() {
   try {
@@ -592,6 +657,7 @@ async function main() {
     case "sync": await cmdSync(args); break;
     case "push": await cmdPush(args); break;
     case "settings": cmdSettings(args); break;
+    case "init": cmdInit(args); break;
     case "tui": await cmdTui(); break;
     case "serve": await cmdServe(args); break;
     default:

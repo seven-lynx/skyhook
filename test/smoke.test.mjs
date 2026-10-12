@@ -4,7 +4,7 @@ import { readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { loadCategories } from "../src/adapters/categories/index.js";
 import { createStorage } from "../src/adapters/storage/index.js";
-import { buildPrompt } from "../src/adapters/tagging/index.js";
+import { buildPrompt, tag } from "../src/adapters/tagging/index.js";
 import { getConfig } from "../src/config.js";
 import { aggregateRows } from "../src/core/analytics.js";
 import { mergeRows, filterRows, readStaged, writeStagedSource } from "../src/core/staged.js";
@@ -152,4 +152,41 @@ test("clearDiscovery removes a source's discovery cache", () => {
   assert.equal(clearDiscovery("example").cleared, true);
   assert.equal(existsSync(join(cfg.dataDir, "example.json")), false);
   rmSync(cfg.dataDir, { recursive: true, force: true });
+});
+
+test("postgres adapter is registered (not 'unknown provider')", async () => {
+  try {
+    await createStorage({
+      ...getConfig(),
+      storage: { provider: "postgres", connectionString: "postgres://localhost:1/nope", schemaFile: null },
+    });
+    assert.fail("expected a connection/install error");
+  } catch (e) {
+    assert.ok(!/Unknown storage provider/.test(e.message), `postgres should be registered: ${e.message}`);
+  }
+});
+
+test("tag() returns category/subcategory/tags via a stubbed provider", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: '{"category":"TECHNOLOGY","subcategory":"PROGRAMMING_SOFTWARE","tags":["news","how-to"]}' } }] }),
+  });
+  try {
+    const out = await tag(
+      [{ url: "https://a.com/x", title: "Hello", description: "Desc" }],
+      {
+        provider: { provider: "openai", baseUrl: "https://example.invalid/v1", apiKey: null },
+        model: "m",
+        prompt: "Classify {title}",
+        vocab: { categories: [{ id: "TECHNOLOGY", label: "Technology" }], tags: ["news", "how-to"] },
+        temperature: 0,
+      },
+    );
+    assert.equal(out[0].category, "TECHNOLOGY");
+    assert.equal(out[0].subcategory, "PROGRAMMING_SOFTWARE");
+    assert.deepEqual(out[0].tags, ["news", "how-to"]);
+  } finally {
+    globalThis.fetch = original;
+  }
 });

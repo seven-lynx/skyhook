@@ -137,6 +137,9 @@ function toast(msg, kind = "") {
 function showTab(name) {
   $$(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".panel").forEach((p) => p.classList.toggle("active", p.id === name));
+  if (name === "stats") renderAnalytics();
+  else if (name === "curation") renderCuration();
+  else if (name === "settings") renderSettings();
 }
 
 // ── seeders table ───────────────────────────────────────────────────────────
@@ -377,6 +380,79 @@ function renderProgress() {
   const eta = b.etaMs != null && b.etaMs > 0 ? ` · ~${fmtEta(b.etaMs)}` : "";
   const cached = ` · +${Number(b.stagedTotal ?? 0).toLocaleString()} cached`;
   el.textContent = `${b.remaining}/${b.total} remaining${eta}${cached}`;
+}
+
+// ── analytics / curation / settings tabs ───────────────────────────────────
+function barRow(label, count, pct) {
+  return `
+    <div class="bar-row">
+      <span class="bar-label">${esc(label)}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:${Math.min(100, pct)}%"></span></span>
+      <span class="bar-count">${count.toLocaleString()} · ${pct}%</span>
+    </div>`;
+}
+
+async function renderAnalytics() {
+  try {
+    const s = await get("/api/stats");
+    $("#analyticsCards").innerHTML = `
+      <div class="stat"><span class="stat-num">${s.total.toLocaleString()}</span><span class="stat-label">staged URLs</span></div>
+      <div class="stat"><span class="stat-num">${s.seeders.toLocaleString()}</span><span class="stat-label">seeders</span></div>`;
+    const list = (title, arr, limit) =>
+      (arr.length ? `<h3>${title}</h3>` + arr.slice(0, limit ?? arr.length).map((r) => barRow(r.label ?? r.key, r.count, r.pct)).join("") : "");
+    $("#analyticsBody").innerHTML = s.total
+      ? list("By seeder", s.bySource, 25) + list("By category", s.byCategory) + list("By subcategory", s.bySubcategory, 25) + list("By language", s.byLanguage)
+      : '<p class="muted">No staged results yet.</p>';
+  } catch (err) {
+    $("#analyticsBody").innerHTML = `<p class="muted">${esc(err.message)}</p>`;
+  }
+}
+
+async function renderSettings() {
+  try {
+    const s = await get("/api/settings");
+    const peers = s.remote.peers.length ? s.remote.peers.map((p) => `${esc(p.id)} → ${esc(p.url)}`).join("<br>") : "(none)";
+    $("#settingsBody").innerHTML = `
+      <div class="stats">
+        <div class="stat"><span class="stat-num">${esc(s.node.id)}</span><span class="stat-label">node id</span></div>
+        <div class="stat"><span class="stat-num">${s.node.allowRemote ? "ON" : "OFF"}</span><span class="stat-label">allow remote</span></div>
+        <div class="stat"><span class="stat-num">${s.remote.hasToken ? "set" : "—"}</span><span class="stat-label">token</span></div>
+      </div>
+      <p>${s.node.allowRemote ? "This node is a <strong>worker</strong> — it accepts remote control from a master." : "This node is <strong>standalone</strong> — a normal seeder manager."}</p>
+      <p class="muted">Peers: ${peers}</p>
+      <p><button id="toggleRemoteBtn" class="btn ${s.node.allowRemote ? "danger" : "primary"}">${s.node.allowRemote ? "⏻ Turn off remote control" : "⏻ Turn on remote control (worker)"}</button></p>`;
+    $("#toggleRemoteBtn").addEventListener("click", async () => {
+      try {
+        await post("/api/settings", { allowRemote: !s.node.allowRemote });
+        toast(s.node.allowRemote ? "Remote control off." : "Remote control on (worker).");
+        renderSettings();
+      } catch (err) { toast(err.message, "err"); }
+    });
+  } catch (err) {
+    $("#settingsBody").innerHTML = `<p class="muted">${esc(err.message)}</p>`;
+  }
+}
+
+async function renderCuration() {
+  try {
+    const c = await get("/api/cache");
+    const stagedRows = c.staged.reduce((n, f) => n + f.count, 0);
+    const staged = c.staged.length
+      ? `<h3>Staged (${c.staged.length} sources, ${stagedRows.toLocaleString()} rows)</h3>
+        <div class="table-wrap"><table><thead><tr><th>Source</th><th>Rows</th><th>KB</th><th></th></tr></thead><tbody>
+        ${c.staged.map((f) => `<tr><td>${esc(f.source)}</td><td>${f.count.toLocaleString()}</td><td>${(f.bytes / 1024).toFixed(1)}</td><td><button class="mini" data-action="clear-staged" data-source="${esc(f.source)}">clear</button></td></tr>`).join("")}
+        </tbody></table></div>`
+      : '<p class="muted">No staged results.</p>';
+    const discovery = c.discovery.length
+      ? `<h3>Discovery cache (${c.discovery.length} files)</h3>
+        <div class="table-wrap"><table><thead><tr><th>Source</th><th>KB</th><th></th></tr></thead><tbody>
+        ${c.discovery.map((d) => `<tr><td>${esc(d.source)}</td><td>${(d.bytes / 1024).toFixed(1)}</td><td><button class="mini" data-action="clear-discovery" data-source="${esc(d.source)}">clear</button></td></tr>`).join("")}
+        </tbody></table></div>`
+      : '<p class="muted">No discovery cache.</p>';
+    $("#curationBody").innerHTML = staged + discovery;
+  } catch (err) {
+    $("#curationBody").innerHTML = `<p class="muted">${esc(err.message)}</p>`;
+  }
 }
 
 async function refreshAll() {
@@ -1000,6 +1076,32 @@ function bind() {
     $("#rebuildModal").hidden = true;
     rebuildStep = 0;
     startPipeline("export-full");
+  });
+
+  $("#pruneBtn").addEventListener("click", async () => {
+    try {
+      const filter = {};
+      const src = $("#curateSource").value.trim();
+      const before = $("#curateBefore").value;
+      if (src) filter.source = src;
+      if (before) filter.before = before;
+      const r = await post("/api/cache/prune", { filter });
+      toast(`Deleted ${r.deleted} staged URL(s) (kept ${r.kept}).`);
+      renderCuration();
+    } catch (err) { toast(err.message, "err"); }
+  });
+
+  $("#curateRefreshBtn").addEventListener("click", renderCuration);
+
+  $("#curationBody").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+    const { action, source } = btn.dataset;
+    try {
+      if (action === "clear-staged") { await post("/api/cache/clear", { source }); toast(`Cleared staged for ${source}.`); }
+      else if (action === "clear-discovery") { await post("/api/cache/clear", { source, kind: "discovery" }); toast(`Cleared discovery cache for ${source}.`); }
+      renderCuration();
+    } catch (err) { toast(err.message, "err"); }
   });
 }
 

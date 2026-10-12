@@ -47,6 +47,9 @@ git clone https://github.com/seven-lynx/skyhook.git
 cd skyhook
 npm install
 
+# …or scaffold a fresh project (config, config/, seeders/, .skyhook/)
+npx skyhook init --provider sqlite
+
 # list / run / schedule (works offline in "stage" mode)
 node bin/skyhook.js list
 node bin/skyhook.js run example
@@ -80,7 +83,7 @@ src/
 ├─ engine/        # discovery, schedule, run, history, create/delete
 ├─ interfaces/    # CLI, TUI, HTTP API, GUI
 ├─ adapters/
-│  ├─ storage/    # supabase / sqlite / stage
+│  ├─ storage/    # supabase / postgres / sqlite / stage
 │  ├─ categories/ # categories.json → id map
 │  ├─ tagging/    # LLM model detection + tag()
 │  └─ log/        # JSONL run log

@@ -9,7 +9,7 @@
 import { getConfig } from "../config.js";
 import { readStaged, writeStagedSource, groupBySource } from "../core/staged.js";
 import { pushStagedToStorage } from "../core/sync.js";
-import { detectModels, tag, buildPrompt, loadText } from "../adapters/tagging/index.js";
+import { detectModels, tag, loadText } from "../adapters/tagging/index.js";
 import { getCategories } from "../adapters/categories/index.js";
 
 export function pipelineStatus() {
@@ -45,9 +45,11 @@ async function runTag() {
 
   const prompt = loadText(cfg.promptFile) || "";
   const cats = getCategories();
+  const rawTags = JSON.parse(loadText(cfg.vocabFile) || "[]");
+  const tagList = Array.isArray(rawTags) ? rawTags : (rawTags.tags ?? []);
   const vocab = {
     categories: (cats?.categories ?? []).map((c) => ({ id: c.id, label: c.label ?? c.id })),
-    tags: JSON.parse(loadText(cfg.vocabFile) || "[]"),
+    tags: tagList,
   };
 
   const rows = readStaged();

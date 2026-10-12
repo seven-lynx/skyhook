@@ -29,6 +29,9 @@
     <button class="tab" data-tab="seeders">Seeders</button>
     <button class="tab" data-tab="timer">Timer</button>
     <button class="tab" data-tab="pipeline">Pipeline</button>
+    <button class="tab" data-tab="stats">Stats</button>
+    <button class="tab" data-tab="curation">Curation</button>
+    <button class="tab" data-tab="settings">Settings</button>
   </nav>
 
   <main>
@@ -151,6 +154,29 @@
       </div>
       <div id="pipelinePrereqs" class="pipeline-prereqs"></div>
       <div id="pipelineStatus" class="pipeline-status muted"></div>
+    </section>
+
+    <section id="stats" class="panel">
+      <h2>Staged URLs</h2>
+      <div id="analyticsCards" class="stats"></div>
+      <div id="analyticsBody" class="analytics-body"></div>
+    </section>
+
+    <section id="curation" class="panel">
+      <h2>Curation</h2>
+      <div class="toolbar">
+        <input id="curateSource" class="filter" type="search" placeholder="source (blank = all)" autocomplete="off" data-tip="Restrict the prune to one seeder source." />
+        <input id="curateBefore" class="filter" type="date" data-tip="Delete staged rows staged before this date." />
+        <button id="pruneBtn" class="btn danger" data-tip="Soft-delete staged URLs matching the filters (archived to trash).">✂ Prune staged</button>
+        <button id="curateRefreshBtn" class="btn" data-tip="Reload the cache listing.">⟳ Refresh</button>
+      </div>
+      <p class="muted">Prune deletes staged URLs matching the filters. Deletions are soft (archived to <code>.skyhook/trash/</code>) so they can be restored.</p>
+      <div id="curationBody"></div>
+    </section>
+
+    <section id="settings" class="panel">
+      <h2>Node settings</h2>
+      <div id="settingsBody"></div>
     </section>
   </main>
 

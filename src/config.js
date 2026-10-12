@@ -36,6 +36,7 @@ const DEFAULTS = {
     url: null,
     serviceRoleKey: null,
     dbFile: null,
+    connectionString: null,
   },
   tagging: {
     enabled: false,
@@ -99,6 +100,8 @@ export function loadConfig(opts = {}) {
   merged.storage.url = merged.storage.url || process.env.SUPABASE_URL || null;
   merged.storage.serviceRoleKey =
     merged.storage.serviceRoleKey || process.env.SUPABASE_SERVICE_ROLE_KEY || null;
+  merged.storage.connectionString =
+    merged.storage.connectionString || process.env.POSTGRES_URL || process.env.DATABASE_URL || null;
 
   _config = merged;
   return _config;

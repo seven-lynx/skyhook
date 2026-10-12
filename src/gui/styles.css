@@ -420,3 +420,11 @@ td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
   font-size: 18px;
   letter-spacing: 2px;
 }
+
+/* Analytics (Stats tab) */
+.analytics-body h3 { margin: 18px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+.bar-row { display: grid; grid-template-columns: 200px 1fr 130px; gap: 10px; align-items: center; padding: 4px 0; }
+.bar-label { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar-track { height: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.bar-fill { display: block; height: 100%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.bar-count { font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap; }
