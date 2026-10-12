@@ -28,8 +28,8 @@ reach out across the web and beam content down into your database.
 
 - ✅ **Core** (`src/core/seed.js`) + **engine** (`src/engine/seeder-engine.js`) ported and
   de-coupled from the original host.
-- ✅ **Adapters** — storage (Supabase / Postgres / SQLite / stage), categories, tagging, log.
-- ⏳ **Interfaces** (CLI / TUI / HTTP API / GUI) — Phase 4, not yet ported.
+- ✅ **Adapters** — storage (Supabase / SQLite / stage; Postgres fast-follow), categories, tagging, log.
+- ⏳ **Interfaces** (CLI / TUI / HTTP API / GUI) — ported, ready to use.
 
 ## Quick start
 
@@ -37,16 +37,15 @@ reach out across the web and beam content down into your database.
 # install
 git clone https://github.com/seven-lynx/skyhook.git
 cd skyhook
-pnpm install            # or npm install
+npm install
 
-# scaffold a project (config + example seeders + prompt/vocab)
-node bin/skyhook.js init
-
-# list / run / schedule
+# list / run / schedule (works offline in "stage" mode)
 node bin/skyhook.js list
 node bin/skyhook.js run example
 node bin/skyhook.js serve          # web GUI + JSON API on :4173
 ```
+
+Docs: [quickstart](docs/quickstart.md) · [authoring seeders](docs/authoring-seeders.md) · [storage](docs/storage.md) · [tagging](docs/tagging.md)
 
 ## Layout
 

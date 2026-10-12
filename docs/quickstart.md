@@ -1,0 +1,66 @@
+# Skyhook Quickstart
+
+Self-hosted content seeding — discover URLs, enrich them, optionally tag them with
+an LLM, and push them into your own database.
+
+## 1. Install
+
+```bash
+git clone https://github.com/seven-lynx/skyhook.git
+cd skyhook
+npm install
+```
+
+## 2. Try it (offline, no database)
+
+Skyhook ships with example seeders and works out of the box in **stage** mode
+(writes to local JSONL, no database required):
+
+```bash
+node bin/skyhook.js list           # see the example seeders
+node bin/skyhook.js run example    # run the example seeder (offline staging)
+node bin/skyhook.js tui            # interactive terminal menu
+node bin/skyhook.js serve          # web GUI + JSON API at http://localhost:4173
+```
+
+## 3. Connect your database
+
+Edit `skyhook.config.json` (copy from `config/` examples) to pick a storage
+provider. See [docs/storage.md](storage.md) for the full mapping. Example
+(Supabase):
+
+```json
+{
+  "storage": {
+    "provider": "supabase",
+    "url": "https://YOUR_PROJECT.supabase.co",
+    "serviceRoleKey": "sb_secret_...",
+    "schemaFile": "config/schema.json"
+  }
+}
+```
+
+Or set `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` in `.env` (they override config).
+
+## 4. Schedule
+
+```bash
+node bin/skyhook.js enable hackernews --cadence daily
+node bin/skyhook.js run-due          # run everything due now
+node bin/skyhook.js emit-timer       # regenerate the systemd timer unit
+```
+
+## 5. Tag with an LLM (optional)
+
+Configure your local or remote model in `skyhook.config.json` → `tagging`, then
+use the GUI's **Pipeline → Tagging** card (or `detectModels()` programmatically).
+See [docs/tagging.md](tagging.md).
+
+## Layout
+
+```
+seeders/            # your seeder scripts (seed-*.js)
+config/             # categories.json, schema.json, tagging prompt + vocab
+src/                # core, engine, adapters, interfaces
+systemd/            # skyhook-seed.service/.timer templates
+```

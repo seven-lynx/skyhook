@@ -1,0 +1,12 @@
+[Unit]
+Description=Skyhook seeder orchestrator (stage-only, offline)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Customise these paths for your install.
+WorkingDirectory=/home/skyhook/skyhook
+Environment=SKYHOOK_STAGE_ONLY=1
+Environment=SKYHOOK_SKIP_HEADLESS=1
+ExecStart=/usr/bin/node /home/skyhook/skyhook/bin/skyhook.js run-due

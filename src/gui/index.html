@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Skyhook Control</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🛰</span>
+      <div>
+        <h1>Skyhook Control</h1>
+        <p id="apiLabel" class="muted">connecting…</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <input id="apiBase" class="api-input" type="text"
+        placeholder="http://localhost:4173"
+        title="API base URL (blank = this origin)" />
+      <label class="live-label" data-tip="Auto-refresh the dashboard every 10 seconds."><input id="live" type="checkbox" /> live</label>
+      <button id="refreshBtn" class="btn" title="Refresh">⟳ Refresh</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="dashboard">Dashboard</button>
+    <button class="tab" data-tab="seeders">Seeders</button>
+    <button class="tab" data-tab="timer">Timer</button>
+    <button class="tab" data-tab="pipeline">Pipeline</button>
+  </nav>
+
+  <main>
+    <section id="dashboard" class="panel active">
+      <div class="stats" id="stats"></div>
+      <div class="dash-actions">
+        <button id="runDueBtn" class="btn primary" data-tip="Run every seeder that is due right now.">▶ Run due now</button>
+        <label class="opt" data-tip="Ignore cadence and run ALL scheduled seeders (not just the due ones).">
+          <input id="forceDue" type="checkbox" /> force
+        </label>
+        <button id="emitTimerBtn" class="btn" data-tip="Regenerate the systemd timer unit from the fastest enabled cadence.">⏰ Regenerate timer</button>
+      </div>
+      <h2>Running</h2>
+      <div id="runningList"></div>
+      <h2>Recent failures</h2>
+      <div id="failList"></div>
+      <h2>Due now</h2>
+      <div id="dueList" class="due-list"></div>
+    </section>
+
+    <section id="seeders" class="panel">
+      <div class="toolbar">
+        <input id="filter" class="filter" type="search"
+          placeholder="Filter source / name / category…" autocomplete="off"
+          data-tip="Search by source, script name, display name, or category." />
+        <select id="tierFilter" data-tip="Filter by tier: news (age-pruned) vs evergreen.">
+          <option value="">All tiers</option>
+          <option value="news">News</option>
+          <option value="evergreen">Evergreen</option>
+        </select>
+        <select id="schedFilter" data-tip="Filter by schedule state: scheduled (auto-run) vs manual (on demand).">
+          <option value="">All</option>
+          <option value="1">Scheduled</option>
+          <option value="0">Manual</option>
+        </select>
+        <select id="statusFilter" data-tip="Filter by run status: due now, or last run errored.">
+          <option value="">All status</option>
+          <option value="due">Due</option>
+          <option value="errors">Errors</option>
+        </select>
+        <label class="opt" data-tip="How many seeders run at once. 1 = one after another (sequential).">
+          Parallel
+          <select id="concurrency">
+            <option value="1" selected>1 (sequential)</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+          </select>
+        </label>
+        <label class="opt" data-tip="Let seeders launch a headless browser if a source needs one. Slower and heavier — leave off unless required.">
+          <input id="withHeadless" type="checkbox" /> headless
+        </label>
+        <label class="opt" data-tip="Force ALL discovery tiers (RSS, sitemap, Wayback, headless) regardless of how many URLs are found. For one-off discovery sweeps.">
+          <input id="aggressive" type="checkbox" /> aggressive
+        </label>
+        <label class="opt" data-tip="Force the headless browser crawl even after short-circuit (without the full aggressive flag).">
+          <input id="forceHeadless" type="checkbox" /> force headless
+        </label>
+        <label class="opt" data-tip="Ignore the per-seeder cache and re-fetch everything.">
+          <input id="noCache" type="checkbox" /> no cache
+        </label>
+        <span id="countLabel" class="muted"></span>
+        <div class="spacer"></div>
+        <button id="bulkEnableBtn" class="btn" data-tip="Enable all selected seeders (add to schedule, weekly).">+ Enable</button>
+        <button id="bulkDisableBtn" class="btn" data-tip="Disable all selected seeders (remove from schedule).">⏻ Disable</button>
+        <button id="bulkScheduleBtn" class="btn" data-tip="Set cadence / tier / max-age for all selected seeders.">⚙ Schedule</button>
+        <button id="runSelectedBtn" class="btn primary" disabled data-tip="Run all selected seeders.">▶ Run selected</button>
+        <button id="newSeederBtn" class="btn primary" data-tip="Create a new seeder from a website URL.">＋ New seeder</button>
+      </div>
+      <div class="table-wrap">
+        <table id="seederTable">
+          <thead>
+            <tr>
+              <th class="col-check"><input id="checkAll" type="checkbox" title="Select all (filtered)" /></th>
+              <th data-sort="source">Source</th>
+              <th data-sort="displayName">Name</th>
+              <th data-sort="categoryLabel">Category</th>
+              <th data-sort="cadence">Cadence</th>
+              <th data-sort="isNews">Tier</th>
+              <th data-sort="lastRunAt">Last run</th>
+              <th data-sort="lastStatus">Result</th>
+              <th data-sort="nextRunAt">Next run</th>
+              <th class="col-actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="seederBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="timer" class="panel">
+      <div class="timer-card">
+        <h2>systemd timer plan</h2>
+        <p>OnCalendar: <strong id="timerOnCalendar">—</strong></p>
+        <p>Fastest enabled cadence: <strong id="timerCadence">—</strong></p>
+        <pre id="timerUnit" class="timer-unit"></pre>
+        <button id="writeTimerBtn" class="btn primary">⏰ Regenerate timer</button>
+      </div>
+    </section>
+
+    <section id="pipeline" class="panel">
+      <div class="pipeline-grid">
+        <div class="pipe-card">
+          <div class="pipe-num" id="pipeStaged">—</div>
+          <div class="pipe-label">Cached &amp; ready to tag</div>
+          <button id="startTagBtn" class="btn primary" data-tip="Import staged URLs and run the local LLM tagger (sync-existing-urls → import-staged-urls → tagging-worker).">▶ Start tagging</button>
+        </div>
+        <div class="pipe-card">
+          <div class="pipe-num" id="pipeReady">—</div>
+          <div class="pipe-label">Tagged &amp; ready to push</div>
+          <button id="pushBtn" class="btn primary" data-tip="Upload tagged URLs + tags to Supabase (upload-tagged-urls → upload-tags-to-supabase).">⬆ Push to database</button>
+        </div>
+        <div class="pipe-card">
+          <div class="pipe-num" id="pipeDbAge">—</div>
+          <div class="pipe-label">Offline DB age</div>
+          <div class="pipe-sub" id="pipeDbInfo">—</div>
+          <button id="exportBtn" class="btn" data-tip="Pull only new untagged URLs from production (preserves local tag progress).">↻ Update export</button>
+          <button id="exportFullBtn" class="btn danger" data-tip="Re-export every table from Supabase. WIPES local LLM tag progress.">⛔ Full rebuild</button>
+        </div>
+      </div>
+      <div id="pipelinePrereqs" class="pipeline-prereqs"></div>
+      <div id="pipelineStatus" class="pipeline-status muted"></div>
+    </section>
+  </main>
+
+  <div id="scheduleModal" class="modal" hidden>
+    <div class="modal-card">
+      <h3 id="schedTitle">Schedule</h3>
+      <div class="field"><label>Cadence</label><select id="schedCadence" data-tip="How often this seeder runs automatically."></select></div>
+      <div class="field"><label>Tier</label>
+        <select id="schedTier" data-tip="News sources are age-pruned by max-age; evergreen are kept indefinitely.">
+          <option value="evergreen">evergreen</option>
+          <option value="news">news (age-pruned)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Max age (days, 0 = none)</label>
+        <input id="schedAge" type="number" min="0" value="0" data-tip="For news sources, drop articles older than this many days. 0 = no pruning." />
+      </div>
+      <div class="modal-actions">
+        <button id="schedSave" class="btn primary">Save</button>
+        <button id="schedCancel" class="btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="historyModal" class="modal" hidden>
+    <div class="modal-card wide">
+      <h3 id="histTitle">History</h3>
+      <div id="histBody" class="hist-body"></div>
+      <div class="modal-actions"><button id="histClose" class="btn">Close</button></div>
+    </div>
+  </div>
+
+  <div id="infoModal" class="modal" hidden>
+    <div class="modal-card wide">
+      <h3 id="infoTitle">Seeder info</h3>
+      <div id="infoBody"></div>
+      <div class="modal-actions"><button id="infoDelete" class="btn danger">🗑 Delete</button><button id="infoClose" class="btn">Close</button></div>
+    </div>
+  </div>
+
+  <div id="buildModal" class="modal" hidden>
+    <div class="modal-card wide">
+      <h3 id="buildTitle">New seeder</h3>
+      <div class="field">
+        <label>Website URL</label>
+        <input id="buildUrl" type="text" placeholder="https://example.com" spellcheck="false" />
+        <span id="buildPreview" class="muted"></span>
+      </div>
+      <div class="build-grid">
+        <div class="field">
+          <label>Display name</label>
+          <input id="buildName" type="text" placeholder="Example Site" />
+        </div>
+        <div class="field">
+          <label>Source (unique slug)</label>
+          <input id="buildSource" type="text" placeholder="example" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label>Category</label>
+          <select id="buildCategory"></select>
+        </div>
+        <div class="field">
+          <label>Subcategory</label>
+          <select id="buildSubcategory"></select>
+        </div>
+        <div class="field">
+          <label>Feed URL (optional — auto-discovered if blank)</label>
+          <input id="buildFeed" type="text" placeholder="https://example.com/feed/" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label>Cadence</label>
+          <select id="buildCadence"></select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <input id="buildDesc" type="text" placeholder="Auto-filled from the site if available" />
+      </div>
+      <div class="modal-actions">
+        <button id="buildCancel" class="btn">Cancel</button>
+        <button id="buildSave" class="btn primary">Save</button>
+        <button id="buildTest" class="btn primary">Test run</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="rebuildModal" class="modal" hidden>
+    <div class="modal-card">
+      <h3 id="rebuildTitle">Full rebuild</h3>
+      <div id="rebuildBody"></div>
+      <div class="modal-actions">
+        <button id="rebuildCancel" class="btn">Cancel</button>
+        <button id="rebuildNext" class="btn danger">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="logDrawer" class="log-drawer" hidden>
+    <div class="log-drawer-head">
+      <span class="log-title">Live log</span>
+      <span id="runningBadge" class="running-badge"></span>
+      <span id="runProgress" class="run-progress"></span>
+      <div class="spacer"></div>
+      <button id="stopBtn" class="btn danger" disabled data-tip="Stop all currently running seeders.">⏹ Stop</button>
+      <button id="closeLogBtn" class="btn" data-tip="Close the live log.">✕ Close</button>
+    </div>
+    <div id="runningNow" class="running-now" hidden></div>
+    <div id="logBody" class="log-body"></div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
