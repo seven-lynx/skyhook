@@ -48,6 +48,8 @@ const COMMANDS = [
   ["sync",       "Merge staged results with a peer (Pi ⇄ PC) with URL dedup"],
   ["push",       "Push the merged staged set into the configured storage"],
   ["tag",        "Offline LLM tag worker (resumes; --mode retag-add|retag-replace for a second pass)"],
+  ["pull",       "Pull untagged (or --force all) URLs from storage into the offline DB"],
+  ["upload",     "Upload staged URLs + local tags/attributes/quality to storage"],
   ["settings",   "View or toggle node settings (allowRemote, peers)"],
   ["init",       "Scaffold a new Skyhook setup (config, config/, seeders/, .skyhook/)"],
   ["tui",        "Interactive menu (terminal control center)"],
@@ -656,6 +658,32 @@ async function cmdTag(a) {
   }
 }
 
+// ── pull / upload (offline tagging pipeline) ───────────────────────────────
+async function cmdPull(a) {
+  const c = getConfig();
+  const { pullOffline } = await import("../src/core/offline-pipeline.js");
+  const force = has(a, "--force");
+  const max = parseInt(val(a, "--max", "0"), 10) || null;
+  try {
+    await pullOffline({ config: c, force, max });
+  } catch (err) {
+    console.error("Pull error:", err.message);
+    process.exitCode = 1;
+  }
+}
+
+async function cmdUpload(a) {
+  const c = getConfig();
+  const { uploadOffline } = await import("../src/core/offline-pipeline.js");
+  const dryRun = has(a, "--dry-run");
+  try {
+    await uploadOffline({ config: c, dryRun });
+  } catch (err) {
+    console.error("Upload error:", err.message);
+    process.exitCode = 1;
+  }
+}
+
 // ── serve ───────────────────────────────────────────────────────────────────
 async function cmdServe(a) {
   const port = parseInt(val(a, "--port", "4173"), 10) || 4173;
@@ -686,6 +714,8 @@ async function main() {
     case "sync": await cmdSync(args); break;
     case "push": await cmdPush(args); break;
     case "tag": await cmdTag(args); break;
+    case "pull": await cmdPull(args); break;
+    case "upload": await cmdUpload(args); break;
     case "settings": cmdSettings(args); break;
     case "init": cmdInit(args); break;
     case "tui": await cmdTui(); break;

@@ -53,6 +53,7 @@ const DEFAULTS = {
   pipeline: {
     status: null,   // optional script that prints the pipeline status JSON
     offlineDb: null, // local SQLite DB for the offline tagging pipeline
+    knownUrlsDb: null, // local SQLite dedup index of production URLs
     jobs: {},       // { key: { label, command: [script, ...args], danger? } }
   },
 };
@@ -109,6 +110,9 @@ export function loadConfig(opts = {}) {
   }
   if (merged.pipeline?.offlineDb && !isAbsolute(merged.pipeline.offlineDb)) {
     merged.pipeline.offlineDb = resolve(cwd, merged.pipeline.offlineDb);
+  }
+  if (merged.pipeline?.knownUrlsDb && !isAbsolute(merged.pipeline.knownUrlsDb)) {
+    merged.pipeline.knownUrlsDb = resolve(cwd, merged.pipeline.knownUrlsDb);
   }
 
   // Allow env-based credentials to override config (never committed).
