@@ -18,6 +18,12 @@ import {
   editManifest, enableSeeder, disableSeeder, resolveSeeder, emitTimer, writeTimer,
   CADENCES, CADENCE_MS, LOGS_DIR, SCRIPTS_DIR,
 } from "../src/engine/seeder-engine.js";
+import { nodeId } from "../src/config.js";
+import { routeSeeders, peerFor, runRemote, getPeers, pullStaged } from "../src/core/remote.js";
+import { settingsView, saveSettings } from "../src/core/settings.js";
+import { statsFromStaged } from "../src/core/analytics.js";
+import { listCache, pruneStaged, clearDiscovery, clearStaged } from "../src/core/data.js";
+import { mergeRemoteRows, pushStagedToStorage } from "../src/core/sync.js";
 import { spawnSync } from "child_process";
 import { join } from "path";
 
@@ -33,6 +39,11 @@ const COMMANDS = [
   ["history",    "Show a seeder's recent run history"],
   ["validate",   "Validate seeder category/subcategory wiring (needs Supabase)"],
   ["emit-timer", "Regenerate the systemd timer from the fastest enabled cadence"],
+  ["stats",      "Analytics: total URLs + per-seeder/category/subcategory percentages"],
+  ["cache",      "Inspect / prune staged results and discovery cache (delete URLs)"],
+  ["sync",       "Merge staged results with a peer (Pi ⇄ PC) with URL dedup"],
+  ["push",       "Push the merged staged set into the configured storage"],
+  ["settings",   "View or toggle node settings (allowRemote, peers)"],
   ["tui",        "Interactive menu (terminal control center)"],
   ["serve",      "Start the HTTP JSON API (for the GUI / remote control)"],
   ["help",       "Show help (help <cmd> for one command)"],
@@ -64,6 +75,11 @@ function helpFor(cmd) {
     history:   "history <query> [--limit N]",
     validate:  "validate [--json] [--verbose]",
     "emit-timer": "emit-timer [--dry-run]",
+    stats:      "stats [--source <slug>]",
+    cache:      "cache                          (list staged + discovery cache)  |  cache prune [--source X] [--category Y] [--subcategory Z] [--before DATE] [--after DATE] [--url U] [--hard]  |  cache clear <source> [--discovery] [--hard]",
+    sync:       "sync pull <peer-id>            (merge a peer's staged results locally)  |  sync peers (list peers)",
+    push:       "push",
+    settings:   "settings                       (view)  |  settings allow-remote on|off",
     tui: "tui",
     serve:     "serve [--port N]  (default 4173)",
     help:      "help [<command>]",
@@ -239,7 +255,23 @@ async function cmdRun(a) {
   const selected = pickSeeders(queries, idx);
   if (!selected) { process.exitCode = 1; return; }
   console.log(`\n▶ Running ${selected.length} seeder(s), concurrency=${parallel}...\n`);
-  const results = await runPool(selected, { concurrency: parallel, withHeadless, aggressive, forceHeadless, noCache });
+  const { local, remote } = routeSeeders(selected);
+  const results = [];
+  if (local.length) {
+    results.push(...(await runPool(local, { concurrency: parallel, withHeadless, aggressive, forceHeadless, noCache })));
+  }
+  for (const [peerId, seeders] of remote) {
+    const peer = peerFor(peerId);
+    if (!peer) { console.error(`✗ No peer configured for node "${peerId}"`); process.exitCode = 1; continue; }
+    console.log(`↳ Forwarding ${seeders.length} seeder(s) to peer "${peerId}" (${peer.url})...`);
+    try {
+      await runRemote(peer, seeders, { concurrency: parallel, withHeadless, aggressive, forceHeadless, noCache });
+      console.log(`  ✓ forwarded to ${peerId}`);
+    } catch (err) {
+      console.error(`  ✗ forward to ${peerId} failed: ${err.message}`);
+      process.exitCode = 1;
+    }
+  }
   printRunSummary(results);
   if (results.some((r) => r.status !== "ok")) process.exitCode = 1;
 }
@@ -255,7 +287,8 @@ async function cmdRunDue(a) {
   const forceHeadless = has(a, "--force-headless");
   const noCache = has(a, "--no-cache");
   const dryRun = has(a, "--dry-run");
-  const { due, db } = dueSeeders({ tier, source, force });
+  const node = val(a, "--node", null);
+  const { due, db } = dueSeeders({ tier, source, force, node });
 
   if (dryRun) {
     console.log(`\n[dry-run] Would run ${due.length} seeder(s) (tier=${tier}${source ? `, source=${source}` : ""}${force ? ", forced" : ""}):\n`);
@@ -266,8 +299,24 @@ async function cmdRunDue(a) {
   }
   if (!due.length) { console.log("\n✅ Nothing due. All seeders are within their cadence windows.\n"); db.close(); return; }
 
-  console.log(`\n📅 Running ${due.length} seeder(s) (tier=${tier}, concurrency=${parallel}${force ? ", FORCED" : ""})...\n`);
-  const results = await runPool(due, { concurrency: parallel, withHeadless, aggressive, forceHeadless, noCache });
+  console.log(`\n📅 Running ${due.length} seeder(s) (tier=${tier}${node ? `, node=${node}` : ""}, concurrency=${parallel}${force ? ", FORCED" : ""})...\n`);
+  const { local, remote } = routeSeeders(due);
+  const results = [];
+  if (local.length) {
+    results.push(...(await runPool(local, { concurrency: parallel, withHeadless, aggressive, forceHeadless, noCache })));
+  }
+  for (const [peerId, seeders] of remote) {
+    const peer = peerFor(peerId);
+    if (!peer) { console.error(`✗ No peer configured for node "${peerId}"`); process.exitCode = 1; continue; }
+    console.log(`↳ Forwarding ${seeders.length} seeder(s) to peer "${peerId}"...`);
+    try {
+      await runRemote(peer, seeders, { concurrency: parallel, withHeadless, aggressive, forceHeadless, noCache });
+      console.log(`  ✓ forwarded to ${peerId}`);
+    } catch (err) {
+      console.error(`  ✗ forward to ${peerId} failed: ${err.message}`);
+      process.exitCode = 1;
+    }
+  }
   printRunSummary(results);
   db.close();
   if (results.some((r) => r.status !== "ok")) process.exitCode = 1;
@@ -282,6 +331,7 @@ function showScheduler(s) {
   console.log(`  cadence    ${s.cadence}`);
   console.log(`  tier       ${tierOf(s)}`);
   console.log(`  maxAgeDays ${s.maxAgeDays ?? "—"}`);
+  console.log(`  node       ${s.node ?? "local"}${s.node && s.node !== nodeId() ? " (remote)" : ""}`);
   console.log(`  category   ${s.categoryLabel ?? "—"}${s.subcategoryLabel ? " → " + s.subcategoryLabel : ""}`);
   console.log(`  access     ${s.access ?? "—"}\n`);
 }
@@ -307,8 +357,13 @@ function cmdSchedule(a) {
     const v = val(a, "--max-age-days", "");
     maxAgeDays = (v === "" || v === "null") ? null : Number(v);
   }
+  let node;
+  if (a.some((x) => x === "--node" || x.startsWith("--node="))) {
+    const v = val(a, "--node", "");
+    node = (v === "" || v === "null") ? null : v;
+  }
 
-  const entry = editManifest({ query, cadence, isNews, maxAgeDays });
+  const entry = editManifest({ query, cadence, isNews, maxAgeDays, node });
   if (!entry) { console.error(`✗ Could not update schedule for "${query}"`); process.exitCode = 1; return; }
   console.log(`✓ ${entry.source}: cadence=${entry.cadence}${entry.isNews !== undefined ? ` tier=${entry.isNews ? "news" : "evergreen"}` : ""}${entry.maxAgeDays !== undefined ? ` maxAgeDays=${entry.maxAgeDays ?? "—"}` : ""}`);
   console.log("  Reminder: run `skyhook emit-timer` to refresh the systemd timer, and push the manifest to the Pi if editing from the PC.\n");
@@ -377,6 +432,121 @@ function cmdEmitTimer(a) {
   console.log("    sudo cp .skyhook/skyhook-seed.timer /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart skyhook-seed.timer\n");
 }
 
+// ── stats ───────────────────────────────────────────────────────────────────
+function cmdStats(a) {
+  const source = val(a, "--source", null);
+  const s = statsFromStaged({ source });
+  console.log(`\n📊 Staged URLs: ${s.total}  ·  seeders: ${s.seeders}\n`);
+  if (!s.total) { console.log("  (no staged results yet)\n"); return; }
+  const bar = (n, max) => "█".repeat(Math.max(1, Math.round((n / max) * 24)));
+  const maxSrc = Math.max(...s.bySource.map((r) => r.count), 1);
+  console.log("  By seeder (top 20):");
+  for (const r of s.bySource.slice(0, 20)) console.log(`    ${r.key.padEnd(28)} ${String(r.count).padStart(6)}  ${r.pct.toFixed(1).padStart(5)}%  ${bar(r.count, maxSrc)}`);
+  console.log("  By category:");
+  for (const r of s.byCategory) console.log(`    ${r.label.padEnd(28)} ${String(r.count).padStart(6)}  ${r.pct.toFixed(1).padStart(5)}%`);
+  console.log("  By subcategory (top 20):");
+  for (const r of s.bySubcategory.slice(0, 20)) console.log(`    ${r.label.padEnd(28)} ${String(r.count).padStart(6)}  ${r.pct.toFixed(1).padStart(5)}%`);
+  if (s.byLanguage.length) {
+    console.log("  By language:");
+    for (const r of s.byLanguage.slice(0, 10)) console.log(`    ${r.label.padEnd(28)} ${String(r.count).padStart(6)}  ${r.pct.toFixed(1).padStart(5)}%`);
+  }
+  console.log("");
+}
+
+// ── cache ───────────────────────────────────────────────────────────────────
+function cmdCache(a) {
+  const sub = a.find((x) => !x.startsWith("--"));
+  if (!sub || sub === "list") {
+    const c = listCache();
+    const stagedRows = c.staged.reduce((n, f) => n + f.count, 0);
+    console.log(`\n🗂 Staged (${c.staged.length} sources, ${stagedRows} rows):`);
+    for (const f of c.staged.slice(0, 40)) console.log(`    ${f.source.padEnd(28)} ${String(f.count).padStart(6)} rows  ${(f.bytes / 1024).toFixed(1)} KB`);
+    console.log(`\n🗂 Discovery cache (${c.discovery.length} files):`);
+    for (const d of c.discovery.slice(0, 40)) console.log(`    ${d.source.padEnd(28)} ${(d.bytes / 1024).toFixed(1)} KB`);
+    console.log("");
+    return;
+  }
+  if (sub === "prune") {
+    const hard = has(a, "--hard");
+    const filter = {
+      source: val(a, "--source", null),
+      category: val(a, "--category", null),
+      subcategory: val(a, "--subcategory", null),
+      before: val(a, "--before", null),
+      after: val(a, "--after", null),
+      url: val(a, "--url", null),
+      language: val(a, "--language", null),
+    };
+    const r = pruneStaged(filter, { soft: !hard });
+    console.log(`\n✂ Deleted ${r.deleted} staged URL(s) (kept ${r.kept})${r.archived ? `\n  archived → ${r.archived}` : ""}\n`);
+    return;
+  }
+  if (sub === "clear") {
+    const source = a.find((x) => x !== "clear" && !x.startsWith("--"));
+    if (!source) { console.error("Usage: skyhook cache clear <source> [--discovery] [--hard]"); process.exitCode = 1; return; }
+    if (has(a, "--discovery")) {
+      const r = clearDiscovery(source);
+      console.log(r.cleared ? `✓ Cleared discovery cache for "${source}"` : `(no discovery cache for "${source}")`);
+    } else {
+      const r = clearStaged(source, { soft: !has(a, "--hard") });
+      console.log(`✂ Deleted ${r.deleted} staged URL(s) for "${source}"`);
+    }
+    console.log("");
+    return;
+  }
+  console.error("Usage: skyhook cache [list | prune ... | clear <source> ...]");
+  process.exitCode = 1;
+}
+
+// ── sync ────────────────────────────────────────────────────────────────────
+async function cmdSync(a) {
+  const sub = a.find((x) => !x.startsWith("--"));
+  if (sub === "peers") {
+    const peers = getPeers();
+    console.log(`\nConfigured peers (node id: ${nodeId()}):`);
+    if (!peers.length) console.log("  (none — add remote.peers in skyhook.config.json)");
+    for (const p of peers) console.log(`    ${p.id} → ${p.url}`);
+    console.log("");
+    return;
+  }
+  if (sub === "pull") {
+    const peerId = a.find((x) => x !== "pull" && !x.startsWith("--"));
+    if (!peerId) { console.error("Usage: skyhook sync pull <peer-id>"); process.exitCode = 1; return; }
+    const peer = peerFor(peerId);
+    if (!peer) { console.error(`✗ No peer configured for "${peerId}"`); process.exitCode = 1; return; }
+    const data = await pullStaged(peer);
+    const rows = Array.isArray(data.rows) ? data.rows : (Array.isArray(data) ? data : []);
+    const r = mergeRemoteRows(rows);
+    console.log(`\n⇄ Merged ${rows.length} remote row(s) from "${peerId}": ${r.total} total (${r.added} new), ${r.sources} sources\n`);
+    return;
+  }
+  console.error("Usage: skyhook sync [peers | pull <peer-id>]");
+  process.exitCode = 1;
+}
+
+// ── push ────────────────────────────────────────────────────────────────────
+async function cmdPush() {
+  const r = await pushStagedToStorage();
+  console.log(`\n⬆ Pushed staged → storage: ${r.pushed} inserted, ${r.skipped} skipped (of ${r.total})\n`);
+}
+
+// ── settings ────────────────────────────────────────────────────────────────
+function cmdSettings(a) {
+  if (a[0] === "allow-remote") {
+    const on = a[1] === "on" || a[1] === "true" || a[1] === "1";
+    saveSettings({ allowRemote: on });
+    console.log(`\n✓ allowRemote = ${on ? "ON (worker)" : "OFF (standalone)"}\n`);
+    return;
+  }
+  const v = settingsView();
+  console.log(`\n🛰 Skyhook node settings`);
+  console.log(`  node id      ${v.node.id}`);
+  console.log(`  allowRemote  ${v.node.allowRemote ? "ON (worker — accepts remote control)" : "OFF (standalone)"}`);
+  console.log(`  token        ${v.remote.hasToken ? "set" : "(none — open API)"}`);
+  console.log(`  peers        ${v.remote.peers.length ? v.remote.peers.map((p) => `${p.id}→${p.url}`).join(", ") : "(none)"}`);
+  console.log(`\n  Toggle: skyhook settings allow-remote on|off\n`);
+}
+
 // ── tui ─────────────────────────────────────────────────────────────────────
 async function cmdTui() {
   try {
@@ -417,6 +587,11 @@ async function main() {
     case "history": cmdHistory(args); break;
     case "validate": cmdValidate(args); break;
     case "emit-timer": cmdEmitTimer(args); break;
+    case "stats": cmdStats(args); break;
+    case "cache": cmdCache(args); break;
+    case "sync": await cmdSync(args); break;
+    case "push": await cmdPush(args); break;
+    case "settings": cmdSettings(args); break;
     case "tui": await cmdTui(); break;
     case "serve": await cmdServe(args); break;
     default:

@@ -17,7 +17,7 @@ import { spawn, spawnSync } from "child_process";
 import Database from "better-sqlite3";
 import { CATEGORY, SUBCATEGORY, SUBCATEGORY_BY_CATEGORY } from "../core/seed.js";
 import { logCrash } from "../adapters/log/run-log.js";
-import { getConfig } from "../config.js";
+import { getConfig, nodeId } from "../config.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const cfg = getConfig();
@@ -148,6 +148,7 @@ export function buildIndex() {
       maxAgeDays: cfg.maxAgeDays ?? defaults.maxAgeDays ?? null,
       concurrency: cfg.concurrency ?? defaults.concurrency ?? 2,
       skipHeadless: cfg.skipHeadless ?? defaults.skipHeadless ?? true,
+      node: cfg.node ?? defaults.node ?? null,
       categoryId: CATEGORY[d.category] ?? null,
       subcategoryId: SUBCATEGORY[d.subcategory] ?? null,
       categoryLabel: d.category ? humanize(d.category) : null,
@@ -259,7 +260,7 @@ export function computeNextRun(cadence, lastRunAt, now = Date.now()) {
 // ── Manifest editing ────────────────────────────────────────────────────────
 
 /** Add/update a seeder's schedule entry. Returns the updated entry or null. */
-export function editManifest({ query, cadence, isNews, maxAgeDays, source }) {
+export function editManifest({ query, cadence, isNews, maxAgeDays, source, node }) {
   const index = buildIndex();
   const seeder = resolveSeeder(query, index);
   if (!seeder) return null;
@@ -270,6 +271,7 @@ export function editManifest({ query, cadence, isNews, maxAgeDays, source }) {
   if (cadence !== undefined) entry.cadence = cadence;
   if (isNews !== undefined) entry.isNews = isNews;
   if (maxAgeDays !== undefined) entry.maxAgeDays = maxAgeDays === null ? null : Number(maxAgeDays);
+  if (node !== undefined) entry.node = node === null ? null : String(node);
   saveManifest(manifest);
   return entry;
 }
@@ -601,13 +603,15 @@ export function runPool(seeders, opts = {}) {
 
 /** Compute the due set for the systemd/CLI "run-due" entry point. */
 export function dueSeeders(opts = {}) {
-  const { tier = "all", source = null, force = false } = opts;
+  const { tier = "all", source = null, force = false, node = null } = opts;
   const db = openState();
   const index = buildIndex();
+  const me = nodeId();
   const seeders = index.filter((s) => {
-    if (source) return s.source === source || s.script === source;
-    if (tier === "news") return s.isNews;
-    if (tier === "evergreen") return !s.isNews;
+    if (source && s.source !== source && s.script !== source) return false;
+    if (node && (s.node ?? me) !== node) return false;
+    if (tier === "news" && !s.isNews) return false;
+    if (tier === "evergreen" && s.isNews) return false;
     return true;
   });
   const due = seeders.filter((s) => force || isDue(s, getState(db, s.source)));

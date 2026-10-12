@@ -1,22 +1,77 @@
 /**
- * pipeline.js — offline pipeline jobs (stage → import → tag → push).
+ * pipeline.js — offline pipeline jobs (stage → curate → tag → push).
  *
- * Minimal, database-agnostic version. Reports job status and lets the GUI/TUI
- * launch the LLM `tag` job through the tagging adapter. A host can inject a
- * richer pipeline (offline-DB export, provider push) via its own overlay.
+ * The engine always stages (JSONL in stagedDir). The pipeline then moves rows
+ * through curation (manual delete), LLM tagging, and push-to-storage. `push` is
+ * fully wired; `tag` runs through the tagging adapter against the configured
+ * endpoint (local Ollama on the PC, or a remote/cloud endpoint on the Pi).
  */
+import { getConfig } from "../config.js";
+import { readStaged, writeStagedSource, groupBySource } from "../core/staged.js";
+import { pushStagedToStorage } from "../core/sync.js";
+import { detectModels, tag, buildPrompt, loadText } from "../adapters/tagging/index.js";
+import { getCategories } from "../adapters/categories/index.js";
 
 export function pipelineStatus() {
   return {
+    staged: readStaged().length,
     jobs: [
+      { key: "curate", label: "Curation (delete before tagging)", status: "ready" },
       { key: "tag", label: "LLM tag", status: "idle" },
       { key: "push", label: "Push to storage", status: "idle" },
     ],
-    note: "LLM tagging via the tagging adapter (configure providers to enable).",
+    note: "Tagging uses the configured tagging.providers endpoint (no local model loading).",
   };
 }
 
+/** Map a model's {category, subcategory} string ids onto the schema values. */
+function resolveIds({ category, subcategory }) {
+  const cats = getCategories();
+  const cat = cats?.categories?.find((c) => c.id === category || c.label === category);
+  const sub = cats?.subcategories?.find((s) => s.id === subcategory || s.label === subcategory);
+  return {
+    category_id: cat ? (cat.externalId ?? cat.id) : null,
+    subcategory_id: sub ? (sub.externalId ?? sub.id) : null,
+  };
+}
+
+async function runTag() {
+  const cfg = getConfig().tagging || {};
+  const providers = cfg.providers || [];
+  if (!providers.length) throw new Error("No tagging.providers configured.");
+  const provider = providers.find((p) => p.id === "ollama") ?? providers[0];
+  const model = cfg.model ?? (await detectModels(providers))[0]?.id;
+  if (!model) throw new Error("No tagging model configured or detected.");
+
+  const prompt = loadText(cfg.promptFile) || "";
+  const cats = getCategories();
+  const vocab = {
+    categories: (cats?.categories ?? []).map((c) => ({ id: c.id, label: c.label ?? c.id })),
+    tags: JSON.parse(loadText(cfg.vocabFile) || "[]"),
+  };
+
+  const rows = readStaged();
+  const tagged = await tag(rows, { provider, model, prompt, vocab, temperature: cfg.temperature ?? 0 });
+  for (const [src, rs] of groupBySource(tagged)) {
+    writeStagedSource(src, rs.map((r) => ({ ...r, ...resolveIds(r) })));
+  }
+  return { tagged: tagged.length };
+}
+
 export function startPipelineJob(kind) {
-  // Placeholder — the tag job is wired in a later pass against staged rows.
-  return kind === "tag" || kind === "push" ? { key: kind, alreadyRunning: false } : null;
+  if (kind === "push") {
+    const job = { key: "push", alreadyRunning: false };
+    pushStagedToStorage()
+      .then((r) => console.log("[pipeline] push:", JSON.stringify(r)))
+      .catch((e) => console.error("[pipeline] push error:", e.message));
+    return job;
+  }
+  if (kind === "tag") {
+    const job = { key: "tag", alreadyRunning: false };
+    runTag()
+      .then((r) => console.log("[pipeline] tag:", JSON.stringify(r)))
+      .catch((e) => console.error("[pipeline] tag error:", e.message));
+    return job;
+  }
+  return null;
 }

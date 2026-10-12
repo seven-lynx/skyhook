@@ -27,6 +27,9 @@ const DEFAULTS = {
   stateDb: ".skyhook/seeder-state.db",
   logDir: ".skyhook/logs",
   stagedDir: ".skyhook/staged",
+  settingsFile: ".skyhook/settings.json",
+  node: { id: "local", allowRemote: false },
+  remote: { token: null, peers: [] },
   storage: {
     provider: "stage",
     schemaFile: "config/schema.json",
@@ -58,7 +61,7 @@ function deepMerge(base, over) {
 
 const PATH_KEYS = [
   "dataDir", "seedersDir", "categoriesFile", "manifestFile",
-  "descriptionsFile", "stateDb", "logDir", "stagedDir",
+  "descriptionsFile", "stateDb", "logDir", "stagedDir", "settingsFile",
 ];
 
 export function loadConfig(opts = {}) {
@@ -103,4 +106,9 @@ export function loadConfig(opts = {}) {
 
 export function getConfig() {
   return _config ?? loadConfig();
+}
+
+/** This machine's node id (used to route seeders between PC/Pi). */
+export function nodeId() {
+  return getConfig().node?.id ?? "local";
 }

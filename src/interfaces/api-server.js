@@ -39,6 +39,15 @@ import {
   listCategories, fetchSiteMeta, createSeeder, deleteSeeder,
 } from "../engine/seeder-engine.js";
 import { pipelineStatus, startPipelineJob } from "./pipeline.js";
+import { nodeId } from "../config.js";
+import {
+  routeSeeders, peerFor, runRemote, forwardSchedule, remoteToken,
+} from "../core/remote.js";
+import { loadSettings, saveSettings, settingsView, allowRemote } from "../core/settings.js";
+import { readStaged } from "../core/staged.js";
+import { mergeRemoteRows, pushStagedToStorage } from "../core/sync.js";
+import { statsFromStaged } from "../core/analytics.js";
+import { listCache, pruneStaged, clearDiscovery, clearStaged } from "../core/data.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -84,6 +93,7 @@ function seederView(s, st) {
     subcategory: s.subcategory,
     categoryLabel: s.categoryLabel,
     subcategoryLabel: s.subcategoryLabel,
+    node: s.node ?? null,
     access: s.access,
     description: s.description ?? null,
     lastRunAt: st?.last_run_at ?? null,
@@ -104,6 +114,16 @@ export function startServer(port = 4173) {
     const method = req.method;
 
     try {
+      // Token gate on all mutating requests (shared secret across PC/Pi).
+      if (method === "POST") {
+        const token = remoteToken();
+        if (token) {
+          const h = req.headers.authorization || "";
+          const provided = h.startsWith("Bearer ") ? h.slice(7) : (req.headers["x-skyhook-token"] || "");
+          if (provided !== token) return send(res, 403, { error: "invalid or missing token" });
+        }
+      }
+
       if (method === "GET" && path === "/api/health") {
         const idx = buildIndex();
         const due = idx.filter((s) => isDue(s, getState(db, s.source)));
@@ -181,11 +201,25 @@ export function startServer(port = 4173) {
           forceHeadless: !!body.forceHeadless,
           noCache: !!body.noCache,
         };
-        // Fire-and-forget: results are recorded per-seeder as each finishes.
-        runPool(selected, opts).catch((err) => console.error("run error:", err.message));
+        const { local, remote } = routeSeeders(selected);
+        const remoteResults = [];
+        for (const [peerId, seeders] of remote) {
+          const peer = peerFor(peerId);
+          if (!peer) { remoteResults.push({ peer: peerId, error: `no peer configured for node "${peerId}"` }); continue; }
+          try {
+            remoteResults.push(await runRemote(peer, seeders, opts));
+          } catch (err) {
+            remoteResults.push({ peer: peerId, error: err.message });
+          }
+        }
+        if (local.length) {
+          runPool(local, opts).catch((err) => console.error("run error:", err.message));
+        }
         return send(res, 200, {
           ok: true,
-          started: selected.map((s) => s.source),
+          started: local.map((s) => s.source),
+          forwarded: [...remote.keys()],
+          remoteResults,
           concurrency,
           withHeadless: opts.withHeadless,
         });
@@ -193,8 +227,12 @@ export function startServer(port = 4173) {
 
       if (method === "POST" && path === "/api/schedule") {
         const body = await readBody(req);
-        const entry = editManifest({ query: body.source, cadence: body.cadence, isNews: body.isNews, maxAgeDays: body.maxAgeDays });
+        const entry = editManifest({ query: body.source, cadence: body.cadence, isNews: body.isNews, maxAgeDays: body.maxAgeDays, node: body.node });
         if (!entry) return send(res, 400, { error: `no unique match for "${body.source}"` });
+        if (entry.node && entry.node !== nodeId()) {
+          const peer = peerFor(entry.node);
+          if (peer) forwardSchedule(peer, { source: entry.source, cadence: entry.cadence, isNews: entry.isNews, maxAgeDays: entry.maxAgeDays }).catch(() => {});
+        }
         return send(res, 200, { ok: true, entry });
       }
 
@@ -277,6 +315,61 @@ export function startServer(port = 4173) {
         if (!job) return send(res, 404, { error: "unknown pipeline action" });
         if (job.alreadyRunning) return send(res, 409, { error: `${job.key} already running` });
         return send(res, 200, { ok: true, job: job.key, kind });
+      }
+
+      // ── node settings (the Pi "operate remotely" toggle) ──────────────────
+      if (method === "GET" && path === "/api/settings") {
+        return send(res, 200, settingsView());
+      }
+
+      if (method === "POST" && path === "/api/settings") {
+        const body = await readBody(req);
+        const patch = {};
+        if (typeof body.allowRemote === "boolean") patch.allowRemote = body.allowRemote;
+        saveSettings(patch);
+        return send(res, 200, { ok: true, settings: settingsView() });
+      }
+
+      // ── staged results (export / import across nodes) ─────────────────────
+      if (method === "GET" && path === "/api/staged") {
+        const source = url.searchParams.get("source") || null;
+        return send(res, 200, { rows: readStaged({ source }) });
+      }
+
+      if (method === "POST" && path === "/api/staged/import") {
+        if (!allowRemote()) return send(res, 403, { error: "remote control is disabled (toggle allowRemote)" });
+        const body = await readBody(req);
+        const rows = Array.isArray(body.rows) ? body.rows : [];
+        return send(res, 200, { ok: true, ...mergeRemoteRows(rows) });
+      }
+
+      // ── analytics ──────────────────────────────────────────────────────────
+      if (method === "GET" && path === "/api/stats") {
+        const source = url.searchParams.get("source") || null;
+        return send(res, 200, statsFromStaged({ source }));
+      }
+
+      // ── cache / curation (delete staged URLs before tagging) ──────────────
+      if (method === "GET" && path === "/api/cache") {
+        return send(res, 200, listCache());
+      }
+
+      if (method === "POST" && path === "/api/cache/prune") {
+        const body = await readBody(req);
+        const result = pruneStaged(body.filter || {}, { soft: body.soft !== false });
+        return send(res, 200, { ok: true, ...result });
+      }
+
+      if (method === "POST" && path === "/api/cache/clear") {
+        const body = await readBody(req);
+        if (body.kind === "discovery") return send(res, 200, clearDiscovery(body.source));
+        return send(res, 200, clearStaged(body.source, { soft: body.soft !== false }));
+      }
+
+      // ── push staged → storage (deduped) ───────────────────────────────────
+      if (method === "POST" && path === "/api/push") {
+        const result = await pushStagedToStorage();
+        return send(res, 200, { ok: true, ...result });
       }
 
       if (method === "GET" && !path.startsWith("/api/")) {
