@@ -133,27 +133,10 @@
     </section>
 
     <section id="pipeline" class="panel">
-      <div class="pipeline-grid">
-        <div class="pipe-card">
-          <div class="pipe-num" id="pipeStaged">—</div>
-          <div class="pipe-label">Cached &amp; ready to tag</div>
-          <button id="startTagBtn" class="btn primary" data-tip="Import staged URLs and run the local LLM tagger (sync-existing-urls → import-staged-urls → tagging-worker).">▶ Start tagging</button>
-        </div>
-        <div class="pipe-card">
-          <div class="pipe-num" id="pipeReady">—</div>
-          <div class="pipe-label">Tagged &amp; ready to push</div>
-          <button id="pushBtn" class="btn primary" data-tip="Upload tagged URLs + tags to Supabase (upload-tagged-urls → upload-tags-to-supabase).">⬆ Push to database</button>
-        </div>
-        <div class="pipe-card">
-          <div class="pipe-num" id="pipeDbAge">—</div>
-          <div class="pipe-label">Offline DB age</div>
-          <div class="pipe-sub" id="pipeDbInfo">—</div>
-          <button id="exportBtn" class="btn" data-tip="Pull only new untagged URLs from production (preserves local tag progress).">↻ Update export</button>
-          <button id="exportFullBtn" class="btn danger" data-tip="Re-export every table from Supabase. WIPES local LLM tag progress.">⛔ Full rebuild</button>
-        </div>
-      </div>
-      <div id="pipelinePrereqs" class="pipeline-prereqs"></div>
-      <div id="pipelineStatus" class="pipeline-status muted"></div>
+      <div id="pipelineCards" class="pipeline-grid"></div>
+      <div id="pipelineChecks" class="pipeline-prereqs"></div>
+      <div id="pipelineJobs" class="pipeline-jobs"></div>
+      <div id="pipelineNote" class="pipeline-status muted"></div>
     </section>
 
     <section id="stats" class="panel">
@@ -259,17 +242,6 @@
         <button id="buildCancel" class="btn">Cancel</button>
         <button id="buildSave" class="btn primary">Save</button>
         <button id="buildTest" class="btn primary">Test run</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="rebuildModal" class="modal" hidden>
-    <div class="modal-card">
-      <h3 id="rebuildTitle">Full rebuild</h3>
-      <div id="rebuildBody"></div>
-      <div class="modal-actions">
-        <button id="rebuildCancel" class="btn">Cancel</button>
-        <button id="rebuildNext" class="btn danger">Continue</button>
       </div>
     </div>
   </div>

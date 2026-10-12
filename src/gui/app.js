@@ -312,36 +312,27 @@ function fmtAge(ms) {
 function renderPipeline() {
   const p = state.pipe;
   if (!p) return;
-  const nf = (n) => (n == null ? "—" : Number(n).toLocaleString());
-  const db = p.offlineDb || {};
 
-  $("#pipeStaged").textContent = nf(p.staged?.urls);
-  $("#pipeReady").textContent = nf(db.taggedReady);
-  $("#pipeDbAge").textContent = db.exists ? fmtAge(db.ageMs) : "missing";
-  $("#pipeDbInfo").textContent = db.exists
-    ? `${nf(db.urls)} URLs · ${nf(db.urlsStaged)} staged · ${nf(db.unsyncedTags)} unsynced tags`
-    : "no offline DB yet";
+  const cards = Array.isArray(p.cards) ? p.cards : [];
+  $("#pipelineCards").innerHTML = cards.map((c) => `
+    <div class="pipe-card">
+      <div class="pipe-num">${esc(c.value ?? "—")}</div>
+      <div class="pipe-label">${esc(c.label)}</div>
+      ${c.sub ? `<div class="pipe-sub">${esc(c.sub)}</div>` : ""}
+      ${(c.actions || []).map((a) => `<button class="btn ${a.danger ? "danger" : "primary"}" data-pipe="${esc(a.id)}" ${a.danger ? 'data-danger="1"' : ""} title="${esc(a.label)}">${esc(a.label)}</button>`).join("")}
+    </div>`).join("");
 
-  const pre = p.prerequisites || {};
-  const items = [
-    ["Supabase .env", pre.env],
-    ["Offline DB", pre.offlineDb],
-    ["Known-URLs index", pre.knownUrls],
-    ["Tag vocabulary", pre.localTags],
-  ];
-  $("#pipelinePrereqs").innerHTML = items.map(([label, ok]) =>
-    `<span class="prereq ${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"} ${label}</span>`).join("");
+  const checks = Array.isArray(p.checks) ? p.checks : [];
+  $("#pipelineChecks").innerHTML = checks.map((c) =>
+    `<span class="prereq ${c.ok ? "ok" : "bad"}">${c.ok ? "✓" : "✗"} ${esc(c.label)}</span>`).join("");
 
-  const running = (p.running || []).map((r) => r.source);
-  const prog = db.progress;
-  const parts = [];
-  if (running.length) parts.push(`Running: ${running.join(", ")}`);
-  if (prog) {
-    parts.push(`Tagging: ${nf(prog.total_processed)} processed, ${nf(prog.total_failed)} failed` +
-      (prog.rate_per_hour ? ` (~${Math.round(prog.rate_per_hour).toLocaleString()}/hr)` : ""));
-  }
-  if (p.staged) parts.push(`Staged on disk: ${nf(p.staged.files)} files · ${nf(p.staged.urls)} URLs`);
-  $("#pipelineStatus").textContent = parts.join("\n");
+  const jobs = Array.isArray(p.jobs) ? p.jobs : [];
+  $("#pipelineJobs").innerHTML = jobs.length
+    ? jobs.map((j) =>
+        `<div class="job-row"><span class="job-status ${esc(j.status || "")}"></span><span>${esc(j.label)}</span><span class="job-state">${esc(j.status || "")}</span></div>`).join("")
+    : "";
+
+  $("#pipelineNote").textContent = p.note || "";
 }
 
 async function renderTimer() {
@@ -603,7 +594,8 @@ function startLogPolling() {
     renderRunning();
     updateRunningUI();
     await renderLogs();
-    if (state.running.some((r) => r.source.startsWith("pipeline-"))) {
+    const jobKeys = new Set((state.pipe?.jobs || []).map((j) => j.key));
+    if (state.running.some((r) => jobKeys.has(r.source))) {
       await loadPipeline();
       renderPipeline();
     }
@@ -887,49 +879,13 @@ async function startPipeline(kind) {
     return;
   }
   await loadRunning();
-  openLogDrawer([jobKey]);
+  await loadPipeline();
+  renderPipeline();
   renderRunning();
-  startLogPolling();
   updateRunningUI();
-}
-
-// Full rebuild: two confirmations in big scary letters.
-let rebuildStep = 0;
-
-function openRebuildConfirm() {
-  rebuildStep = 1;
-  renderRebuildConfirm();
-  $("#rebuildModal").hidden = false;
-}
-
-function renderRebuildConfirm() {
-  const title = $("#rebuildTitle");
-  const body = $("#rebuildBody");
-  const next = $("#rebuildNext");
-  if (rebuildStep === 1) {
-    title.textContent = "⚠️ Full rebuild — warning";
-    body.innerHTML = `
-      <div class="scary">
-        <p class="scary-big">This wipes your local tagging progress.</p>
-        <p>Full rebuild re-exports <strong>every</strong> table from Supabase into the
-        offline DB and deletes all local LLM tags, quality scores, and progress
-        (tens of thousands of rows). It takes several minutes.</p>
-        <p>Use <strong>Update export</strong> (incremental) unless you really need a
-        from-scratch rebuild.</p>
-      </div>`;
-    next.textContent = "I understand the risks →";
-    next.disabled = false;
-  } else {
-    title.textContent = "⛔ Confirm full rebuild";
-    body.innerHTML = `
-      <div class="scary">
-        <p class="scary-big">Type REBUILD to confirm.</p>
-        <p>This will permanently delete local tag progress and re-download the full
-        database. <strong>There is no undo.</strong></p>
-        <input id="rebuildInput" type="text" placeholder="REBUILD" autocomplete="off" spellcheck="false" />
-      </div>`;
-    next.textContent = "⛔ Delete & rebuild";
-    next.disabled = true;
+  if (jobKey && state.running.some((r) => r.source === jobKey)) {
+    openLogDrawer([jobKey]);
+    startLogPolling();
   }
 }
 
@@ -1057,25 +1013,11 @@ function bind() {
   });
   $("#buildCategory").addEventListener("change", () => populateBuildSubcategories(null));
 
-  $("#startTagBtn").addEventListener("click", () => startPipeline("tag"));
-  $("#pushBtn").addEventListener("click", () => startPipeline("push"));
-  $("#exportBtn").addEventListener("click", () => startPipeline("export"));
-  $("#exportFullBtn").addEventListener("click", openRebuildConfirm);
-
-  $("#rebuildCancel").addEventListener("click", () => { $("#rebuildModal").hidden = true; rebuildStep = 0; });
-  $("#rebuildModal").addEventListener("click", (e) => { if (e.target.id === "rebuildModal") { $("#rebuildModal").hidden = true; rebuildStep = 0; } });
-  $("#rebuildBody").addEventListener("input", (e) => {
-    if (e.target.id === "rebuildInput") {
-      $("#rebuildNext").disabled = e.target.value.trim().toUpperCase() !== "REBUILD";
-    }
-  });
-  $("#rebuildNext").addEventListener("click", () => {
-    if (rebuildStep === 1) { rebuildStep = 2; renderRebuildConfirm(); return; }
-    const val = ($("#rebuildInput")?.value || "").trim().toUpperCase();
-    if (val !== "REBUILD") { toast("Type REBUILD to confirm.", "err"); return; }
-    $("#rebuildModal").hidden = true;
-    rebuildStep = 0;
-    startPipeline("export-full");
+  $("#pipelineCards").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-pipe]");
+    if (!btn) return;
+    if (btn.dataset.danger === "1" && !confirm(`Run "${btn.dataset.pipe}"? This is destructive and cannot be undone.`)) return;
+    startPipeline(btn.dataset.pipe);
   });
 
   $("#pruneBtn").addEventListener("click", async () => {

@@ -46,6 +46,10 @@ const DEFAULTS = {
     vocabFile: "config/tags.json",
     temperature: 0,
   },
+  pipeline: {
+    status: null, // optional script that prints the pipeline status JSON
+    jobs: {},     // { key: { label, command: [script, ...args], danger? } }
+  },
 };
 
 let _config = null;
@@ -94,6 +98,9 @@ export function loadConfig(opts = {}) {
   }
   if (merged.tagging?.vocabFile && !isAbsolute(merged.tagging.vocabFile)) {
     merged.tagging.vocabFile = resolve(cwd, merged.tagging.vocabFile);
+  }
+  if (merged.pipeline?.status && !isAbsolute(merged.pipeline.status)) {
+    merged.pipeline.status = resolve(cwd, merged.pipeline.status);
   }
 
   // Allow env-based credentials to override config (never committed).

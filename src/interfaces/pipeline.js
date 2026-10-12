@@ -1,27 +1,71 @@
 /**
- * pipeline.js — offline pipeline jobs (stage → curate → tag → push).
+ * pipeline.js — config-driven pipeline (stage → curate → tag → push).
  *
  * The engine always stages (JSONL in stagedDir). The pipeline then moves rows
  * through curation (manual delete), LLM tagging, and push-to-storage. `push` is
  * fully wired; `tag` runs through the tagging adapter against the configured
  * endpoint (local Ollama on the PC, or a remote/cloud endpoint on the Pi).
  */
+import { spawnSync } from "child_process";
 import { getConfig } from "../config.js";
 import { readStaged, writeStagedSource, groupBySource } from "../core/staged.js";
 import { pushStagedToStorage } from "../core/sync.js";
 import { detectModels, tag, loadText } from "../adapters/tagging/index.js";
 import { getCategories } from "../adapters/categories/index.js";
+import { listRunning, runJob } from "../engine/seeder-engine.js";
 
-export function pipelineStatus() {
+export function pipelineConfig() {
+  return getConfig().pipeline || {};
+}
+
+function fmt(n) {
+  return n == null ? "—" : Number(n).toLocaleString();
+}
+
+function runStatusScript(script) {
+  if (!script) return null;
+  try {
+    const res = spawnSync(process.execPath, [script], {
+      cwd: process.cwd(), encoding: "utf8", timeout: 15000, maxBuffer: 4 * 1024 * 1024,
+    });
+    if (res.status !== 0) return null;
+    const json = String(res.stdout || "").trim();
+    return json ? JSON.parse(json) : null;
+  } catch {
+    return null;
+  }
+}
+
+function defaultStatus() {
+  const rows = readStaged();
+  const tagged = rows.filter((r) => r.category_id || r.category || (Array.isArray(r.tags) && r.tags.length)).length;
+  const running = listRunning().map((r) => r.source);
   return {
-    staged: readStaged().length,
+    cards: [
+      { id: "staged", value: fmt(rows.length), label: "Cached & ready to tag",
+        actions: [{ id: "tag", label: "Start tagging", kind: "tag" }] },
+      { id: "tagged", value: fmt(tagged), label: "Tagged & ready to push",
+        actions: [{ id: "push", label: "Push to database", kind: "push" }] },
+    ],
     jobs: [
       { key: "curate", label: "Curation (delete before tagging)", status: "ready" },
-      { key: "tag", label: "LLM tag", status: "idle" },
-      { key: "push", label: "Push to storage", status: "idle" },
+      { key: "tag", label: "LLM tag", status: running.includes("tag") ? "running" : "idle" },
+      { key: "push", label: "Push to storage", status: running.includes("push") ? "running" : "idle" },
     ],
     note: "Tagging uses the configured tagging.providers endpoint (no local model loading).",
   };
+}
+
+export function pipelineStatus() {
+  const cfg = pipelineConfig();
+  const base = runStatusScript(cfg.status) || defaultStatus();
+  const running = listRunning().map((r) => r.source);
+  if (Array.isArray(base.jobs)) {
+    base.jobs = base.jobs.map((j) => ({ ...j, status: running.includes(j.key) ? "running" : j.status }));
+  }
+  base.running = running;
+  if (running.length) base.note = [base.note, `Running: ${running.join(", ")}`].filter(Boolean).join("\n");
+  return base;
 }
 
 /** Map a model's {category, subcategory} string ids onto the schema values. */
@@ -61,19 +105,28 @@ async function runTag() {
 }
 
 export function startPipelineJob(kind) {
+  const job = pipelineConfig().jobs?.[kind];
+  if (job) {
+    const command = Array.isArray(job.command) ? job.command : [];
+    const [script, ...args] = command;
+    if (!script) return null;
+    if (listRunning().some((r) => r.source === kind)) return { key: kind, alreadyRunning: true };
+    runJob({ key: kind, scriptPath: script, args })
+      .then(() => {})
+      .catch((err) => console.error(`pipeline ${kind} error:`, err.message));
+    return { key: kind, alreadyRunning: false };
+  }
   if (kind === "push") {
-    const job = { key: "push", alreadyRunning: false };
     pushStagedToStorage()
       .then((r) => console.log("[pipeline] push:", JSON.stringify(r)))
       .catch((e) => console.error("[pipeline] push error:", e.message));
-    return job;
+    return { key: "push", alreadyRunning: false };
   }
   if (kind === "tag") {
-    const job = { key: "tag", alreadyRunning: false };
     runTag()
       .then((r) => console.log("[pipeline] tag:", JSON.stringify(r)))
       .catch((e) => console.error("[pipeline] tag error:", e.message));
-    return job;
+    return { key: "tag", alreadyRunning: false };
   }
   return null;
 }

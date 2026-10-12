@@ -395,6 +395,12 @@ td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .prereq.ok { color: var(--ok); border-color: var(--ok); }
 .prereq.bad { color: var(--err); border-color: var(--err); }
 .pipeline-status { font-size: 12px; white-space: pre-wrap; }
+.pipeline-jobs { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.job-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.job-status { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.job-status.running { background: var(--accent); }
+.job-status.ready { background: var(--ok); }
+.job-state { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
 
 /* ── scary confirmation ───────────────────────────────────────────────────── */
 .scary { border: 2px solid var(--err); border-radius: 8px; padding: 14px; background: rgba(255, 92, 92, .08); }
