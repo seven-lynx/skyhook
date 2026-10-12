@@ -18,7 +18,7 @@ import {
   editManifest, enableSeeder, disableSeeder, resolveSeeder, emitTimer, writeTimer,
   CADENCES, CADENCE_MS, LOGS_DIR, SCRIPTS_DIR,
 } from "../src/engine/seeder-engine.js";
-import { nodeId } from "../src/config.js";
+import { nodeId, getConfig } from "../src/config.js";
 import { routeSeeders, peerFor, runRemote, getPeers, pullStaged } from "../src/core/remote.js";
 import { settingsView, saveSettings } from "../src/core/settings.js";
 import { statsFromStaged } from "../src/core/analytics.js";
@@ -47,6 +47,7 @@ const COMMANDS = [
   ["cache",      "Inspect / prune staged results and discovery cache (delete URLs)"],
   ["sync",       "Merge staged results with a peer (Pi ⇄ PC) with URL dedup"],
   ["push",       "Push the merged staged set into the configured storage"],
+  ["tag",        "Offline LLM tag worker (resumes; --mode retag-add|retag-replace for a second pass)"],
   ["settings",   "View or toggle node settings (allowRemote, peers)"],
   ["init",       "Scaffold a new Skyhook setup (config, config/, seeders/, .skyhook/)"],
   ["tui",        "Interactive menu (terminal control center)"],
@@ -627,6 +628,34 @@ async function cmdTui() {
   }
 }
 
+// ── tag (offline LLM worker) ───────────────────────────────────────────────
+async function cmdTag(a) {
+  const c = getConfig();
+  const { runOfflineTagWorker, loadPrompt } = await import("../src/adapters/tagging/offline-worker.js");
+
+  const providers = c.tagging?.providers || [];
+  const provider = providers.find((p) => p.id === (val(a, "--provider") || null)) || providers[0];
+
+  const opts = {
+    dbPath: c.pipeline?.offlineDb,
+    provider,
+    model: c.tagging?.model,
+    prompt: loadPrompt(c.tagging?.promptFile),
+    modelSource: val(a, "--model-source", c.tagging?.worker?.modelSource || "llm"),
+    batchSize: parseInt(val(a, "--batch-size", String(c.tagging?.worker?.batchSize || 25)), 10) || 25,
+    max: parseInt(val(a, "--max", "0"), 10) || null,
+    mode: val(a, "--mode", "tag"),
+    tier: parseInt(val(a, "--tier", "0"), 10) || 0,
+  };
+
+  try {
+    await runOfflineTagWorker(opts);
+  } catch (err) {
+    console.error("Tag worker error:", err.message);
+    process.exitCode = 1;
+  }
+}
+
 // ── serve ───────────────────────────────────────────────────────────────────
 async function cmdServe(a) {
   const port = parseInt(val(a, "--port", "4173"), 10) || 4173;
@@ -656,6 +685,7 @@ async function main() {
     case "cache": cmdCache(args); break;
     case "sync": await cmdSync(args); break;
     case "push": await cmdPush(args); break;
+    case "tag": await cmdTag(args); break;
     case "settings": cmdSettings(args); break;
     case "init": cmdInit(args); break;
     case "tui": await cmdTui(); break;

@@ -45,10 +45,15 @@ const DEFAULTS = {
     promptFile: "config/tagging-prompt.txt",
     vocabFile: "config/tags.json",
     temperature: 0,
+    worker: {
+      batchSize: 25,
+      modelSource: "llm",
+    },
   },
   pipeline: {
-    status: null, // optional script that prints the pipeline status JSON
-    jobs: {},     // { key: { label, command: [script, ...args], danger? } }
+    status: null,   // optional script that prints the pipeline status JSON
+    offlineDb: null, // local SQLite DB for the offline tagging pipeline
+    jobs: {},       // { key: { label, command: [script, ...args], danger? } }
   },
 };
 
@@ -101,6 +106,9 @@ export function loadConfig(opts = {}) {
   }
   if (merged.pipeline?.status && !isAbsolute(merged.pipeline.status)) {
     merged.pipeline.status = resolve(cwd, merged.pipeline.status);
+  }
+  if (merged.pipeline?.offlineDb && !isAbsolute(merged.pipeline.offlineDb)) {
+    merged.pipeline.offlineDb = resolve(cwd, merged.pipeline.offlineDb);
   }
 
   // Allow env-based credentials to override config (never committed).
