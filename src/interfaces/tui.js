@@ -11,6 +11,8 @@ import {
   buildIndex, openState, getState, listRuns, runPool, editManifest,
   emitTimer, writeTimer, resolveSeeder, CADENCES, ROOT, LOGS_DIR, SCRIPTS_DIR,
 } from "../engine/seeder-engine.js";
+import { settingsView, saveSettings } from "../core/settings.js";
+import { statsFromStaged } from "../core/analytics.js";
 
 const tierOf = (s) => (s.isNews ? "news" : "evergreen");
 
@@ -214,6 +216,36 @@ async function screenEmitTimer() {
   await input({ message: "\nPress Enter to continue" });
 }
 
+async function screenStats() {
+  const s = statsFromStaged();
+  console.log(`\n  📊 Staged URLs: ${s.total}  ·  seeders: ${s.seeders}\n`);
+  if (!s.total) {
+    console.log("  (no staged results yet)");
+  } else {
+    console.log("  By category:");
+    for (const r of s.byCategory) console.log(`    ${r.label.padEnd(26)} ${String(r.count).padStart(6)}  ${r.pct.toFixed(1).padStart(5)}%`);
+    console.log("  Top seeders:");
+    for (const r of s.bySource.slice(0, 12)) console.log(`    ${r.key.padEnd(26)} ${String(r.count).padStart(6)}  ${r.pct.toFixed(1).padStart(5)}%`);
+  }
+  console.log("");
+  await input({ message: "Press Enter to continue" });
+}
+
+async function screenSettings() {
+  const v = settingsView();
+  console.log(`\n  🛰 Settings\n`);
+  console.log(`  node id      ${v.node.id}`);
+  console.log(`  allowRemote  ${v.node.allowRemote ? "ON (worker)" : "OFF (standalone)"}`);
+  console.log(`  token        ${v.remote.hasToken ? "set" : "(none — open API)"}`);
+  console.log(`  peers        ${v.remote.peers.length ? v.remote.peers.map((p) => `${p.id}→${p.url}`).join(", ") : "(none)"}\n`);
+  const toggle = await confirm({ message: `allowRemote is ${v.node.allowRemote ? "ON" : "OFF"} — toggle it?`, default: false });
+  if (toggle) {
+    saveSettings({ allowRemote: !v.node.allowRemote });
+    console.log(`\n  ✓ allowRemote = ${!v.node.allowRemote ? "ON (worker)" : "OFF (standalone)"}`);
+  }
+  await input({ message: "\nPress Enter to continue" });
+}
+
 // ── main loop ───────────────────────────────────────────────────────────────
 
 export async function runTui() {
@@ -227,6 +259,8 @@ export async function runTui() {
         { name: "🔀  Run in parallel (tmux)", value: "par" },
         { name: "📅  Schedule editor", value: "sched" },
         { name: "📜  History", value: "hist" },
+        { name: "📊  Stats", value: "stats" },
+        { name: "⚙️   Settings", value: "settings" },
         { name: "⏰  Emit timer", value: "timer" },
         new Separator(),
         { name: "🚪  Quit", value: "quit" },
@@ -239,6 +273,8 @@ export async function runTui() {
       case "par": await screenParallel(); break;
       case "sched": await screenSchedule(); break;
       case "hist": await screenHistory(); break;
+      case "stats": await screenStats(); break;
+      case "settings": await screenSettings(); break;
       case "timer": await screenEmitTimer(); break;
       case "quit": console.log(""); return;
     }
