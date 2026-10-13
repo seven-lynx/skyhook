@@ -611,9 +611,9 @@ async function bulkDisable() {
 
 // ── live log drawer ─────────────────────────────────────────────────────────
 function openLogDrawer(sources) {
-  // Merge the just-started sources with everything currently running so the
-  // tabs always include both seeders and pipeline jobs (e.g. the tagger).
-  const all = [...new Set([...sources, ...state.running.map((r) => r.source)])];
+  // Union with everything we already know about — never shrink logSources.
+  // Otherwise starting the tagger destroys all the finished seeder tabs.
+  const all = [...new Set([...state.logSources, ...sources, ...state.running.map((r) => r.source)])];
   state.logSources = all;
   state.followLog = true;
   // Don't auto-select if the user already picked a tab — preserve their choice.
