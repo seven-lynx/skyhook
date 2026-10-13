@@ -312,8 +312,6 @@ td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 @keyframes spin-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 .running-badge { color: var(--warn); font-size: 12px; font-family: var(--mono); }
 .run-progress { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-left: 8px; }
-.running-now { padding: 8px 16px 4px; font-size: 12px; font-family: var(--mono); }
-.running-now .now-sep { margin: 0 8px; color: var(--muted); }
 
 /* ── danger button ───────────────────────────────────────────────────────── */
 .btn.danger { border-color: var(--err); color: var(--err); }
@@ -368,6 +366,7 @@ td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .log-tab:hover { color: var(--text); }
 .log-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .log-tab .spin { margin-left: 4px; }
+.log-tab .log-tab-time { color: var(--muted); font-size: 11px; opacity: .8; margin-left: 3px; }
 
 /* ── tooltips ────────────────────────────────────────────────────────────── */
 [data-tip] { position: relative; }

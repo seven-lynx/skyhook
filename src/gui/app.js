@@ -431,20 +431,8 @@ function updateRunningUI() {
   $("#runningBadge").textContent = n ? `${n} running` : "";
   $("#stopBtn").disabled = n === 0;
   renderProgress();
-  renderRunningNow();
   updateShowLogBtn();
   if (!n) stopLogPolling();
-}
-
-function renderRunningNow() {
-  const el = $("#runningNow");
-  if (!el) return;
-  if (!state.running.length) { el.hidden = true; el.innerHTML = ""; return; }
-  el.innerHTML = [...state.running]
-    .sort((a, b) => (b.elapsedMs ?? 0) - (a.elapsedMs ?? 0))
-    .map((r) => `<span class="now-item"><span class="spin">●</span> ${esc(r.source)} <span class="muted">${fmtElapsed(r.elapsedMs)}</span></span>`)
-    .join('<span class="now-sep">·</span>');
-  el.hidden = false;
 }
 
 function renderProgress() {
@@ -644,19 +632,22 @@ function closeLogDrawer() {
 
 function renderLogTabs() {
   const container = $("#logTabs");
-  const runningSet = new Set(state.running.map((r) => r.source));
+  const running = new Map(state.running.map((r) => [r.source, r]));
   const tabs = [{ key: "__all__", label: "All" }];
   for (const source of state.logSources) {
     if (source !== "__all__") tabs.push({ key: source, label: source });
   }
   // If active tab no longer exists, fall back.
   if (!tabs.some((t) => t.key === state.logTab)) {
-    state.logTab = state.logSources.find((s) => runningSet.has(s)) || "__all__";
+    state.logTab = state.logSources.find((s) => running.has(s)) || "__all__";
   }
   container.innerHTML = tabs.map((t) => {
     const active = t.key === state.logTab ? " active" : "";
-    const spin = t.key !== "__all__" && runningSet.has(t.key) ? ' <span class="spin">●</span>' : "";
-    return `<button class="log-tab${active}" data-logtab="${esc(t.key)}">${esc(t.label)}${spin}</button>`;
+    const run = t.key !== "__all__" ? running.get(t.key) : null;
+    const spin = run ? ' <span class="spin">●</span>' : "";
+    const time = run && run.elapsedMs != null
+      ? ` <span class="log-tab-time">${fmtElapsed(run.elapsedMs)}</span>` : "";
+    return `<button class="log-tab${active}" data-logtab="${esc(t.key)}">${esc(t.label)}${spin}${time}</button>`;
   }).join("");
 }
 
@@ -664,7 +655,14 @@ function updateShowLogBtn() {
   $("#showLogBtn").hidden = state.running.length === 0 && state.logSources.length === 0;
 }
 
+// Render-generation counter: only the most recent render is allowed to write to
+// #logBody. The 1s poll tick and a tab click can both render at once, and an
+// in-flight "All" render (many serial fetches) used to finish after a single-tab
+// render and clobber it with mixed output. The guard discards stale writes.
+let logRenderSeq = 0;
+
 async function renderLogs() {
+  const seq = ++logRenderSeq;
   const body = $("#logBody");
   if (!state.logSources.length) {
     body.innerHTML = '<p class="muted">No active run.</p>';
@@ -694,6 +692,7 @@ async function renderLogs() {
     blocks.push(`<div class="log-source">${esc(source)}${live}</div>${desc}`);
     blocks.push(`<pre class="log-lines">${esc(lines.join("\n")) || "(no output yet)"}</pre>`);
   }
+  if (seq !== logRenderSeq) return; // a newer render started — discard this stale one
   const prevScroll = body.scrollTop;
   body.innerHTML = blocks.join("");
   // Follow the bottom unless the user has scrolled up to read (smart-follow).
