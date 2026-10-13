@@ -2,9 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Skyhook Control</title>
   <link rel="stylesheet" href="/styles.css" />
+  <meta name="theme-color" content="#0b0f17" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Skyhook" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
 </head>
 <body>
   <header class="topbar">
@@ -102,6 +109,7 @@
         <button id="runSelectedBtn" class="btn primary" disabled data-tip="Run all selected seeders.">▶ Run selected</button>
         <button id="newSeederBtn" class="btn primary" data-tip="Create a new seeder from a website URL.">＋ New seeder</button>
       </div>
+      <div id="seederCards" class="seeder-cards"></div>
       <div class="table-wrap">
         <table id="seederTable">
           <thead>
@@ -269,6 +277,16 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
+
+  <nav class="bottom-nav">
+    <button class="bn-item active" data-tab="dashboard"><span class="bn-ico">🏠</span><span class="bn-label">Home</span></button>
+    <button class="bn-item" data-tab="seeders"><span class="bn-ico">📡</span><span class="bn-label">Seeders</span></button>
+    <button class="bn-item" data-tab="timer"><span class="bn-ico">⏰</span><span class="bn-label">Timer</span></button>
+    <button class="bn-item" data-tab="pipeline"><span class="bn-ico">🧪</span><span class="bn-label">Pipeline</span></button>
+    <button class="bn-item" data-tab="stats"><span class="bn-ico">📊</span><span class="bn-label">Stats</span></button>
+    <button class="bn-item" data-tab="curation"><span class="bn-ico">🗑️</span><span class="bn-label">Curation</span></button>
+    <button class="bn-item" data-tab="settings"><span class="bn-ico">⚙️</span><span class="bn-label">Settings</span></button>
+  </nav>
 
   <script src="/app.js"></script>
 </body>

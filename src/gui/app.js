@@ -138,6 +138,7 @@ function toast(msg, kind = "") {
 // ── tabs ────────────────────────────────────────────────────────────────────
 function showTab(name) {
   $$(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  $$(".bottom-nav .bn-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".panel").forEach((p) => p.classList.toggle("active", p.id === name));
   if (name === "stats") renderAnalytics();
   else if (name === "curation") renderCuration();
@@ -209,6 +210,38 @@ function renderSeeders() {
       </td>`;
     tbody.appendChild(tr);
   }
+
+  // Mobile card list (hidden on desktop via CSS; shown on small screens).
+  const cardsEl = $("#seederCards");
+  if (cardsEl) {
+    cardsEl.innerHTML = rows.map((s) => {
+      const isRunning = runningSet.has(s.source);
+      const statusCls = s.lastStatus === "ok" ? "ok" : s.lastStatus ? "err" : "";
+      const result = resultText(s.lastResult);
+      return `
+      <article class="seeder-card">
+        <div class="sc-head">
+          <label class="sc-check"><input type="checkbox" data-source="${esc(s.source)}" ${state.selected.has(s.source) ? "checked" : ""}></label>
+          <div class="sc-title">
+            <div class="sc-src">${esc(s.source)}${isRunning ? ' <span class="spin">●</span>' : ""}</div>
+            ${s.displayName ? `<div class="sc-name">${esc(s.displayName)}</div>` : ""}
+          </div>
+          <span class="cadence ${s.scheduled ? "" : "manual"}">${esc(s.cadence)}</span>
+          <span class="tier ${s.isNews ? "news" : "evergreen"}">${s.isNews ? "news" : "evergreen"}</span>
+        </div>
+        ${s.categoryLabel ? `<div class="sc-meta">${esc(s.categoryLabel)}${s.subcategoryLabel ? " · " + esc(s.subcategoryLabel) : ""}</div>` : ""}
+        <div class="sc-status ${statusCls}">${result || (s.lastError ? esc(s.lastError) : s.lastStatus ? esc(s.lastStatus) : "never run")}${s.lastRunAt ? ` · ${fmtAgo(s.lastRunAt)} ago` : ""}</div>
+        <div class="sc-actions">
+          <button class="mini" data-action="run" data-source="${esc(s.source)}" title="Run now">▶</button>
+          <button class="mini" data-action="schedule" data-source="${esc(s.source)}" title="Edit schedule">⚙</button>
+          <button class="mini" data-action="toggle" data-source="${esc(s.source)}" title="${s.scheduled ? "Disable (remove from schedule)" : "Enable (add to schedule)"}">${s.scheduled ? "⏻" : "+"}</button>
+          <button class="mini" data-action="info" data-source="${esc(s.source)}" title="View all metadata">ℹ</button>
+          <button class="mini" data-action="history" data-source="${esc(s.source)}" title="Run history">🗒</button>
+        </div>
+      </article>`;
+    }).join("");
+  }
+
   $("#checkAll").checked = rows.length > 0 && rows.every((s) => state.selected.has(s.source));
   $("#runSelectedBtn").disabled = state.selected.size === 0;
 }
@@ -1023,6 +1056,7 @@ async function startPipeline(kind) {
 // ── wiring ──────────────────────────────────────────────────────────────────
 function bind() {
   $$(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  $$(".bottom-nav .bn-item").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   $("#refreshBtn").addEventListener("click", () => refreshAll());
 
   $("#apiBase").addEventListener("change", () => {
@@ -1060,15 +1094,15 @@ function bind() {
     renderSeeders();
   });
 
-  $("#seederBody").addEventListener("change", (e) => {
+  function seederCheckbox(e) {
     const cb = e.target.closest('input[type="checkbox"]');
     if (!cb) return;
     const src = cb.dataset.source;
     cb.checked ? state.selected.add(src) : state.selected.delete(src);
     renderSeeders();
-  });
+  }
 
-  $("#seederBody").addEventListener("click", async (e) => {
+  async function seederAction(e) {
     const btn = e.target.closest("button[data-action]");
     if (!btn) return;
     const { action, source } = btn.dataset;
@@ -1084,6 +1118,13 @@ function bind() {
         await refreshAll();
       } catch (err) { toast(err.message, "err"); }
     }
+  }
+
+  ["#seederBody", "#seederCards"].forEach((sel) => {
+    const el = $(sel);
+    if (!el) return;
+    el.addEventListener("change", seederCheckbox);
+    el.addEventListener("click", seederAction);
   });
 
   $("#runSelectedBtn").addEventListener("click", () => runSources([...state.selected]));
