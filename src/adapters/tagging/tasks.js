@@ -5,20 +5,28 @@
  * the API/GUI to run targeted LLM passes.
  */
 import { existsSync, readFileSync } from "fs";
+import { join, isAbsolute, dirname } from "path";
+import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
 import { getConfig } from "../../config.js";
 import { loadText } from "./index.js";
 
+// Absolute path to the skyhook package root. Shipped task prompts live in
+// <package>/config/prompts/ and must resolve relative to the package, not the
+// process cwd (which for the Roam overlay is roam/, not the package dir).
+const PACKAGE_ROOT = dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
+const prompt = (rel) => join(PACKAGE_ROOT, rel);
+
 const DEFAULT_TASKS = [
   {
     key: "fill-category", label: "Fill missing categories",
-    promptFile: "config/prompts/fill-category.md",
+    promptFile: prompt("config/prompts/fill-category.md"),
     filterClause: "AND u.category_id IS NULL",
     target: "category", resumeSource: "task:fill-category",
   },
   {
     key: "fill-subcategory", label: "Fill missing subcategories",
-    promptFile: "config/prompts/fill-subcategory.md",
+    promptFile: prompt("config/prompts/fill-subcategory.md"),
     filterClause: "AND u.subcategory_id IS NULL AND u.category_id IS NOT NULL",
     target: "subcategory", resumeSource: "task:fill-subcategory",
   },
@@ -30,19 +38,19 @@ const DEFAULT_TASKS = [
   },
   {
     key: "fill-content-type", label: "Fill missing content types",
-    promptFile: "config/prompts/fill-content-type.md",
+    promptFile: prompt("config/prompts/fill-content-type.md"),
     filterClause: `AND (u.id NOT IN (SELECT url_id FROM local_url_attributes) OR u.id IN (SELECT url_id FROM local_url_attributes WHERE content_type IS NULL))`,
     target: "contentType", resumeSource: "task:fill-content-type",
   },
   {
     key: "fill-quality", label: "Fill missing quality assessments",
-    promptFile: "config/prompts/fill-quality.md",
+    promptFile: prompt("config/prompts/fill-quality.md"),
     filterClause: `AND (u.id NOT IN (SELECT url_id FROM local_url_quality) OR u.id IN (SELECT url_id FROM local_url_quality WHERE quality_score IS NULL))`,
     target: "quality", resumeSource: "task:fill-quality",
   },
   {
     key: "fill-attributes", label: "Fill missing attributes",
-    promptFile: "config/prompts/fill-attributes.md",
+    promptFile: prompt("config/prompts/fill-attributes.md"),
     filterClause: `AND (u.id NOT IN (SELECT url_id FROM local_url_attributes) OR u.id IN (SELECT url_id FROM local_url_attributes WHERE audience_level IS NULL))`,
     target: "attributes", resumeSource: "task:fill-attributes",
   },
@@ -58,7 +66,10 @@ export function getTask(key) {
 
 export function loadTaskPromptFile(task) {
   if (!task || !task.promptFile) return null;
-  const raw = loadText(task.promptFile);
+  // Shipped default prompts are absolute (package-rooted); config-overridden
+  // prompts are cwd-relative, matching config.js's tagging.promptFile handling.
+  const file = isAbsolute(task.promptFile) ? task.promptFile : join(process.cwd(), task.promptFile);
+  const raw = loadText(file);
   if (!raw) return null;
   const marker = "## System Prompt";
   const idx = raw.indexOf(marker);
