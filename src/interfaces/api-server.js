@@ -406,7 +406,11 @@ export function startServer(port = 4173) {
         const rel = path === "/" ? "index.html" : path.slice(1);
         const abs = normalize(join(GUI_DIR, rel));
         if (abs.startsWith(GUI_DIR) && existsSync(abs) && statSync(abs).isFile()) {
-          res.writeHead(200, { "Content-Type": MIME[extname(abs)] || "application/octet-stream", ...CORS });
+          res.writeHead(200, {
+            "Content-Type": MIME[extname(abs)] || "application/octet-stream",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            ...CORS,
+          });
           return res.end(readFileSync(abs));
         }
         return send(res, 404, { error: "not found" });
