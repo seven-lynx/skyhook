@@ -27,6 +27,9 @@
  *   POST /api/pipeline/push     upload tagged URLs + tags to Supabase
  *   POST /api/pipeline/export   incremental offline-DB refresh
  *   POST /api/pipeline/export-full  full rebuild (wipes local tag progress)
+ *   GET  /api/tagging/missing   counts of URLs missing category/subcategory/
+ *                               tags/content-type/quality/attributes
+ *   POST /api/tagging/run       { task } launch a targeted LLM gap-filling pass
  */
 import { createServer } from "http";
 import { readFileSync, existsSync, statSync } from "fs";
@@ -35,11 +38,11 @@ import { fileURLToPath } from "url";
 import {
   buildIndex, openState, getState, listRuns, runPool, editManifest,
   enableSeeder, disableSeeder, emitTimer, writeTimer, resolveSeeder, isDue,
-  listRunning, runProgress, stopRun, stopAll, logPath,
+  listRunning, runProgress, stopRun, stopAll, logPath, runJob,
   listCategories, fetchSiteMeta, createSeeder, deleteSeeder,
 } from "../engine/seeder-engine.js";
 import { pipelineStatus, startPipelineJob } from "./pipeline.js";
-import { nodeId } from "../config.js";
+import { nodeId, getConfig } from "../config.js";
 import {
   routeSeeders, peerFor, runRemote, forwardSchedule, remoteToken,
 } from "../core/remote.js";
@@ -48,6 +51,7 @@ import { readStaged } from "../core/staged.js";
 import { mergeRemoteRows, pushStagedToStorage } from "../core/sync.js";
 import { statsFromStaged } from "../core/analytics.js";
 import { listCache, pruneStaged, clearDiscovery, clearStaged } from "../core/data.js";
+import { countMissingSync } from "../adapters/tagging/tasks.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -347,6 +351,32 @@ export function startServer(port = 4173) {
       if (method === "GET" && path === "/api/stats") {
         const source = url.searchParams.get("source") || null;
         return send(res, 200, statsFromStaged({ source }));
+      }
+
+      // ── tagging gaps (missing info counts from the offline DB) ─────────
+      if (method === "GET" && path === "/api/tagging/missing") {
+        const dbPath = getConfig().pipeline?.offlineDb;
+        return send(res, 200, countMissingSync(dbPath));
+      }
+
+      // ── tagging task run (launch a targeted LLM pass) ──────────────────
+      if (method === "POST" && path === "/api/tagging/run") {
+        const body = await readBody(req);
+        const taskKey = (body.task || "").trim();
+        if (!taskKey) return send(res, 400, { error: "task is required" });
+        const c = getConfig();
+        if (!c.pipeline?.offlineDb) return send(res, 400, { error: "pipeline.offlineDb not configured" });
+        if (listRunning().some((r) => r.source === `task:${taskKey}`)) {
+          return send(res, 409, { error: `task:${taskKey} already running` });
+        }
+        // Launch via runJob — the task worker runs as a CLI subprocess so it
+        // shows up in the live-log drawer with its own tab.
+        const jobKey = `task:${taskKey}`;
+        const skyhookPath = join(__dirname, "..", "..", "bin", "skyhook.js");
+        runJob({ key: jobKey, scriptPath: skyhookPath, args: ["tag", "--task", taskKey] })
+          .then(() => {})
+          .catch((err) => console.error(`task ${taskKey} error:`, err.message));
+        return send(res, 200, { ok: true, job: jobKey, task: taskKey });
       }
 
       // ── cache / curation (delete staged URLs before tagging) ──────────────

@@ -65,3 +65,52 @@ const tagged = await tag(rows, {
 
 Tags are attached to each row as a `tags` array; persist them by mapping a
 `"tags"` column in `schema.json`.
+
+## Fill-missing-info tasks (targeted LLM passes)
+
+When a URL is missing its category, subcategory, tags, content type, quality, or
+attributes, you can run a **targeted task** that sends only the gap-filling prompt
+to the LLM. Each task is config-driven and ships with a draft prompt you can edit.
+
+### Task list (offline DB)
+
+| Task key | Fills | Reads missing from | Prompt file |
+|---|---|---|---|
+| `fill-category` | `urls.category_id` | `category_id IS NULL` | `config/prompts/fill-category.md` |
+| `fill-subcategory` | `urls.subcategory_id` | `subcategory_id IS NULL` (category set) | `config/prompts/fill-subcategory.md` |
+| `fill-tags` | `local_url_tags` | no rows in `local_url_tags` | `tagging.promptFile` (canonical) |
+| `fill-content-type` | `local_url_attributes.content_type` | no attributes row, or `content_type IS NULL` | `config/prompts/fill-content-type.md` |
+| `fill-quality` | `local_url_quality` (all fields) | no quality row, or `quality_score IS NULL` | `config/prompts/fill-quality.md` |
+| `fill-attributes` | `local_url_attributes` (audience/depth/tone/is_news) | no attributes row, or `audience_level IS NULL` | `config/prompts/fill-attributes.md` |
+
+### Config
+
+Add an optional `tagging.tasks` array to override the shipping defaults:
+
+```yaml
+tagging:
+  tasks:
+    - { key: "fill-category",  label: "Fill missing categories",
+        promptFile: "config/prompts/fill-category.md",
+        filter: "category",   target: "category" }
+```
+
+The task's `resumeSource` marker (e.g. `task:fill-category`) ensures each task
+resumes independently — running "fill categories" won't clobber the main `tag`
+run's progress.
+
+### Running a task
+
+- **GUI** — Pipeline tab → **"Fill missing info (LLM)"** dropdown picks a task;
+  the **Run** button launches it. Progress streams in the live-log drawer under a
+  `task:<key>` tab. The **Tagging Gaps** cards (Pipeline tab and Stats tab) show
+  how many URLs are missing each kind of info.
+- **CLI** — `skyhook tag --task fill-category` (also `--task fill-tags`, etc.)
+- **API** — `GET /api/tagging/missing` (counts), `POST /api/tagging/run { task }`.
+
+### Prompt convention
+
+Task prompts use the same `## System Prompt` section convention as
+`config/tagging-prompt.txt`. Return JSON in the task-specific shape (see each
+shipped prompt). The `{categories}` placeholder is substituted for the
+subcategory-fill prompt.

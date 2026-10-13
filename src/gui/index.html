@@ -21,6 +21,7 @@
         title="API base URL (blank = this origin)" />
       <label class="live-label" data-tip="Auto-refresh the dashboard every 10 seconds."><input id="live" type="checkbox" /> live</label>
       <button id="refreshBtn" class="btn" title="Refresh">⟳ Refresh</button>
+      <button id="showLogBtn" class="btn" hidden data-tip="Re-open the live log drawer.">📋 Log</button>
     </div>
   </header>
 
@@ -137,12 +138,20 @@
       <div id="pipelineChecks" class="pipeline-prereqs"></div>
       <div id="pipelineJobs" class="pipeline-jobs"></div>
       <div id="pipelineNote" class="pipeline-status muted"></div>
+      <h3 style="margin-top:20px">Fill missing info (LLM)</h3>
+      <div class="toolbar">
+        <select id="tagTask" class="filter" data-tip="Choose a targeted LLM task to fill a specific gap in the offline DB."></select>
+        <button id="runTaskBtn" class="btn primary" data-tip="Run the selected task with the LLM. Progress streams in the live log.">▶ Run</button>
+      </div>
+      <div id="taggingGaps" class="stats"></div>
     </section>
 
     <section id="stats" class="panel">
       <h2>Staged URLs</h2>
       <div id="analyticsCards" class="stats"></div>
       <div id="analyticsBody" class="analytics-body"></div>
+      <h2 style="margin-top:24px">Tagging Gaps</h2>
+      <div id="statsGaps" class="stats"></div>
     </section>
 
     <section id="curation" class="panel">
@@ -256,6 +265,7 @@
       <button id="closeLogBtn" class="btn" data-tip="Close the live log.">✕ Close</button>
     </div>
     <div id="runningNow" class="running-now" hidden></div>
+    <div id="logTabs" class="log-tabs"></div>
     <div id="logBody" class="log-body"></div>
   </div>
 

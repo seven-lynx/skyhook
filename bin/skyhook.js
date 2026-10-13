@@ -638,6 +638,8 @@ async function cmdTag(a) {
   const providers = c.tagging?.providers || [];
   const provider = providers.find((p) => p.id === (val(a, "--provider") || null)) || providers[0];
 
+  const taskKey = val(a, "--task", null);
+
   const opts = {
     dbPath: c.pipeline?.offlineDb,
     provider,
@@ -648,6 +650,7 @@ async function cmdTag(a) {
     max: parseInt(val(a, "--max", "0"), 10) || null,
     mode: val(a, "--mode", "tag"),
     tier: parseInt(val(a, "--tier", "0"), 10) || 0,
+    task: taskKey,
   };
 
   try {

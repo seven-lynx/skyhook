@@ -344,6 +344,30 @@ td.name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .log-source { color: var(--accent); font-weight: 700; margin: 10px 0 4px; }
 .log-desc { color: var(--muted); font-size: 11px; margin: -2px 0 4px; }
 .log-lines { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); }
+.log-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 16px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.log-tabs::-webkit-scrollbar { height: 6px; }
+.log-tab {
+  flex: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+.log-tab:hover { color: var(--text); }
+.log-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.log-tab .spin { margin-left: 4px; }
 
 /* ── tooltips ────────────────────────────────────────────────────────────── */
 [data-tip] { position: relative; }

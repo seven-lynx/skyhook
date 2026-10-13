@@ -1,18 +1,23 @@
 /**
- * offline-worker.js — offline LLM tagging worker over a local SQLite DB.
+ * offline-worker.js â€” offline LLM tagging worker over a local SQLite DB.
  *
  * Migrated from Roam's scripts/tagging-worker.mjs. It tags a local export of
  * URLs using a locally-loaded LLM (LM Studio / any OpenAI-compatible endpoint),
  * and resumes via a `local_url_tagged_by` marker table (already-tagged URLs are
  * excluded on the next run). Second-pass modes let you re-tag already-tagged
  * URLs to add more tags (`retag-add`) or replace them (`retag-replace`).
+ *
+ * Task-driven mode (--task <key>) targets a specific gap: missing categories,
+ * subcategories, tags, content types, quality, or attributes. Each task has its
+ * own prompt, URL filter, parse logic, and write target.
  */
 import Database from "better-sqlite3";
 import { existsSync } from "fs";
 import { loadText } from "./index.js";
 import { canonicalizeTagList } from "./canonicalize.js";
+import { getTask, loadTaskPromptFile, buildTaskUserMessage, parseTaskResponse } from "./tasks.js";
 
-// ── Validation enums (what the LLM is allowed to emit) ──────────────────────
+// â”€â”€ Validation enums (what the LLM is allowed to emit) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const VALID_URL_TYPES = new Set([
   "article", "reference", "interactive", "gallery", "product-page",
   "landing-page", "domain-parking", "login-wall", "error-page",
@@ -113,7 +118,7 @@ async function callLLM({ provider, model, systemPrompt, userMessage }) {
       if (res.status === 400) {
         const errText = await res.text().catch(() => "");
         if (errText.includes("system") || errText.includes("Only user")) {
-          // Model refuses a system role — merge into a single user message.
+          // Model refuses a system role â€” merge into a single user message.
           res = await fetch(endpoint, {
             method: "POST", headers, body: JSON.stringify(makeBody(null, `${systemPrompt}\n\n---\n\n${userMessage}`)),
             signal: AbortSignal.timeout(900000),
@@ -158,7 +163,7 @@ function parseResponse(raw, urlCount, validTags) {
     if (idx === undefined || idx >= urlCount) continue;
 
     const tags = canonicalizeTagList(r.tags, validTags, (from, to) => {
-      console.warn(`  ↪  tag "${from}" → "${to}"`);
+      console.warn(`  â†ª  tag "${from}" â†’ "${to}"`);
     });
 
     const attrs = r.attributes || {};
@@ -211,7 +216,7 @@ export async function runOfflineTagWorker(opts = {}) {
   const {
     dbPath, provider, model, prompt,
     validTags = null, modelSource = "llm", batchSize = 25, max = null,
-    mode = "tag", tier = 0,
+    mode = "tag", tier = 0, task: taskKey = null,
   } = opts;
 
   if (!dbPath) throw new Error("offline tagging worker needs pipeline.offlineDb");
@@ -219,6 +224,13 @@ export async function runOfflineTagWorker(opts = {}) {
   if (!provider?.baseUrl) throw new Error("offline tagging worker needs tagging.providers[].baseUrl");
   if (!model) throw new Error("offline tagging worker needs tagging.model");
   if (!prompt) throw new Error("offline tagging worker needs a system prompt (tagging.promptFile)");
+
+  // Resolve task (if --task was given). Task mode overrides the default prompt + mode.
+  const task = taskKey ? getTask(taskKey) : null;
+  if (task) {
+    if (!task) throw new Error(`Unknown task: ${taskKey}`);
+    console.log(`Task: ${task.label} (target: ${task.target})`);
+  }
 
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
@@ -230,16 +242,22 @@ export async function runOfflineTagWorker(opts = {}) {
     ? validTags
     : (() => { try { return db.prepare("SELECT slug FROM local_tags WHERE is_active = 1").all().map((r) => r.slug); } catch { return []; } })();
 
+  const taskActive = task && taskKey;
+  const resolvedPrompt = taskActive ? (loadTaskPromptFile(task) || prompt) : prompt;
+  const resolvedModelSource = taskActive ? task.resumeSource : modelSource;
+
   const reprocess = mode === "retag-add" || mode === "retag-replace";
   const taggedFilter = reprocess
     ? ""
-    : `AND u.id NOT IN (SELECT url_id FROM local_url_tagged_by WHERE model_source IN ('${modelSource}', '${modelSource}:failed'))`;
+    : `AND u.id NOT IN (SELECT url_id FROM local_url_tagged_by WHERE model_source IN ('${resolvedModelSource}', '${resolvedModelSource}:failed'))`;
+  const taskFilter = taskActive ? (task.filterClause || "") : "";
   const URL_QUERY = `
     SELECT u.id, u.title, u.description, u.url
     FROM urls u
     WHERE u.approved = 1 AND u.inactive = 0
       AND u.title IS NOT NULL AND u.title != ''
       ${taggedFilter}
+      ${taskFilter}
     ORDER BY u.id
   `;
 
@@ -248,6 +266,9 @@ export async function runOfflineTagWorker(opts = {}) {
   const deleteTagsFor = db.prepare(`DELETE FROM local_url_tags WHERE url_id = ? AND source = ?`);
   const insertAttr = db.prepare(`INSERT OR REPLACE INTO local_url_attributes (url_id, audience_level, content_type, depth, tone, is_news, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)`);
   const insertQuality = db.prepare(`INSERT OR REPLACE INTO local_url_quality (url_id, url_type, quality_score, is_parked, is_product, is_spam, is_paywalled, is_login_required, is_broken, is_thin, is_clickbait, is_english, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+// Task-specific write helpers.
+  const updateCategory = db.prepare(`UPDATE urls SET category_id = ? WHERE id = ?`);
+  const updateSubcategory = db.prepare(`UPDATE urls SET subcategory_id = ? WHERE id = ?`);
   const updateProgress = db.prepare(`
     INSERT INTO local_tagging_progress (id, tier, last_url_id, total_processed, total_failed, total_skipped, rate_per_hour, started_at, updated_at, status)
     VALUES (1, ?, ?, ?, ?, ?, ?, COALESCE((SELECT started_at FROM local_tagging_progress WHERE id = 1), datetime('now')), datetime('now'), 'running')
@@ -286,7 +307,7 @@ export async function runOfflineTagWorker(opts = {}) {
   process.on("SIGINT", () => {
     if (shuttingDown) { cleanup(); process.exit(1); }
     shuttingDown = true;
-    console.log("\n\n🛑 SIGINT received. Finishing current batch...");
+    console.log("\n\nðŸ›‘ SIGINT received. Finishing current batch...");
   });
   process.on("exit", cleanup);
 
@@ -298,27 +319,65 @@ export async function runOfflineTagWorker(opts = {}) {
 
     const limit = max ? Math.min(batchSize, max - totalProcessed) : batchSize;
     const urls = db.prepare(`${URL_QUERY} LIMIT ${limit}`).all();
-    if (urls.length === 0) { console.log("\n✅ No more URLs to process."); break; }
+    if (urls.length === 0) { console.log("\nâœ… No more URLs to process."); break; }
 
     const batchStart = Date.now();
     batchCount++;
     try {
-      const userMessage = buildUserMessage(urls);
-      const rawResponse = await callLLM({ provider, model, systemPrompt: prompt, userMessage });
-      const parsed = parseResponse(rawResponse, urls.length, tagSlugs);
+      const userMessage = taskActive
+        ? buildTaskUserMessage(urls, task)
+        : buildUserMessage(urls);
+      const rawResponse = await callLLM({ provider, model, systemPrompt: resolvedPrompt, userMessage });
+      const parsed = taskActive
+        ? parseTaskResponse(rawResponse, urls.length, task)
+        : parseResponse(rawResponse, urls.length, tagSlugs);
 
       db.transaction(() => {
         for (const u of urls) {
-          if (mode === "retag-replace") deleteTagsFor.run(u.id, modelSource);
-          insertTaggedBy.run(u.id, modelSource);
+          if (mode === "retag-replace") deleteTagsFor.run(u.id, resolvedModelSource);
+          insertTaggedBy.run(u.id, resolvedModelSource);
         }
-        for (const r of parsed) {
-          const url = urls[r.url_index];
-          if (!url) continue;
-          for (const t of r.tags) insertTag.run(url.id, t.slug, t.confidence, modelSource);
-          insertAttr.run(url.id, r.attributes.audience_level, r.attributes.content_type, r.attributes.depth, r.attributes.tone, r.attributes.is_news, 1.0);
-          const q = r.quality;
-          insertQuality.run(url.id, q.url_type, q.quality_score, q.is_parked, q.is_product, q.is_spam, q.is_paywalled, q.is_login_required, q.is_broken, q.is_thin, q.is_clickbait, q.is_english, 1.0);
+        if (taskActive) {
+          // Task-specific write logic.
+          for (const r of parsed) {
+            const url = urls[r.url_index];
+            if (!url) continue;
+            switch (task.target) {
+              case "category":
+                if (r.category && r.category !== "UNKNOWN") updateCategory.run(r.category, url.id);
+                break;
+              case "subcategory":
+                if (r.subcategory && r.subcategory !== "UNKNOWN") updateSubcategory.run(r.subcategory, url.id);
+                break;
+              case "tags":
+                for (const t of (r.tags || [])) {
+                  if (t.slug && t.slug !== "none") insertTag.run(url.id, t.slug, typeof t.confidence === "number" ? t.confidence : 0.7, resolvedModelSource);
+                }
+                break;
+              case "contentType":
+                insertAttr.run(url.id, null, r.contentType, null, null, null, r.confidence ?? 0.5);
+                break;
+              case "quality":
+                insertQuality.run(url.id, r.url_type, r.quality_score,
+                  r.is_parked ? 1 : 0, r.is_product ? 1 : 0, r.is_spam ? 1 : 0,
+                  r.is_paywalled ? 1 : 0, r.is_login_required ? 1 : 0,
+                  r.is_broken ? 1 : 0, r.is_thin ? 1 : 0, r.is_clickbait ? 1 : 0,
+                  r.is_english ? 1 : 0, r.confidence ?? 0.5);
+                break;
+              case "attributes":
+                insertAttr.run(url.id, r.audience_level, null, r.depth, r.tone, r.is_news ? 1 : 0, r.confidence ?? 0.5);
+                break;
+            }
+          }
+        } else {
+          for (const r of parsed) {
+            const url = urls[r.url_index];
+            if (!url) continue;
+            for (const t of r.tags) insertTag.run(url.id, t.slug, t.confidence, resolvedModelSource);
+            insertAttr.run(url.id, r.attributes.audience_level, r.attributes.content_type, r.attributes.depth, r.attributes.tone, r.attributes.is_news, 1.0);
+            const q = r.quality;
+            insertQuality.run(url.id, q.url_type, q.quality_score, q.is_parked, q.is_product, q.is_spam, q.is_paywalled, q.is_login_required, q.is_broken, q.is_thin, q.is_clickbait, q.is_english, 1.0);
+          }
         }
       })();
 
@@ -333,16 +392,16 @@ export async function runOfflineTagWorker(opts = {}) {
       updateProgress.run(tier, lastUrl.id, totalProcessed, totalFailed, totalSkipped, ratePerHour);
     } catch (err) {
       consecutiveFailures++;
-      console.error(`\n❌ Batch ${batchCount} failed (${consecutiveFailures} consecutive): ${err.message}`);
+      console.error(`\nâŒ Batch ${batchCount} failed (${consecutiveFailures} consecutive): ${err.message}`);
       db.transaction(() => {
-        for (const u of urls) insertTaggedBy.run(u.id, `${modelSource}:failed`);
+        for (const u of urls) insertTaggedBy.run(u.id, `${resolvedModelSource}:failed`);
       })();
       totalFailed += urls.length;
       totalSkipped += urls.length;
       totalProcessed += urls.length;
       updateProgress.run(tier, cp.last_url_id ?? null, totalProcessed, totalFailed, totalSkipped, ratePerHour);
       if (/Model unloaded/i.test(err.message) || consecutiveFailures >= 5) {
-        console.error(`\n⏸️  Pausing — model may have unloaded. Check LM Studio.`);
+        console.error(`\nâ¸ï¸  Pausing â€” model may have unloaded. Check LM Studio.`);
         shuttingDown = true;
       }
     }
@@ -351,7 +410,7 @@ export async function runOfflineTagWorker(opts = {}) {
   const finalStatus = shuttingDown ? "paused" : "done";
   db.prepare(`UPDATE local_tagging_progress SET status = ?, updated_at = datetime('now'), total_processed = ?, total_failed = ?, total_skipped = ? WHERE id = 1`)
     .run(finalStatus, totalProcessed, totalFailed, totalSkipped);
-  console.log(`\n${finalStatus === "done" ? "✅ Complete" : "⏸️  Paused"} — ${totalProcessed.toLocaleString()} processed, ${totalFailed.toLocaleString()} failed`);
+  console.log(`\n${finalStatus === "done" ? "âœ… Complete" : "â¸ï¸  Paused"} â€” ${totalProcessed.toLocaleString()} processed, ${totalFailed.toLocaleString()} failed`);
   cleanup();
   return { status: finalStatus, processed: totalProcessed, failed: totalFailed, skipped: totalSkipped };
 }

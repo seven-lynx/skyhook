@@ -40,10 +40,12 @@ const state = {
   logTimer: null,
   logSources: [],
   followLog: true,
+  logTab: null,
   historySource: null,
   wasRunning: false,
   categories: [],
   infoSource: null,
+  taggingGaps: null,
 };
 
 // ── API ─────────────────────────────────────────────────────────────────────
@@ -333,6 +335,87 @@ function renderPipeline() {
     : "";
 
   $("#pipelineNote").textContent = p.note || "";
+  renderPipelineGaps();
+  renderTaggingTasks();
+}
+
+const GAP_LABELS = {
+  category: "Missing categories",
+  subcategory: "Missing subcategories",
+  tags: "Untagged URLs",
+  contentType: "Missing content types",
+  quality: "Missing quality",
+  attributes: "Missing attributes",
+};
+
+function gapCards(missing, total) {
+  if (!missing) return '<p class="muted">No offline DB available.</p>';
+  const order = ["category", "subcategory", "tags", "contentType", "quality", "attributes"];
+  return order.map((k) => {
+    const n = missing[k] ?? 0;
+    return `<div class="stat"><span class="stat-num">${Number(n).toLocaleString()}</span><span class="stat-label">${GAP_LABELS[k]}</span></div>`;
+  }).join("");
+}
+
+async function loadTaggingGaps() {
+  const g = await get("/api/tagging/missing").catch(() => null);
+  state.taggingGaps = g;
+  return g;
+}
+
+async function renderPipelineGaps() {
+  let g = state.taggingGaps;
+  if (!g) g = await loadTaggingGaps();
+  if (!g) { $("#taggingGaps").innerHTML = ""; return; }
+  $("#taggingGaps").innerHTML = gapCards(g.missing, g.total);
+}
+
+async function renderStatsGaps() {
+  const g = await loadTaggingGaps();
+  if (!g) { $("#statsGaps").innerHTML = '<p class="muted">Unavailable.</p>'; return; }
+  $("#statsGaps").innerHTML = gapCards(g.missing, g.total);
+}
+
+async function renderTaggingTasks() {
+  try {
+    await loadTaggingGaps();
+    const g = state.taggingGaps;
+    const missing = g?.missing || {};
+    const tasks = [
+      { key: "fill-category", label: "Fill missing categories", count: missing.category },
+      { key: "fill-subcategory", label: "Fill missing subcategories", count: missing.subcategory },
+      { key: "fill-tags", label: "Add tags to untagged URLs", count: missing.tags },
+      { key: "fill-content-type", label: "Fill missing content types", count: missing.contentType },
+      { key: "fill-quality", label: "Fill missing quality", count: missing.quality },
+      { key: "fill-attributes", label: "Fill missing attributes", count: missing.attributes },
+    ];
+    const sel = $("#tagTask");
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">Select a task…</option>' + tasks.map((t) =>
+      `<option value="${esc(t.key)}">${esc(t.label)}${t.count != null ? ` (${Number(t.count).toLocaleString()})` : ""}</option>`).join("");
+    if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+    $("#runTaskBtn").disabled = false;
+  } catch (err) {
+    $("#tagTask").innerHTML = '<option value="">Unavailable</option>';
+    $("#runTaskBtn").disabled = true;
+  }
+}
+
+async function runTask() {
+  const task = $("#tagTask").value;
+  if (!task) { toast("Select a task first.", "err"); return; }
+  try {
+    const res = await post("/api/tagging/run", { task });
+    toast(`Started ${res.task}.`);
+    // Open the live-log drawer to monitor progress.
+    const sources = state.running.length ? state.running.map((r) => r.source) : [];
+    openLogDrawer([...new Set([...sources, res.job])]);
+    startLogPolling();
+    await loadRunning();
+    renderLogTabs();
+  } catch (err) {
+    toast(err.message, "err");
+  }
 }
 
 async function renderTimer() {
@@ -349,6 +432,7 @@ function updateRunningUI() {
   $("#stopBtn").disabled = n === 0;
   renderProgress();
   renderRunningNow();
+  updateShowLogBtn();
   if (!n) stopLogPolling();
 }
 
@@ -394,6 +478,7 @@ async function renderAnalytics() {
     $("#analyticsBody").innerHTML = s.total
       ? list("By seeder", s.bySource, 25) + list("By category", s.byCategory) + list("By subcategory", s.bySubcategory, 25) + list("By language", s.byLanguage)
       : '<p class="muted">No staged results yet.</p>';
+    renderStatsGaps();
   } catch (err) {
     $("#analyticsBody").innerHTML = `<p class="muted">${esc(err.message)}</p>`;
   }
@@ -538,15 +623,45 @@ async function bulkDisable() {
 
 // ── live log drawer ─────────────────────────────────────────────────────────
 function openLogDrawer(sources) {
-  state.logSources = sources;
-  state.followLog = true; // follow the new run
+  // Merge the just-started sources with everything currently running so the
+  // tabs always include both seeders and pipeline jobs (e.g. the tagger).
+  const all = [...new Set([...sources, ...state.running.map((r) => r.source)])];
+  state.logSources = all;
+  state.followLog = true;
+  const runningSet = new Set(state.running.map((r) => r.source));
+  // Auto-select first running source; fall back to combined "All" view.
+  state.logTab = all.find((s) => runningSet.has(s)) || "__all__";
   $("#logDrawer").hidden = false;
+  renderLogTabs();
   renderLogs();
 }
 
 function closeLogDrawer() {
   $("#logDrawer").hidden = true;
   stopLogPolling();
+  updateShowLogBtn();
+}
+
+function renderLogTabs() {
+  const container = $("#logTabs");
+  const runningSet = new Set(state.running.map((r) => r.source));
+  const tabs = [{ key: "__all__", label: "All" }];
+  for (const source of state.logSources) {
+    if (source !== "__all__") tabs.push({ key: source, label: source });
+  }
+  // If active tab no longer exists, fall back.
+  if (!tabs.some((t) => t.key === state.logTab)) {
+    state.logTab = state.logSources.find((s) => runningSet.has(s)) || "__all__";
+  }
+  container.innerHTML = tabs.map((t) => {
+    const active = t.key === state.logTab ? " active" : "";
+    const spin = t.key !== "__all__" && runningSet.has(t.key) ? ' <span class="spin">●</span>' : "";
+    return `<button class="log-tab${active}" data-logtab="${esc(t.key)}">${esc(t.label)}${spin}</button>`;
+  }).join("");
+}
+
+function updateShowLogBtn() {
+  $("#showLogBtn").hidden = state.running.length === 0 && state.logSources.length === 0;
 }
 
 async function renderLogs() {
@@ -556,12 +671,18 @@ async function renderLogs() {
     return;
   }
   const runningSet = new Set(state.running.map((r) => r.source));
-  // Running sources last → the bottom-following auto-scroll always shows live output.
-  const ordered = [...state.logSources].sort(
-    (a, b) => (runningSet.has(a) ? 1 : 0) - (runningSet.has(b) ? 1 : 0),
-  );
+  // If a specific tab is selected, only render that source.
+  let sources;
+  if (state.logTab && state.logTab !== "__all__" && state.logSources.includes(state.logTab)) {
+    sources = [state.logTab];
+  } else {
+    // Running sources last → the bottom-following auto-scroll always shows live output.
+    sources = [...state.logSources].sort(
+      (a, b) => (runningSet.has(a) ? 1 : 0) - (runningSet.has(b) ? 1 : 0),
+    );
+  }
   const blocks = [];
-  for (const source of ordered) {
+  for (const source of sources) {
     let lines = [];
     try {
       const res = await get(`/api/logs/${encodeURIComponent(source)}?tail=300`);
@@ -593,6 +714,8 @@ function startLogPolling() {
     state.wasRunning = n > 0;
     renderRunning();
     updateRunningUI();
+    updateShowLogBtn();
+    renderLogTabs();
     await renderLogs();
     const jobKeys = new Set((state.pipe?.jobs || []).map((j) => j.key));
     if (state.running.some((r) => jobKeys.has(r.source))) {
@@ -987,6 +1110,19 @@ function bind() {
   $("#writeTimerBtn").addEventListener("click", writeTimer);
   $("#stopBtn").addEventListener("click", () => stopRuns());
   $("#closeLogBtn").addEventListener("click", closeLogDrawer);
+  $("#showLogBtn").addEventListener("click", () => {
+    const sources = state.running.length ? state.running.map((r) => r.source) : state.logSources;
+    openLogDrawer(sources);
+    if (state.running.length) startLogPolling();
+  });
+  $("#logTabs").addEventListener("click", (e) => {
+    const tab = e.target.closest("button[data-logtab]");
+    if (!tab) return;
+    state.logTab = tab.dataset.logtab;
+    state.followLog = true;
+    renderLogTabs();
+    renderLogs();
+  });
   $("#logBody").addEventListener("scroll", () => {
     const b = $("#logBody");
     state.followLog = b.scrollHeight - b.scrollTop - b.clientHeight < 40;
@@ -1013,6 +1149,7 @@ function bind() {
   });
   $("#buildCategory").addEventListener("change", () => populateBuildSubcategories(null));
 
+  $("#runTaskBtn").addEventListener("click", runTask);
   $("#pipelineCards").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-pipe]");
     if (!btn) return;
