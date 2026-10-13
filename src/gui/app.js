@@ -40,7 +40,7 @@ const state = {
   logTimer: null,
   logSources: [],
   followLog: true,
-  logTab: null,
+  userTab: null,   // set ONLY by tab click; never overwritten by openLogDrawer / poll
   historySource: null,
   wasRunning: false,
   categories: [],
@@ -616,10 +616,10 @@ function openLogDrawer(sources) {
   const all = [...new Set([...state.logSources, ...sources, ...state.running.map((r) => r.source)])];
   state.logSources = all;
   state.followLog = true;
-  // Don't auto-select if the user already picked a tab — preserve their choice.
-  if (!state.logTab || !all.includes(state.logTab)) {
+  // Set an initial userTab on first open only. After that the click handler owns it.
+  if (!state.userTab) {
     const runningSet = new Set(state.running.map((r) => r.source));
-    state.logTab = all.find((s) => runningSet.has(s)) || "__all__";
+    state.userTab = all.find((s) => runningSet.has(s)) || "__all__";
   }
   $("#logDrawer").hidden = false;
   renderLogTabs();
@@ -629,6 +629,7 @@ function openLogDrawer(sources) {
 function closeLogDrawer() {
   $("#logDrawer").hidden = true;
   stopLogPolling();
+  state.userTab = null; // reset so next open auto-selects again
   updateShowLogBtn();
 }
 
@@ -639,12 +640,11 @@ function renderLogTabs() {
   for (const source of state.logSources) {
     if (source !== "__all__") tabs.push({ key: source, label: source });
   }
-  // If active tab no longer exists, fall back.
-  if (!tabs.some((t) => t.key === state.logTab)) {
-    state.logTab = state.logSources.find((s) => running.has(s)) || "__all__";
-  }
+  // Active class driven by state.userTab (immutable to everything but the
+  // tab click handler). On first load (null) fall back to first running source.
+  const activeKey = state.userTab || tabs.find((t) => t.key !== "__all__" && running.has(t.key))?.key || "__all__";
   container.innerHTML = tabs.map((t) => {
-    const active = t.key === state.logTab ? " active" : "";
+    const active = t.key === activeKey ? " active" : "";
     const run = t.key !== "__all__" ? running.get(t.key) : null;
     const spin = run ? ' <span class="spin">●</span>' : "";
     const time = run && run.elapsedMs != null
@@ -671,17 +671,13 @@ async function renderLogs() {
     return;
   }
   const runningSet = new Set(state.running.map((r) => r.source));
-  // Read the ACTIVE tab from the DOM, not state.logTab — background
-  // openLogDrawer calls and the poll tick reset state.logTab while renders
-  // are in-flight, so it's unreliable as a source of truth.
-  const activeTab = $(".log-tab.active");
-  const activeKey = activeTab ? activeTab.dataset.logtab : null;
-  // If a specific tab is selected, only render that source.
+  // state.userTab is the single source of truth — only the tab click handler
+  // sets it. openLogDrawer, renderLogTabs, and the poll tick never touch it.
+  const activeKey = state.userTab;
   let sources;
   if (activeKey && activeKey !== "__all__") {
     sources = [activeKey];
   } else {
-    state.logTab = "__all__"; // keep in sync for the tab-click path
     // Running sources last → the bottom-following auto-scroll always shows live output.
     sources = [...state.logSources].sort(
       (a, b) => (runningSet.has(a) ? 1 : 0) - (runningSet.has(b) ? 1 : 0),
@@ -717,10 +713,6 @@ function startLogPolling() {
     const runningSources = new Set(state.running.map((r) => r.source));
     if (runningSources.size) {
       state.logSources = [...new Set([...state.logSources, ...runningSources])];
-      // If the active tab's source finished and left logSources, re-pick.
-      if (state.logTab !== "__all__" && !runningSources.has(state.logTab)) {
-        // Source still in logSources (shows final output) — keep the tab selected.
-      }
     }
     if (state.wasRunning && n === 0) {
       // A run (or job) just finished — refresh tables/dashboard/history once.
@@ -1134,12 +1126,11 @@ function bind() {
   $("#logTabs").addEventListener("click", (e) => {
     const tab = e.target.closest("button[data-logtab]");
     if (!tab) return;
-    state.logTab = tab.dataset.logtab;
+    state.userTab = tab.dataset.logtab;
     state.followLog = true;
-    // Toggle the active highlight directly instead of rebuilding all tabs
-    // (rebuild defers to state.logTab, which background calls can reset).
+    // Toggle the active highlight directly on the button — no rebuild.
     $$("#logTabs .log-tab").forEach((b) => {
-      b.classList.toggle("active", b.dataset.logtab === state.logTab);
+      b.classList.toggle("active", b.dataset.logtab === state.userTab);
     });
     renderLogs();
   });
