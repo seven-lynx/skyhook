@@ -38,7 +38,7 @@ function stagedDir(config) {
   return config.stagedDir || join(config.dataDir || ".skyhook", "staged");
 }
 
-// ── 1. Sync the "known URLs" dedup index (cursor-paginated) ─────────────────
+// ── 1. Sync the "known URLs" dedup index ────────────────────────────────────
 async function syncKnownUrls(sb, config) {
   const path = knownDbPath(config);
   mkdirSync(dirname(path), { recursive: true });
@@ -46,27 +46,30 @@ async function syncKnownUrls(sb, config) {
   db.pragma("journal_mode = WAL");
   db.exec("CREATE TABLE IF NOT EXISTS known_urls (url TEXT PRIMARY KEY)");
   db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
-  const getMeta = (k) => db.prepare("SELECT value FROM meta WHERE key = ?").get(k)?.value ?? null;
   const setMeta = (k, v) => db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(k, v);
   const insertStmt = db.prepare("INSERT OR IGNORE INTO known_urls (url) VALUES (?)");
-  const insertMany = db.transaction((urls) => { for (const u of urls) insertStmt.run(u); });
 
+  // Full re-scan by primary key (id), idempotent via INSERT OR IGNORE. We re-scan
+  // the whole table every time because urls.id is a random UUID (not time-ordered),
+  // so a cursor resume would silently miss newly-inserted rows. This keeps the
+  // index a complete superset so staged seeder URLs can be dedup'd before tagging.
   const PAGE = 2000;
-  let lastId = getMeta("last_sync_id");
-  let scanned = 0, inserted = 0;
+  let lastId = null, scanned = 0, inserted = 0;
+  const t0 = Date.now();
   while (true) {
     let q = sb.from("urls").select("url, id").order("id", { ascending: true }).limit(PAGE);
     if (lastId) q = q.gt("id", lastId);
     const { data, error } = await q;
     if (error) throw error;
     if (!data || data.length === 0) break;
-    const urls = data.map((r) => r.url);
-    const before = insertMany(urls);
-    inserted += (before?.changes || 0);
+
+    db.transaction((rows) => { for (const r of rows) inserted += insertStmt.run(r.url).changes; })(data);
     scanned += data.length;
     lastId = data[data.length - 1].id;
-    setMeta("last_sync_id", lastId);
+    process.stdout.write(`\r  indexed ${scanned.toLocaleString()} (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   }
+  console.log("");
+  setMeta("last_sync_at", new Date().toISOString());
   db.close();
   return { scanned, inserted };
 }
@@ -196,14 +199,17 @@ function importStaged(db, config, knownDb) {
 }
 
 /** Pull: sync known-URLs index, pull untagged/all URLs, import staged seeders. */
-export async function pullOffline({ config, force = false, max = null }) {
+export async function pullOffline({ config, force = false, max = null, indexOnly = false }) {
   const sb = await sbClient(config);
+
+  console.log("Syncing known-URLs index…");
+  const known = await syncKnownUrls(sb, config);
+  console.log(`  ${known.scanned.toLocaleString()} scanned, ${known.inserted.toLocaleString()} new`);
+
+  if (indexOnly) return { known };
+
   const db = openOffline(config);
   try {
-    console.log("Syncing known-URLs index…");
-    const known = await syncKnownUrls(sb, config);
-    console.log(`  scanned ${known.scanned.toLocaleString()}, new ${known.inserted.toLocaleString()}`);
-
     console.log(`${force ? "Full" : "Untagged"} pull from storage…`);
     const pulled = await pullUrls(sb, db, { force, max });
     console.log(`  fetched ${pulled.fetched.toLocaleString()}, inserted ${pulled.inserted.toLocaleString()}`);

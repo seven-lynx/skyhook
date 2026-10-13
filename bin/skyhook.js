@@ -48,7 +48,7 @@ const COMMANDS = [
   ["sync",       "Merge staged results with a peer (Pi ⇄ PC) with URL dedup"],
   ["push",       "Push the merged staged set into the configured storage"],
   ["tag",        "Offline LLM tag worker (resumes; --mode retag-add|retag-replace for a second pass)"],
-  ["pull",       "Pull untagged (or --force all) URLs from storage into the offline DB"],
+  ["pull",       "Pull untagged (--force all, --index-only just the dedup index) URLs from storage"],
   ["upload",     "Upload staged URLs + local tags/attributes/quality to storage"],
   ["settings",   "View or toggle node settings (allowRemote, peers)"],
   ["init",       "Scaffold a new Skyhook setup (config, config/, seeders/, .skyhook/)"],
@@ -663,9 +663,10 @@ async function cmdPull(a) {
   const c = getConfig();
   const { pullOffline } = await import("../src/core/offline-pipeline.js");
   const force = has(a, "--force");
+  const indexOnly = has(a, "--index-only");
   const max = parseInt(val(a, "--max", "0"), 10) || null;
   try {
-    await pullOffline({ config: c, force, max });
+    await pullOffline({ config: c, force, max, indexOnly });
   } catch (err) {
     console.error("Pull error:", err.message);
     process.exitCode = 1;
