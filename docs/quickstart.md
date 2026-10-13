@@ -11,6 +11,10 @@ cd skyhook
 npm install
 ```
 
+> Skyhook isn't published to npm (the `skyhook` name is taken by an unrelated
+> project). To use it as a dependency elsewhere, install from GitHub instead:
+> `npm install github:seven-lynx/skyhook#v0.2.7`.
+
 ## 2. Try it (offline, no database)
 
 Skyhook ships with example seeders and works out of the box in **stage** mode
@@ -59,6 +63,18 @@ Configure your local or remote model in `skyhook.config.json` → `tagging`, the
 use the GUI's **Pipeline → Tagging** card (or `detectModels()` programmatically).
 See [docs/tagging.md](tagging.md).
 
+## 6. Offline tagging pipeline (optional)
+
+Pull untagged URLs out of your database into a local SQLite copy, tag them
+offline, and upload tags/attributes/quality back. See
+[docs/pipeline.md](pipeline.md):
+
+```bash
+node bin/skyhook.js pull             # pull untagged URLs → offline SQLite DB
+node bin/skyhook.js tag              # run the offline LLM tag worker
+node bin/skyhook.js upload           # push staged URLs + tags back to storage
+```
+
 ## Layout
 
 ```
@@ -67,3 +83,9 @@ config/             # categories.json, schema.json, tagging prompt + vocab
 src/                # core, engine, adapters, interfaces
 systemd/            # skyhook-seed.service/.timer templates
 ```
+
+## More docs
+
+[authoring seeders](authoring-seeders.md) · [storage](storage.md) ·
+[tagging](tagging.md) · [pipeline](pipeline.md) · [multi-node](multi-node.md) ·
+[API](api.md) · [deployment](deployment.md)

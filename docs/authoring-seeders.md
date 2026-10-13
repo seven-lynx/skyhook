@@ -67,6 +67,13 @@ CLI flags accepted by any seeder: `--no-cache`, `--aggressive`, `--with-headless
 `--stage-only`. (`--max-age-days N` is an engine/schedule flag — set it via
 `skyhook schedule … --max-age-days N`, not on the seeder itself.)
 
+Environment variables:
+
+| Variable | Effect |
+|---|---|
+| `SKYHOOK_STAGE_ONLY=1` | Stage URLs locally instead of writing to storage (same as `--stage-only`) |
+| `SKYHOOK_SKIP_HEADLESS=1` | Skip the headless tier entirely (handy for CI without Playwright) |
+
 ## Categories
 
 The taxonomy lives in `config/categories.json` (8 pillars / 98 subcategories by
