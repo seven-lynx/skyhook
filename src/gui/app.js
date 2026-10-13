@@ -671,7 +671,7 @@ async function renderLogs() {
   const runningSet = new Set(state.running.map((r) => r.source));
   // If a specific tab is selected, only render that source.
   let sources;
-  if (state.logTab && state.logTab !== "__all__" && state.logSources.includes(state.logTab)) {
+  if (state.logTab && state.logTab !== "__all__") {
     sources = [state.logTab];
   } else {
     // Running sources last → the bottom-following auto-scroll always shows live output.
@@ -705,6 +705,15 @@ function startLogPolling() {
   state.logTimer = setInterval(async () => {
     await loadRunning();
     const n = state.running.length;
+    // Keep logSources in sync — add newly started sources so tabs stay current.
+    const runningSources = new Set(state.running.map((r) => r.source));
+    if (runningSources.size) {
+      state.logSources = [...new Set([...state.logSources, ...runningSources])];
+      // If the active tab's source finished and left logSources, re-pick.
+      if (state.logTab !== "__all__" && !runningSources.has(state.logTab)) {
+        // Source still in logSources (shows final output) — keep the tab selected.
+      }
+    }
     if (state.wasRunning && n === 0) {
       // A run (or job) just finished — refresh tables/dashboard/history once.
       await refreshAll();
