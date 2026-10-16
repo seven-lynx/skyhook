@@ -332,6 +332,39 @@ function renderSeeders() {
       '</td>';
     tbody.appendChild(tr);
   }
+
+  const cardsEl = $("#seederCards");
+  if (cardsEl) {
+    cardsEl.innerHTML = rows.map((s) => {
+      const statusCls = s.lastStatus === "ok" ? "ok" : s.lastStatus ? "err" : "never";
+      const result = resultText(s.lastResult);
+      const isRunning = runningSet.has(s.source);
+      return (
+        '<div class="seeder-card' + (isRunning ? " running" : "") + '">' +
+          '<div class="sc-head">' +
+            '<div class="sc-check"><input type="checkbox" data-source="' + esc(s.source) + '"' + (state.selected.has(s.source) ? " checked" : "") + ' aria-label="Select ' + esc(s.source) + '"></div>' +
+            '<div class="sc-title">' +
+              '<a class="sc-source" href="#/log/' + encodeURIComponent(s.source) + '">' + esc(s.source) + (isRunning ? ' <span class="spin-pulse" aria-label="running"></span>' : "") + '</a>' +
+              '<div class="sc-name">' + esc(s.displayName || "") + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="sc-meta">' +
+            '<span>' + esc(s.categoryLabel || "") + (s.subcategoryLabel ? " · " + esc(s.subcategoryLabel) : "") + '</span>' +
+            '<span class="cadence ' + (s.scheduled ? "" : "manual") + '">' + esc(s.cadence) + '</span>' +
+            '<span class="tier ' + (s.isNews ? "news" : "evergreen") + '">' + (s.isNews ? "news" : "evergreen") + '</span>' +
+          '</div>' +
+          '<div class="sc-status ' + statusCls + '">' + esc(s.lastStatus || "never run") + '</div>' +
+          '<div class="sc-result">' + esc(result || (s.lastError ? s.lastError : "—")) + '</div>' +
+          '<div class="sc-actions">' +
+            '<button class="btn btn-sm" data-action="run" data-source="' + esc(s.source) + '"><svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg><span>Run</span></button>' +
+            '<button class="btn btn-sm" data-action="schedule" data-source="' + esc(s.source) + '">Schedule</button>' +
+            '<button class="btn btn-sm" data-action="toggle" data-source="' + esc(s.source) + '">' + (s.scheduled ? "Disable" : "Enable") + '</button>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join("");
+  }
+
   updateBulkBar();
 }
 function updateBulkBar() {
