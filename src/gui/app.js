@@ -1,4 +1,4 @@
-﻿/* Skyhook Control — browser GUI over the skyhook HTTP API.
+/* Skyhook Control — browser GUI over the skyhook HTTP API.
  * Zero dependencies; served from src/gui/ by interfaces/api-server.js. */
 
 "use strict";
@@ -1207,6 +1207,3 @@ init().catch((err) => {
       '<p>Check the browser dev tools console for details.</p>' +
     '</div>';
 });
-
-  const rt = $("#runTaskBtn");
-  if (rt) rt.addEventListener("click", runTask);

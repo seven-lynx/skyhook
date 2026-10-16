@@ -268,6 +268,17 @@ code, kbd {
 
 .sidenav-item .ic { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.6; flex-shrink: 0; }
 .sidenav-item .badge {
+  margin-left: auto;
+  background: var(--bg-overlay);
+  color: var(--text-muted);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  padding: 0 var(--space-2);
+  min-width: 18px;
+  text-align: center;
+  line-height: 18px;
+  font-weight: 500;
+}
 
 /* ── 5. Buttons ─────────────────────────────────────────────────────────── */
 
@@ -312,6 +323,12 @@ code, kbd {
 .btn-sm .ic { width: 14px; height: 14px; }
 
 .icon-btn {
+  width: 36px; height: 36px;
+  display: inline-grid; place-items: center;
+  background: transparent; border: 1px solid transparent;
+  color: var(--text-muted); border-radius: var(--radius);
+  cursor: pointer; transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
 
 /* ── 6. Forms ───────────────────────────────────────────────────────────── */
 
@@ -364,6 +381,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
   transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 .toggle-track::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: transform var(--dur) var(--ease), background var(--dur) var(--ease);
+}
 
 /* ── 7. Cards, stats, badges ────────────────────────────────────────────── */
 
@@ -997,37 +1020,14 @@ td .row-link:hover { color: var(--brand); }
 .badge.info  { background: var(--info-bg); border-color: var(--info-border); color: var(--info); }
 .badge.brand { background: var(--brand-deep); border-color: var(--brand); color: var(--brand); }
 
-  content: ""; position: absolute; top: 2px; left: 2px;
-  width: 14px; height: 14px;
-  background: var(--text-muted);
-  border-radius: 50%;
-  transition: transform var(--dur) var(--ease), background var(--dur) var(--ease);
-}
 .toggle input:checked + .toggle-track { background: var(--brand); border-color: var(--brand); }
 .toggle input:checked + .toggle-track::after { transform: translateX(16px); background: var(--text-inverse); }
 
-  width: 36px; height: 36px;
-  display: inline-grid; place-items: center;
-  background: transparent; border: 1px solid transparent;
-  color: var(--text-muted); border-radius: var(--radius);
-  cursor: pointer; transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
-}
 .icon-btn:hover { background: var(--bg-hover); color: var(--text); }
 .icon-btn.sm { width: 28px; height: 28px; }
 .icon-btn .ic { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.6; }
 .icon-btn.sm .ic { width: 14px; height: 14px; }
 
-  margin-left: auto;
-  background: var(--bg-overlay);
-  color: var(--text-muted);
-  border-radius: var(--radius-full);
-  font-size: var(--text-xs);
-  padding: 0 var(--space-2);
-  min-width: 18px;
-  text-align: center;
-  line-height: 18px;
-  font-weight: 500;
-}
 .sidenav-item.active .badge { background: var(--brand); color: var(--text-inverse); }
 
 @media (max-width: 720px) { .sidenav { display: none; } }
@@ -1059,4 +1059,5 @@ img, svg { display: block; max-width: 100%; }
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
+
 
