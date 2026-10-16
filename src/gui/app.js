@@ -405,8 +405,19 @@ function renderDashboard() {
   };
 
   const runningEl = $("#runningList");
-  if (state.running.length) {
-    runningEl.innerHTML = state.running.map((r) =>
+  const workerRunning = state.pipe && /Worker status:\s*running/i.test(state.pipe.note || "");
+  const items = [];
+  if (workerRunning) {
+    items.push(
+      '<div class="due-row">' +
+        '<span class="spin-pulse"></span>' +
+        '<strong>Tagger worker</strong>' +
+        '<span class="muted">running</span>' +
+        '<a class="btn btn-sm" href="#/pipeline">View pipeline</a>' +
+      '</div>');
+  }
+  for (const r of state.running) {
+    items.push(
       '<div class="due-row">' +
         '<span class="spin-pulse"></span>' +
         '<strong>' + esc(r.source) + '</strong>' +
@@ -415,7 +426,10 @@ function renderDashboard() {
         '<button class="icon-btn sm" data-stop-one="' + esc(r.source) + '" aria-label="Stop ' + esc(r.source) + '" title="Stop">' +
           '<svg class="ic" aria-hidden="true"><use href="#ic-stop"/></svg>' +
         '</button>' +
-      '</div>').join("");
+      '</div>');
+  }
+  if (items.length) {
+    runningEl.innerHTML = items.join("");
   } else {
     runningEl.innerHTML = '<p class="muted" style="padding: var(--space-3);">Nothing running.</p>';
   }
@@ -745,7 +759,7 @@ async function renderLogBody() {
       '<div class="log-block">' +
         '<div class="log-source-head">' + esc(src) + '</div>' +
         (seeder && seeder.description ? '<div class="log-source-desc">' + esc(seeder.description) + '</div>' : "") +
-        '<pre class="log-lines">' + esc(lines.join("\n")) || '<span class="log-empty">(no output yet)</span>' + '</pre>' +
+        '<pre class="log-lines">' + (lines.length ? esc(lines.join("\n")) : '<span class="log-empty">(no output yet)</span>') + '</pre>' +
       '</div>');
   }
   if (seq !== logRenderSeq) return;
