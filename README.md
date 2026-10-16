@@ -56,7 +56,7 @@ node bin/skyhook.js init --provider sqlite
 
 > **Not on npm.** Skyhook is distributed as a GitHub dependency — the `skyhook`
 > name on npm belongs to an unrelated project. Install via clone, or add
-> `github:seven-lynx/skyhook#v0.3.5` as a dependency.
+> `github:seven-lynx/skyhook#v0.3.6` as a dependency.
 
 ## Requirements
 
@@ -144,7 +144,13 @@ test/                   # smoke tests (node --test)
 
 ## Status
 
-**v0.3.5** — redesigned professional GUI (design system, live-log page, mobile
+**v0.3.6** — pipeline page now shows the status cards (counts + grouped run
+buttons) instead of bare job buttons; the tagging worker's "running" state is a
+fresh heartbeat (no more stale "running" after a crash) and its log is written
+to `logs/tagger.log` and linked from the dashboard; live-log header text is
+truncated instead of overlapping buttons; clearing a source's staged results now
+actually deletes its file. Plus **v0.3.5** — redesigned professional GUI (design
+system, live-log page, mobile
 bottom nav, accessibility pass), PWA icons from the new logo, curation
 clear/prune fix, plus the v0.2.x pipeline: offline LLM tagging worker,
 `pull`/`upload`, targeted gap-filling tasks, config-driven pipeline, Postgres

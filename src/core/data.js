@@ -51,9 +51,12 @@ export function pruneStaged(filter = {}, { soft = true } = {}) {
   const matchedUrls = new Set(matched.map((r) => r.url));
   const keep = rows.filter((r) => !matchedUrls.has(r.url));
 
-  // Rewrite each source's staged file without the deleted rows.
-  for (const [src, rs] of groupBySource(keep)) writeStagedSource(src, rs);
-  // Files that became empty were removed by writeStagedSource above.
+  // Rewrite every source's staged file, including sources that lost all rows,
+  // so their file is deleted rather than left behind with stale content.
+  const keepBySource = groupBySource(keep);
+  for (const src of groupBySource(rows).keys()) {
+    writeStagedSource(src, keepBySource.get(src) || []);
+  }
 
   let archived = null;
   if (soft) {

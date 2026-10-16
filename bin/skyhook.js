@@ -651,6 +651,7 @@ async function cmdTag(a) {
     mode: val(a, "--mode", "tag"),
     tier: parseInt(val(a, "--tier", "0"), 10) || 0,
     task: taskKey,
+    logFile: join(c.logDir, "tagger.log"),
   };
 
   try {

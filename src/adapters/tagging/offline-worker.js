@@ -12,7 +12,8 @@
  * own prompt, URL filter, parse logic, and write target.
  */
 import Database from "better-sqlite3";
-import { existsSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync } from "fs";
+import { dirname } from "path";
 import { loadText } from "./index.js";
 import { canonicalizeTagList } from "./canonicalize.js";
 import { getTask, loadTaskPromptFile, buildTaskUserMessage, parseTaskResponse } from "./tasks.js";
@@ -216,8 +217,20 @@ export async function runOfflineTagWorker(opts = {}) {
   const {
     dbPath, provider, model, prompt,
     validTags = null, modelSource = "llm", batchSize = 25, max = null,
-    mode = "tag", tier = 0, task: taskKey = null,
+    mode = "tag", tier = 0, task: taskKey = null, logFile = null,
   } = opts;
+
+  // Tee console output to a persistent log file so the GUI can show the
+  // worker's log even when it isn't launched through the server's runJob.
+  if (logFile) {
+    try {
+      mkdirSync(dirname(logFile), { recursive: true });
+      const line = (a) => a.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join(" ") + "\n";
+      const out = console.log, errOut = console.error;
+      console.log = (...a) => { out(...a); try { appendFileSync(logFile, line(a), "utf8"); } catch {} };
+      console.error = (...a) => { errOut(...a); try { appendFileSync(logFile, line(a), "utf8"); } catch {} };
+    } catch { /* best-effort logging */ }
+  }
 
   if (!dbPath) throw new Error("offline tagging worker needs pipeline.offlineDb");
   if (!existsSync(dbPath)) throw new Error(`Offline DB not found: ${dbPath}`);

@@ -413,7 +413,7 @@ function renderDashboard() {
         '<span class="spin-pulse"></span>' +
         '<strong>Tagger worker</strong>' +
         '<span class="muted">running</span>' +
-        '<a class="btn btn-sm" href="#/pipeline">View pipeline</a>' +
+        '<a class="btn btn-sm" href="#/log/tagger">View log</a>' +
       '</div>');
   }
   for (const r of state.running) {
@@ -489,20 +489,37 @@ async function loadTaggingGaps() {
 async function renderPipeline() {
   await loadPipeline();
   const p = state.pipe || {};
+  const cards = Array.isArray(p.cards) ? p.cards : [];
   const jobs = Array.isArray(p.jobs) ? p.jobs : [];
   const cardsEl = $("#pipelineCards");
   if (cardsEl) {
-    cardsEl.innerHTML = jobs.length
-      ? jobs.map((j) =>
-          '<div class="pipe-card' + (j.danger ? " danger" : "") + '">' +
-            '<span class="label">' + esc(j.label || j.key) + '</span>' +
-            '<span class="desc">' + esc(j.description || "") + '</span>' +
-            '<button class="btn ' + (j.danger ? "btn-danger" : "btn-primary") + '" data-pipe="' + esc(j.key) + '" data-danger="' + (j.danger ? "1" : "0") + '">' +
-              '<svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg>' +
-              '<span>Run</span>' +
-            '</button>' +
+    cardsEl.innerHTML = cards.length
+      ? cards.map((c) =>
+          '<div class="pipe-card">' +
+            '<div class="pipe-stat">' +
+              '<span class="pipe-value">' + esc(c.value ?? "—") + '</span>' +
+              '<span class="pipe-label">' + esc(c.label ?? c.id) + '</span>' +
+            '</div>' +
+            (c.sub ? '<div class="pipe-sub">' + esc(c.sub) + '</div>' : "") +
+            '<div class="pipe-actions">' +
+              (Array.isArray(c.actions) ? c.actions : []).map((a) =>
+                '<button class="btn btn-sm ' + (a.danger ? "btn-danger" : "btn-primary") + '" data-pipe="' + esc(a.kind ?? a.id) + '" data-danger="' + (a.danger ? "1" : "0") + '">' +
+                  '<svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg>' +
+                  '<span>' + esc(a.label ?? a.id) + '</span>' +
+                '</button>').join("") +
+            '</div>' +
           '</div>').join("")
-      : '<p class="muted">No pipeline jobs configured.</p>';
+      : '<p class="muted">No pipeline status.</p>';
+  }
+  const jobsEl = $("#pipelineJobs");
+  if (jobsEl) {
+    jobsEl.innerHTML = jobs.length
+      ? jobs.map((j) =>
+          '<div class="job-row">' +
+            '<span class="job-status ' + esc(j.status || "idle") + '"></span>' +
+            '<span>' + esc(j.label || j.key) + '</span>' +
+          '</div>').join("")
+      : '<p class="muted">No pipeline jobs.</p>';
   }
   await loadTaggingGaps();
   if (state.taggingGaps) $("#taggingGaps").innerHTML = gapCards(state.taggingGaps);
