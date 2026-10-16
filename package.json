@@ -1,6 +1,6 @@
 {
   "name": "skyhook",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Self-hosted content seeder — discover, enrich, tag, and push web content to your own database.",
   "type": "module",
   "license": "MIT",

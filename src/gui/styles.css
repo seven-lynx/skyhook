@@ -145,19 +145,22 @@ code, kbd {
 
 @media (max-width: 720px) {
   .app {
-    grid-template-columns: 1fr;
-    grid-template-rows: var(--topbar-h) 1fr var(--bottomnav-h);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--bottomnav-h);
     grid-template-areas:
       "topbar"
       "main"
       "bottomnav";
+    height: 100dvh;
   }
+  main { overflow-y: auto; }
 }
 
 /* ── topbar ─────────────────────────────────────────────────────────────── */
 
 .topbar {
   grid-area: topbar;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -186,7 +189,7 @@ code, kbd {
 .brand-sub {
   font-size: var(--text-xs); color: var(--text-muted); line-height: 1.2;
   font-family: var(--font-mono); white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; max-width: 360px;
+  text-overflow: ellipsis; max-width: 360px; min-width: 0;
 }
 .brand-sub.offline { color: var(--err); }
 
@@ -499,6 +502,11 @@ td .row-link:hover { color: var(--brand); }
 .empty {
   text-align: center;
   padding: var(--space-7) var(--space-4);
+  color: var(--text-muted);
+}
+.empty .ic { width: 32px; height: 32px; stroke: currentColor; fill: none; stroke-width: 1.5; margin: 0 auto var(--space-3); display: block; opacity: .6; }
+.empty-title { font-size: var(--text-md); color: var(--text); margin-bottom: var(--space-1); }
+.empty-text { font-size: var(--text-sm); }
 
 /* ── 10. Toasts ─────────────────────────────────────────────────────────── */
 
@@ -648,6 +656,13 @@ td .row-link:hover { color: var(--brand); }
   text-decoration: none;
   transition: color var(--dur) var(--ease);
   min-height: var(--bottomnav-h);
+}
+.bn-item .ic { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+.bn-item .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.bn-item:hover { color: var(--text); text-decoration: none; }
+.bn-item.active { color: var(--brand); }
+.bn-item .dot-active { display: none; width: 4px; height: 4px; background: var(--brand); border-radius: 50%; margin-top: 2px; }
+.bn-item.active .dot-active { display: block; }
 
 /* ── 14. Seeders (toolbar, table, cards, detail page) ───────────────────── */
 
@@ -849,6 +864,12 @@ td .row-link:hover { color: var(--brand); }
   padding: var(--space-3);
   white-space: pre-wrap;
   word-break: break-word;
+  margin: 0;
+  color: var(--text-muted);
+  max-height: 50vh;
+  overflow: auto;
+}
+.log-empty { color: var(--text-subtle); font-style: italic; }
 
 /* ── 16. Curation ───────────────────────────────────────────────────────── */
 
@@ -909,6 +930,12 @@ td .row-link:hover { color: var(--brand); }
 .job-row:last-child { border-bottom: 0; }
 .job-status {
   width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-subtle); flex-shrink: 0;
+}
+.job-status.running { background: var(--brand); animation: pulse 1.6s infinite; }
+.job-status.ok   { background: var(--ok); }
+.job-status.err  { background: var(--err); }
+.job-state { color: var(--text-muted); margin-left: auto; font-family: var(--font-mono); font-size: var(--text-xs); }
 
 /* ── 18. Utility classes ────────────────────────────────────────────────── */
 
@@ -944,20 +971,6 @@ td .row-link:hover { color: var(--brand); }
   .stat-num { font-size: var(--text-xl); }
 }
 
-  background: var(--text-subtle); flex-shrink: 0;
-}
-.job-status.running { background: var(--brand); animation: pulse 1.6s infinite; }
-.job-status.ok   { background: var(--ok); }
-.job-status.err  { background: var(--err); }
-.job-state { color: var(--text-muted); margin-left: auto; font-family: var(--font-mono); font-size: var(--text-xs); }
-
-  margin: 0;
-  color: var(--text-muted);
-  max-height: 50vh;
-  overflow: auto;
-}
-.log-empty { color: var(--text-subtle); font-style: italic; }
-
 .detail-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -977,14 +990,6 @@ td .row-link:hover { color: var(--brand); }
 .info-grid .info-v.err { color: var(--err); }
 .info-grid .info-v.ok { color: var(--ok); }
 
-}
-.bn-item .ic { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.6; }
-.bn-item .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.bn-item:hover { color: var(--text); text-decoration: none; }
-.bn-item.active { color: var(--brand); }
-.bn-item .dot-active { display: none; width: 4px; height: 4px; background: var(--brand); border-radius: 50%; margin-top: 2px; }
-.bn-item.active .dot-active { display: block; }
-
 .modal-foot {
   display: flex; gap: var(--space-2);
   padding: var(--space-4) var(--space-5);
@@ -996,12 +1001,6 @@ td .row-link:hover { color: var(--brand); }
   .modal-backdrop { padding: 0; align-items: flex-end; }
   .modal { max-width: 100%; max-height: 90vh; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
 }
-
-  color: var(--text-muted);
-}
-.empty .ic { width: 32px; height: 32px; stroke: currentColor; fill: none; stroke-width: 1.5; margin: 0 auto var(--space-3); display: block; opacity: .6; }
-.empty-title { font-size: var(--text-md); color: var(--text); margin-bottom: var(--space-1); }
-.empty-text { font-size: var(--text-sm); }
 
 .skeleton {
   background: linear-gradient(90deg, var(--bg-elevated) 0%, var(--bg-hover) 50%, var(--bg-elevated) 100%);
