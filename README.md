@@ -56,7 +56,7 @@ node bin/skyhook.js init --provider sqlite
 
 > **Not on npm.** Skyhook is distributed as a GitHub dependency — the `skyhook`
 > name on npm belongs to an unrelated project. Install via clone, or add
-> `github:seven-lynx/skyhook#v0.2.7` as a dependency.
+> `github:seven-lynx/skyhook#v0.3.0` as a dependency.
 
 ## Requirements
 
@@ -144,9 +144,11 @@ test/                   # smoke tests (node --test)
 
 ## Status
 
-**v0.2.7** — offline LLM tagging worker, `pull`/`upload`, targeted gap-filling
-tasks, config-driven pipeline, Postgres adapter, installable PWA GUI, and the
-multi-node control plane.
+**v0.3.0** — redesigned professional GUI (design system, live-log page, mobile
+bottom nav, accessibility pass), PWA icons from the new logo, curation
+clear/prune fix, plus the v0.2.x pipeline: offline LLM tagging worker,
+`pull`/`upload`, targeted gap-filling tasks, config-driven pipeline, Postgres
+adapter, and the multi-node control plane.
 
 ## License
 

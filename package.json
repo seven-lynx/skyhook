@@ -1,6 +1,6 @@
 {
   "name": "skyhook",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "description": "Self-hosted content seeder — discover, enrich, tag, and push web content to your own database.",
   "type": "module",
   "license": "MIT",
@@ -17,7 +17,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "build:icons": "node scripts/build-icons.js"
   },
   "keywords": [
     "seeder",
@@ -40,6 +41,9 @@
   "optionalDependencies": {
     "@supabase/supabase-js": "^2.104.1",
     "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "sharp": "^0.34.0"
   },
   "allowScripts": {
     "better-sqlite3@12.11.1": true

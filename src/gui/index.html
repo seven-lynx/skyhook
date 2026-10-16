@@ -11,283 +11,369 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Skyhook" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo">🛰</span>
-      <div>
-        <h1>Skyhook Control</h1>
-        <p id="apiLabel" class="muted">connecting…</p>
+  <!-- SVG sprite: every <use href="#ic-X"> references a glyph. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="ic-home" viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></symbol>
+      <symbol id="ic-rss" viewBox="0 0 24 24"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.5"/></symbol>
+      <symbol id="ic-timer" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2"/><path d="M9 2h6"/><path d="M12 2v3"/></symbol>
+      <symbol id="ic-beaker" viewBox="0 0 24 24"><path d="M9 3h6"/><path d="M10 3v6L4 19a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-6-10V3"/><path d="M7 14h10"/></symbol>
+      <symbol id="ic-bar" viewBox="0 0 24 24"><path d="M3 20V10"/><path d="M9 20V4"/><path d="M15 20v-7"/><path d="M21 20v-4"/></symbol>
+      <symbol id="ic-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M5 6l1 14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-14"/></symbol>
+      <symbol id="ic-cog" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8 1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+      <symbol id="ic-play" viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20" fill="currentColor"/></symbol>
+      <symbol id="ic-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1" fill="currentColor"/></symbol>
+      <symbol id="ic-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></symbol>
+      <symbol id="ic-plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
+      <symbol id="ic-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+      <symbol id="ic-x" viewBox="0 0 24 24"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></symbol>
+      <symbol id="ic-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></symbol>
+      <symbol id="ic-chevron-right" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+      <symbol id="ic-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r="1" fill="currentColor"/></symbol>
+      <symbol id="ic-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="ic-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></symbol>
+      <symbol id="ic-link" viewBox="0 0 24 24"><path d="M9 15a4 4 0 0 1 0-6l3-3a4 4 0 0 1 6 6l-1 1"/><path d="M15 9a4 4 0 0 1 0 6l-3 3a4 4 0 0 1-6-6l1-1"/></symbol>
+      <symbol id="ic-tag" viewBox="0 0 24 24"><path d="M3 12V3h9l9 9-9 9z"/><circle cx="7.5" cy="7.5" r="1.5" fill="currentColor"/></symbol>
+      <symbol id="ic-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+      <symbol id="ic-filter" viewBox="0 0 24 24"><path d="M3 5h18l-7 9v6l-4-2v-4z"/></symbol>
+      <symbol id="ic-warning" viewBox="0 0 24 24"><path d="M12 3l10 18H2z"/><path d="M12 10v5"/><circle cx="12" cy="18" r="1" fill="currentColor"/></symbol>
+      <symbol id="ic-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></symbol>
+      <symbol id="ic-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6"/></symbol>
+      <symbol id="ic-power" viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M5.6 7a9 9 0 1 0 12.8 0"/></symbol>
+      <symbol id="ic-cloud" viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-1-7.9 6 6 0 0 1 11.7 1.4A4 4 0 0 1 17 18z"/></symbol>
+      <symbol id="ic-terminal" viewBox="0 0 24 24"><path d="M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/><path d="M7 9l3 3-3 3"/><path d="M13 15h5"/></symbol>
+      <symbol id="ic-list" viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><circle cx="3.5" cy="6" r="1.5" fill="currentColor"/><circle cx="3.5" cy="12" r="1.5" fill="currentColor"/><circle cx="3.5" cy="18" r="1.5" fill="currentColor"/></symbol>
+      <symbol id="ic-card" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/></symbol>
+    </defs>
+  </svg>
+
+  <!-- App shell: topbar, side nav (desktop), main panels, bottom nav (mobile). -->
+  <div class="app">
+    <!-- ── topbar ──────────────────────────────────────────────────────── -->
+    <header class="topbar" role="banner">
+      <a href="#/" class="brand" aria-label="Skyhook — go to dashboard">
+        <span class="brand-logo"><img src="/icons/icon-192.png" alt="" width="32" height="32" /></span>
+        <span class="brand-text">
+          <span class="brand-name">Skyhook</span>
+          <span class="brand-sub" id="apiLabel">connecting…</span>
+        </span>
+      </a>
+      <div class="topbar-right">
+        <span class="topbar-status" id="topbarStatus" hidden>
+          <span class="dot live"></span>
+          <span>Live</span>
+        </span>
+        <button id="refreshBtn" class="btn-ghost btn-sm" type="button" aria-label="Refresh">
+          <svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg>
+          <span class="sr-only">Refresh</span>
+        </button>
+        <button id="apiBaseBtn" class="btn-ghost btn-sm" type="button" aria-label="API endpoint">
+          <svg class="ic" aria-hidden="true"><use href="#ic-cloud"/></svg>
+          <span class="sr-only">API endpoint</span>
+        </button>
       </div>
-    </div>
-    <div class="topbar-right">
-      <input id="apiBase" class="api-input" type="text"
-        placeholder="http://localhost:4173"
-        title="API base URL (blank = this origin)" />
-      <label class="live-label" data-tip="Auto-refresh the dashboard every 10 seconds."><input id="live" type="checkbox" /> live</label>
-      <button id="refreshBtn" class="btn" title="Refresh">⟳ Refresh</button>
-      <button id="showLogBtn" class="btn" hidden data-tip="Re-open the live log drawer.">📋 Log</button>
-    </div>
-  </header>
+    </header>
 
-  <nav class="tabs">
-    <button class="tab active" data-tab="dashboard">Dashboard</button>
-    <button class="tab" data-tab="seeders">Seeders</button>
-    <button class="tab" data-tab="timer">Timer</button>
-    <button class="tab" data-tab="pipeline">Pipeline</button>
-    <button class="tab" data-tab="stats">Stats</button>
-    <button class="tab" data-tab="curation">Curation</button>
-    <button class="tab" data-tab="settings">Settings</button>
-  </nav>
-
-  <main>
-    <section id="dashboard" class="panel active">
-      <div class="stats" id="stats"></div>
-      <div class="dash-actions">
-        <button id="runDueBtn" class="btn primary" data-tip="Run every seeder that is due right now.">▶ Run due now</button>
-        <label class="opt" data-tip="Ignore cadence and run ALL scheduled seeders (not just the due ones).">
-          <input id="forceDue" type="checkbox" /> force
-        </label>
-        <button id="emitTimerBtn" class="btn" data-tip="Regenerate the systemd timer unit from the fastest enabled cadence.">⏰ Regenerate timer</button>
+    <!-- ── side nav (desktop only) ─────────────────────────────────────── -->
+    <nav class="sidenav" id="sidenav" aria-label="Primary">
+      <div class="sidenav-group">
+        <a class="sidenav-item" href="#/" data-route="dashboard">
+          <svg class="ic" aria-hidden="true"><use href="#ic-home"/></svg>
+          <span>Dashboard</span>
+        </a>
+        <a class="sidenav-item" href="#/seeders" data-route="seeders">
+          <svg class="ic" aria-hidden="true"><use href="#ic-rss"/></svg>
+          <span>Seeders</span>
+          <span class="badge" id="seederCountBadge">…</span>
+        </a>
+        <a class="sidenav-item" href="#/pipeline" data-route="pipeline">
+          <svg class="ic" aria-hidden="true"><use href="#ic-beaker"/></svg>
+          <span>Pipeline</span>
+        </a>
+        <a class="sidenav-item" href="#/stats" data-route="stats">
+          <svg class="ic" aria-hidden="true"><use href="#ic-bar"/></svg>
+          <span>Stats</span>
+        </a>
+        <a class="sidenav-item" href="#/curation" data-route="curation">
+          <svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg>
+          <span>Curation</span>
+        </a>
+        <a class="sidenav-item" href="#/timer" data-route="timer" data-pi-only>
+          <svg class="ic" aria-hidden="true"><use href="#ic-timer"/></svg>
+          <span>Timer</span>
+        </a>
       </div>
-      <h2>Running</h2>
-      <div id="runningList"></div>
-      <h2>Recent failures</h2>
-      <div id="failList"></div>
-      <h2>Due now</h2>
-      <div id="dueList" class="due-list"></div>
-    </section>
+      <div class="sidenav-group">
+        <a class="sidenav-item" href="#/settings" data-route="settings">
+          <svg class="ic" aria-hidden="true"><use href="#ic-cog"/></svg>
+          <span>Settings</span>
+        </a>
 
-    <section id="seeders" class="panel">
-      <div class="toolbar">
-        <input id="filter" class="filter" type="search"
-          placeholder="Filter source / name / category…" autocomplete="off"
-          data-tip="Search by source, script name, display name, or category." />
-        <select id="tierFilter" data-tip="Filter by tier: news (age-pruned) vs evergreen.">
-          <option value="">All tiers</option>
-          <option value="news">News</option>
-          <option value="evergreen">Evergreen</option>
-        </select>
-        <select id="schedFilter" data-tip="Filter by schedule state: scheduled (auto-run) vs manual (on demand).">
-          <option value="">All</option>
-          <option value="1">Scheduled</option>
-          <option value="0">Manual</option>
-        </select>
-        <select id="statusFilter" data-tip="Filter by run status: due now, or last run errored.">
-          <option value="">All status</option>
-          <option value="due">Due</option>
-          <option value="errors">Errors</option>
-        </select>
-        <label class="opt" data-tip="How many seeders run at once. 1 = one after another (sequential).">
-          Parallel
-          <select id="concurrency">
-            <option value="1" selected>1 (sequential)</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
+    <!-- ── main ──────────────────────────────────────────────────────── -->
+    <main id="main">
+      <!-- Dashboard ────────────────────────────────────────────── -->
+      <section id="panel-dashboard" class="panel" data-route="dashboard" aria-label="Dashboard">
+        <div class="grid grid-stats" id="dashStats"></div>
+
+        <div class="flex gap-2 mb-4" style="flex-wrap: wrap;">
+          <button id="runDueBtn" class="btn-primary" type="button">
+            <svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg>
+            <span>Run due now</span>
+          </button>
+          <label class="checkbox" title="Ignore cadence and run all scheduled seeders">
+            <input id="forceDue" type="checkbox" /> force
+          </label>
+          <button id="emitTimerBtn" class="btn" type="button" data-pi-only>
+            <svg class="ic" aria-hidden="true"><use href="#ic-timer"/></svg>
+            <span>Regenerate timer</span>
+          </button>
+        </div>
+
+        <h2 class="h-section">Running</h2>
+        <div class="card" id="runningList" aria-live="polite"></div>
+
+        <h2 class="h-section">Recent failures</h2>
+        <div class="card" id="failList"></div>
+
+        <h2 class="h-section">Due now</h2>
+        <div class="card" id="dueList"></div>
+      </section>
+
+      <!-- Seeders ──────────────────────────────────────────────── -->
+      <section id="panel-seeders" class="panel" data-route="seeders" aria-label="Seeders">
+        <div class="toolbar">
+          <input id="filter" class="filter" type="search" placeholder="Filter source / name / category…" autocomplete="off" aria-label="Filter seeders" />
+          <select id="tierFilter" aria-label="Tier filter">
+            <option value="">All tiers</option>
+            <option value="news">News</option>
+            <option value="evergreen">Evergreen</option>
           </select>
-        </label>
-        <label class="opt" data-tip="Let seeders launch a headless browser if a source needs one. Slower and heavier — leave off unless required.">
-          <input id="withHeadless" type="checkbox" /> headless
-        </label>
-        <label class="opt" data-tip="Force ALL discovery tiers (RSS, sitemap, Wayback, headless) regardless of how many URLs are found. For one-off discovery sweeps.">
-          <input id="aggressive" type="checkbox" /> aggressive
-        </label>
-        <label class="opt" data-tip="Force the headless browser crawl even after short-circuit (without the full aggressive flag).">
-          <input id="forceHeadless" type="checkbox" /> force headless
-        </label>
-        <label class="opt" data-tip="Ignore the per-seeder cache and re-fetch everything.">
-          <input id="noCache" type="checkbox" /> no cache
-        </label>
-        <span id="countLabel" class="muted"></span>
-        <div class="spacer"></div>
-        <button id="bulkEnableBtn" class="btn" data-tip="Enable all selected seeders (add to schedule, weekly).">+ Enable</button>
-        <button id="bulkDisableBtn" class="btn" data-tip="Disable all selected seeders (remove from schedule).">⏻ Disable</button>
-        <button id="bulkScheduleBtn" class="btn" data-tip="Set cadence / tier / max-age for all selected seeders.">⚙ Schedule</button>
-        <button id="runSelectedBtn" class="btn primary" disabled data-tip="Run all selected seeders.">▶ Run selected</button>
-        <button id="newSeederBtn" class="btn primary" data-tip="Create a new seeder from a website URL.">＋ New seeder</button>
-      </div>
-      <div id="seederCards" class="seeder-cards"></div>
-      <div class="table-wrap">
-        <table id="seederTable">
-          <thead>
-            <tr>
-              <th class="col-check"><input id="checkAll" type="checkbox" title="Select all (filtered)" /></th>
-              <th data-sort="source">Source</th>
-              <th data-sort="displayName">Name</th>
-              <th data-sort="categoryLabel">Category</th>
-              <th data-sort="cadence">Cadence</th>
-              <th data-sort="isNews">Tier</th>
-              <th data-sort="lastRunAt">Last run</th>
-              <th data-sort="lastStatus">Result</th>
-              <th data-sort="nextRunAt">Next run</th>
-              <th class="col-actions">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="seederBody"></tbody>
-        </table>
-      </div>
-    </section>
+          <select id="schedFilter" aria-label="Schedule filter">
+            <option value="">Scheduled + manual</option>
+            <option value="1">Scheduled only</option>
+            <option value="0">Manual only</option>
+          </select>
+          <select id="statusFilter" aria-label="Status filter">
+            <option value="">Any status</option>
+            <option value="due">Due</option>
+            <option value="errors">Errors</option>
+          </select>
+          <button id="filterSheetBtn" class="btn btn-sm filter-sheet-btn" type="button" aria-label="More filters">
+            <svg class="ic" aria-hidden="true"><use href="#ic-filter"/></svg>
+            <span>More filters</span>
+          </button>
+          <span class="toolbar-meta" id="countLabel" aria-live="polite"></span>
+          <button id="newSeederBtn" class="btn-primary btn-sm" type="button" style="margin-left: auto;">
+            <svg class="ic" aria-hidden="true"><use href="#ic-plus"/></svg>
+            <span>New seeder</span>
+          </button>
+        </div>
 
-    <section id="timer" class="panel">
-      <div class="timer-card">
-        <h2>systemd timer plan</h2>
-        <p>OnCalendar: <strong id="timerOnCalendar">—</strong></p>
-        <p>Fastest enabled cadence: <strong id="timerCadence">—</strong></p>
-        <pre id="timerUnit" class="timer-unit"></pre>
-        <button id="writeTimerBtn" class="btn primary">⏰ Regenerate timer</button>
-      </div>
-    </section>
+        <div class="toolbar" style="margin-top: -.5rem;">
+          <label class="checkbox">
+            <input id="checkAll" type="checkbox" aria-label="Select all visible" />
+            <span>Select all</span>
+          </label>
+          <span class="toolbar-meta" id="selectedCount"></span>
+          <button id="runSelectedBtn" class="btn btn-sm" type="button" disabled>
+            <svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg>
+            <span>Run selected</span>
+          </button>
+          <button id="bulkEnableBtn" class="btn btn-sm" type="button" disabled>
+            <svg class="ic" aria-hidden="true"><use href="#ic-check"/></svg>
+            <span>Enable</span>
+          </button>
+          <button id="bulkDisableBtn" class="btn btn-sm" type="button" disabled>
+            <svg class="ic" aria-hidden="true"><use href="#ic-minus"/></svg>
+            <span>Disable</span>
+          </button>
+        </div>
 
-    <section id="pipeline" class="panel">
-      <div id="pipelineCards" class="pipeline-grid"></div>
-      <div id="pipelineChecks" class="pipeline-prereqs"></div>
-      <div id="pipelineJobs" class="pipeline-jobs"></div>
-      <div id="pipelineNote" class="pipeline-status muted"></div>
-      <h3 style="margin-top:20px">Fill missing info (LLM)</h3>
-      <div class="toolbar">
-        <select id="tagTask" class="filter" data-tip="Choose a targeted LLM task to fill a specific gap in the offline DB."></select>
-        <button id="runTaskBtn" class="btn primary" data-tip="Run the selected task with the LLM. Progress streams in the live log.">▶ Run</button>
-      </div>
-      <div id="taggingGaps" class="stats"></div>
-    </section>
+        <div class="table-wrap">
+          <table id="seederTable">
+            <thead>
+              <tr>
+                <th class="col-check"><span class="sr-only">Select</span></th>
+                <th data-sort="source">Source</th>
+                <th data-sort="displayName">Name</th>
+                <th>Category</th>
+                <th data-sort="cadence">Cadence</th>
+                <th>Tier</th>
+                <th data-sort="lastRunAt">Last run</th>
+                <th>Result</th>
+                <th data-sort="nextRunAt">Next</th>
 
-    <section id="stats" class="panel">
-      <h2>Staged URLs</h2>
-      <div id="analyticsCards" class="stats"></div>
-      <div id="analyticsBody" class="analytics-body"></div>
-      <h2 style="margin-top:24px">Tagging Gaps</h2>
-      <div id="statsGaps" class="stats"></div>
-    </section>
+      <!-- Seeder detail / live log (route: /log/<source>) ───────────── -->
+      <section id="panel-log" class="panel" data-route="log" aria-label="Seeder log">
+        <div class="log-page">
+          <div class="log-page-head">
+            <button id="logBackBtn" class="btn btn-sm" type="button" aria-label="Back to seeders">
+              <svg class="ic" aria-hidden="true"><use href="#ic-arrow-left"/></svg>
+              <span>Back</span>
+            </button>
+            <div class="info">
+              <div class="source" id="logSourceTitle">…</div>
+              <div class="meta" id="logSourceMeta">…</div>
+            </div>
+            <button id="logRunBtn" class="btn-primary btn-sm" type="button">
+              <svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg>
+              <span>Run</span>
+            </button>
+            <button id="logStopBtn" class="btn-danger btn-sm" type="button" disabled>
+              <svg class="ic" aria-hidden="true"><use href="#ic-stop"/></svg>
+              <span>Stop</span>
+            </button>
+            <button id="logScheduleBtn" class="btn btn-sm" type="button" aria-label="Edit schedule">
+              <svg class="ic" aria-hidden="true"><use href="#ic-cog"/></svg>
+              <span>Schedule</span>
+            </button>
+          </div>
+          <div class="tabs" id="logTabs" role="tablist" aria-label="Logs"></div>
+          <div class="log-body" id="logBody" tabindex="0" aria-live="polite"></div>
+        </div>
+      </section>
 
-    <section id="curation" class="panel">
-      <h2>Curation</h2>
-      <div class="toolbar">
-        <input id="curateSource" class="filter" type="search" placeholder="source (blank = all)" autocomplete="off" data-tip="Restrict the prune to one seeder source." />
-        <input id="curateBefore" class="filter" type="date" data-tip="Delete staged rows staged before this date." />
-        <button id="pruneBtn" class="btn danger" data-tip="Soft-delete staged URLs matching the filters (archived to trash).">✂ Prune staged</button>
-        <button id="curateRefreshBtn" class="btn" data-tip="Reload the cache listing.">⟳ Refresh</button>
-      </div>
-      <p class="muted">Prune deletes staged URLs matching the filters. Deletions are soft (archived to <code>.skyhook/trash/</code>) so they can be restored.</p>
-      <div id="curationBody"></div>
-    </section>
+      <!-- Pipeline ─────────────────────────────────────────────── -->
+      <section id="panel-pipeline" class="panel" data-route="pipeline" aria-label="Pipeline">
+        <h1 class="h-page">Pipeline</h1>
+        <p class="muted" id="pipelineNote"></p>
+        <div class="grid grid-stats" id="pipelineCards"></div>
+        <h2 class="h-section">Tagging gaps</h2>
+        <div class="grid grid-stats" id="taggingGaps"></div>
+        <h2 class="h-section">Targeted LLM tasks</h2>
+        <div class="card flex gap-3" style="align-items: center; flex-wrap: wrap;">
+          <label for="tagTask" class="muted" style="font-size: var(--text-sm);">Task</label>
+          <select id="tagTask" style="flex: 1; min-width: 200px;"></select>
+          <button id="runTaskBtn" class="btn-primary" type="button">
+            <svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg>
+            <span>Run task</span>
+          </button>
+        </div>
+        <h2 class="h-section">Active jobs</h2>
+        <div class="card" id="pipelineJobs"></div>
+      </section>
 
-    <section id="settings" class="panel">
-      <h2>Node settings</h2>
-      <div id="settingsBody"></div>
-    </section>
-  </main>
+      <!-- Stats ────────────────────────────────────────────────── -->
+      <section id="panel-stats" class="panel" data-route="stats" aria-label="Stats">
+        <h1 class="h-page">Stats</h1>
+        <div class="grid grid-stats" id="analyticsCards"></div>
+        <h2 class="h-section">Tagging gaps</h2>
+        <div class="grid grid-stats" id="statsGaps"></div>
+        <div id="analyticsBody"></div>
+      </section>
 
-  <div id="scheduleModal" class="modal" hidden>
-    <div class="modal-card">
-      <h3 id="schedTitle">Schedule</h3>
-      <div class="field"><label>Cadence</label><select id="schedCadence" data-tip="How often this seeder runs automatically."></select></div>
-      <div class="field"><label>Tier</label>
-        <select id="schedTier" data-tip="News sources are age-pruned by max-age; evergreen are kept indefinitely.">
-          <option value="evergreen">evergreen</option>
-          <option value="news">news (age-pruned)</option>
-        </select>
+      <!-- Curation ─────────────────────────────────────────────── -->
+      <section id="panel-curation" class="panel" data-route="curation" aria-label="Curation">
+        <h1 class="h-page">Curation</h1>
+        <p class="muted mb-4">Inspect and delete collected URLs per seeder / category / date. Deletions are soft — archived to <code>.skyhook/trash/</code>.</p>
+
+        <div class="toolbar">
+          <input id="curateSource" class="filter" type="text" placeholder="Filter by source (slug)" aria-label="Source filter" />
+          <input id="curateBefore" class="filter" type="date" aria-label="Before date" style="flex: 0 0 auto; padding-left: var(--space-3);" />
+          <button id="pruneBtn" class="btn-danger" type="button">
+            <svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg>
+            <span>Prune staged</span>
+          </button>
+          <button id="curateRefreshBtn" class="btn" type="button" aria-label="Refresh">
+            <svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+
+        <div id="curationBody"></div>
+      </section>
+
+      <!-- Timer (Pi only) ──────────────────────────────────────── -->
+      <section id="panel-timer" class="panel" data-route="timer" data-pi-only aria-label="Timer">
+        <h1 class="h-page">Timer</h1>
+        <p class="muted mb-4">Regenerate the systemd timer unit for the seed runner on the Pi.</p>
+        <div class="card" style="display: flex; flex-direction: column; gap: var(--space-3);">
+          <div>
+            <label class="muted" style="font-size: var(--text-sm);">OnCalendar</label>
+            <div class="mono" id="timerOnCalendar" style="margin-top: var(--space-1);">…</div>
+          </div>
+          <div>
+            <label class="muted" style="font-size: var(--text-sm);">Fastest cadence</label>
+            <div class="mono" id="timerCadence" style="margin-top: var(--space-1);">…</div>
+          </div>
+          <div>
+            <label class="muted" style="font-size: var(--text-sm);">Unit</label>
+            <div class="mono" id="timerUnit" style="margin-top: var(--space-1);">…</div>
+          </div>
+          <div>
+            <button id="writeTimerBtn" class="btn-primary" type="button">
+              <svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg>
+              <span>Regenerate timer unit</span>
+            </button>
+          </div>
+        </div>
+
+    <!-- ── bottom nav (mobile) ─────────────────────────────────────── -->
+    <nav class="bottomnav" id="bottomnav" aria-label="Primary (mobile)">
+      <div class="bottomnav-items">
+        <a class="bn-item" href="#/" data-route="dashboard">
+          <svg class="ic" aria-hidden="true"><use href="#ic-home"/></svg>
+          <span class="label">Home</span>
+          <span class="dot-active"></span>
+        </a>
+        <a class="bn-item" href="#/seeders" data-route="seeders">
+          <svg class="ic" aria-hidden="true"><use href="#ic-rss"/></svg>
+          <span class="label">Seeders</span>
+          <span class="dot-active"></span>
+        </a>
+        <a class="bn-item" href="#/log" data-route="log" data-active-when-running>
+          <svg class="ic" aria-hidden="true"><use href="#ic-terminal"/></svg>
+          <span class="label">Logs</span>
+          <span class="dot-active"></span>
+        </a>
+        <a class="bn-item" href="#/curation" data-route="curation">
+          <svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg>
+          <span class="label">Curation</span>
+          <span class="dot-active"></span>
+        </a>
+        <a class="bn-item" href="#/settings" data-route="settings">
+          <svg class="ic" aria-hidden="true"><use href="#ic-cog"/></svg>
+          <span class="label">Settings</span>
+          <span class="dot-active"></span>
+        </a>
       </div>
-      <div class="field">
-        <label>Max age (days, 0 = none)</label>
-        <input id="schedAge" type="number" min="0" value="0" data-tip="For news sources, drop articles older than this many days. 0 = no pruning." />
-      </div>
-      <div class="modal-actions">
-        <button id="schedSave" class="btn primary">Save</button>
-        <button id="schedCancel" class="btn">Cancel</button>
-      </div>
-    </div>
+    </nav>
   </div>
 
-  <div id="historyModal" class="modal" hidden>
-    <div class="modal-card wide">
-      <h3 id="histTitle">History</h3>
-      <div id="histBody" class="hist-body"></div>
-      <div class="modal-actions"><button id="histClose" class="btn">Close</button></div>
-    </div>
-  </div>
+  <!-- ── modals (one container; populated by JS) ──────────────────────── -->
+  <div id="modalRoot"></div>
 
-  <div id="infoModal" class="modal" hidden>
-    <div class="modal-card wide">
-      <h3 id="infoTitle">Seeder info</h3>
-      <div id="infoBody"></div>
-      <div class="modal-actions"><button id="infoDelete" class="btn danger">🗑 Delete</button><button id="infoClose" class="btn">Close</button></div>
-    </div>
-  </div>
+  <!-- ── toast region ──────────────────────────────────────────────────── -->
+  <div id="toastRegion" class="toast-region" role="region" aria-live="polite" aria-label="Notifications"></div>
 
-  <div id="buildModal" class="modal" hidden>
-    <div class="modal-card wide">
-      <h3 id="buildTitle">New seeder</h3>
-      <div class="field">
-        <label>Website URL</label>
-        <input id="buildUrl" type="text" placeholder="https://example.com" spellcheck="false" />
-        <span id="buildPreview" class="muted"></span>
-      </div>
-      <div class="build-grid">
-        <div class="field">
-          <label>Display name</label>
-          <input id="buildName" type="text" placeholder="Example Site" />
-        </div>
-        <div class="field">
-          <label>Source (unique slug)</label>
-          <input id="buildSource" type="text" placeholder="example" spellcheck="false" />
-        </div>
-        <div class="field">
-          <label>Category</label>
-          <select id="buildCategory"></select>
-        </div>
-        <div class="field">
-          <label>Subcategory</label>
-          <select id="buildSubcategory"></select>
-        </div>
-        <div class="field">
-          <label>Feed URL (optional — auto-discovered if blank)</label>
-          <input id="buildFeed" type="text" placeholder="https://example.com/feed/" spellcheck="false" />
-        </div>
-        <div class="field">
-          <label>Cadence</label>
-          <select id="buildCadence"></select>
-        </div>
-      </div>
-      <div class="field">
-        <label>Description</label>
-        <input id="buildDesc" type="text" placeholder="Auto-filled from the site if available" />
-      </div>
-      <div class="modal-actions">
-        <button id="buildCancel" class="btn">Cancel</button>
-        <button id="buildSave" class="btn primary">Save</button>
-        <button id="buildTest" class="btn primary">Test run</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="logDrawer" class="log-drawer" hidden>
-    <div class="log-drawer-head">
-      <span class="log-title">Live log</span>
-      <span id="runningBadge" class="running-badge"></span>
-      <span id="runProgress" class="run-progress"></span>
-      <div class="spacer"></div>
-      <button id="stopBtn" class="btn danger" disabled data-tip="Stop all currently running seeders.">⏹ Stop</button>
-      <button id="closeLogBtn" class="btn" data-tip="Close the live log.">✕ Close</button>
-    </div>
-    <div id="logTabs" class="log-tabs"></div>
-    <div id="logBody" class="log-body"></div>
-  </div>
-
-  <div id="toast" class="toast" hidden></div>
-
-  <nav class="bottom-nav">
-    <button class="bn-item active" data-tab="dashboard"><span class="bn-ico">🏠</span><span class="bn-label">Home</span></button>
-    <button class="bn-item" data-tab="seeders"><span class="bn-ico">📡</span><span class="bn-label">Seeders</span></button>
-    <button class="bn-item" data-tab="timer"><span class="bn-ico">⏰</span><span class="bn-label">Timer</span></button>
-    <button class="bn-item" data-tab="pipeline"><span class="bn-ico">🧪</span><span class="bn-label">Pipeline</span></button>
-    <button class="bn-item" data-tab="stats"><span class="bn-ico">📊</span><span class="bn-label">Stats</span></button>
-    <button class="bn-item" data-tab="curation"><span class="bn-ico">🗑️</span><span class="bn-label">Curation</span></button>
-    <button class="bn-item" data-tab="settings"><span class="bn-ico">⚙️</span><span class="bn-label">Settings</span></button>
-  </nav>
-
-  <script src="/app.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>
+
+      </section>
+
+      <!-- Settings ─────────────────────────────────────────────── -->
+      <section id="panel-settings" class="panel" data-route="settings" aria-label="Settings">
+        <h1 class="h-page">Settings</h1>
+        <div id="settingsBody"></div>
+      </section>
+    </main>
+
+                <th class="col-actions"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="seederBody"></tbody>
+          </table>
+        </div>
+
+        <div class="seeder-cards" id="seederCards" aria-label="Seeders (cards)"></div>
+      </section>
+
+      </div>
+    </nav>
+
+

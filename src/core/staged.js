@@ -18,7 +18,10 @@ export function stagedDir() {
   return getConfig().stagedDir;
 }
 
-/** Per-file summary of staged JSONL (for the cache/curation UI). */
+/** Per-file summary of staged JSONL (for the cache/curation UI).
+ *  `originalSource` is the source string actually written into the rows
+ *  (may differ from the safe filename when the source contains characters
+ *  like "." that get rewritten by `safe()`). Use it for prune/clear. */
 export function listStagedFiles() {
   const dir = stagedDir();
   if (!existsSync(dir)) return [];
@@ -27,8 +30,22 @@ export function listStagedFiles() {
     .map((f) => {
       const file = join(dir, f);
       const raw = readFileSync(file, "utf8");
-      const count = raw.split("\n").filter((l) => l.trim()).length;
-      return { source: f.replace(/\.jsonl$/, ""), file, count, bytes: Buffer.byteLength(raw) };
+      const lines = raw.split("\n");
+      const count = lines.filter((l) => l.trim()).length;
+      const filename = f.replace(/\.jsonl$/, "");
+      let originalSource = filename;
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const row = JSON.parse(t);
+          if (row && typeof row.source === "string" && row.source) {
+            originalSource = row.source;
+            break;
+          }
+        } catch { /* skip malformed */ }
+      }
+      return { source: filename, originalSource, file, count, bytes: Buffer.byteLength(raw) };
     })
     .sort((a, b) => b.count - a.count);
 }

@@ -1,9 +1,9 @@
-"use strict";
-
-/* Skyhook Control — browser GUI over the skyhook HTTP API.
+﻿/* Skyhook Control — browser GUI over the skyhook HTTP API.
  * Zero dependencies; served from src/gui/ by interfaces/api-server.js. */
 
-const $ = (sel, root = document) => root.querySelector(sel);
+"use strict";
+
+const $  = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const esc = (s) =>
@@ -11,11 +11,15 @@ const esc = (s) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]),
   );
 
+const debounce = (fn, ms = 100) => {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+};
+
 const CADENCES = ["hourly", "6h", "12h", "daily", "weekly", "monthly", "manual"];
 const CADENCE_MS = {
-  hourly: 3600e3, "6h": 6 * 3600e3, "12h": 12 * 3600e3,
-  daily: 24 * 3600e3, weekly: 7 * 24 * 3600e3, monthly: 30 * 24 * 3600e3,
-  manual: Infinity,
+  hourly: 3600e3, "6h": 6*3600e3, "12h": 12*3600e3,
+  daily:  24*3600e3, weekly: 7*24*3600e3, monthly: 30*24*3600e3, manual: Infinity,
 };
 const CADENCE_TIP = {
   hourly: "Every hour — for very fast-moving sources.",
@@ -26,96 +30,92 @@ const CADENCE_TIP = {
   monthly: "Once a month — slow, archival sources.",
   manual: "Never auto-run — run on demand only.",
 };
-
-const state = {
-  seeders: [],
-  running: [],
-  batch: null,
-  pipe: null,
-  sortKey: "source",
-  sortDir: 1,
-  selected: new Set(),
-  apiBase: localStorage.getItem("skyhook.apiBase") || "",
-  live: null,
-  logTimer: null,
-  logSources: [],
-  followLog: true,
-  userTab: null,   // set ONLY by tab click; never overwritten by openLogDrawer / poll
-  historySource: null,
-  wasRunning: false,
-  categories: [],
-  infoSource: null,
-  taggingGaps: null,
+const GAP_LABELS = {
+  category: "Missing categories", subcategory: "Missing subcategories",
+  tags: "Untagged URLs", contentType: "Missing content types",
+  quality: "Missing quality", attributes: "Missing attributes",
 };
 
-// ── API ─────────────────────────────────────────────────────────────────────
+const state = {
+  seeders: [], running: [], batch: null, pipe: null,
+  sortKey: "source", sortDir: 1, selected: new Set(),
+  apiBase: localStorage.getItem("skyhook.apiBase") || "",
+  live: null, logSources: [], followLog: true, userTab: null,
+  historySource: null, wasRunning: false, categories: [],
+  infoSource: null, taggingGaps: null,
+  route: { name: "dashboard", params: {} },
+  nodeId: "local",
+};
+
 const apiBase = () => {
   if (state.apiBase.trim()) return state.apiBase.trim().replace(/\/+$/, "");
-  if (window.location.protocol === "file:") return "http://localhost:4173";
   return window.location.origin;
 };
 
+const REQUEST_TIMEOUT_MS = 15000;
 async function api(method, path, body) {
-  const res = await fetch(apiBase() + path, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
-  return data;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(apiBase() + path, {
+      method, signal: ctrl.signal,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    let data = {};
+    if (text) { try { data = JSON.parse(text); } catch { data = { error: text.slice(0, 200) }; } }
+    if (!res.ok) throw new Error(data.error || res.status + " " + res.statusText);
+    return data;
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("Request timed out (15s)");
+    throw err;
+  } finally { clearTimeout(t); }
 }
-
-const get = (p) => api("GET", p);
+const get  = (p)    => api("GET", p);
 const post = (p, b) => api("POST", p, b || {});
 
-// ── formatting ──────────────────────────────────────────────────────────────
 function fmtAgo(iso) {
   if (!iso) return "—";
   const ms = Date.now() - new Date(iso).getTime();
   if (ms < 0) return "now";
   const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
+  if (s < 60) return s + "s ago";
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
+  if (m < 60) return m + "m ago";
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
+  if (h < 24) return h + "h ago";
+  return Math.floor(h / 24) + "d ago";
 }
-
 function fmtIn(iso) {
   if (!iso) return "—";
   const ms = new Date(iso).getTime() - Date.now();
   if (ms < 0) return "due";
   const s = Math.floor(ms / 1000);
-  if (s < 60) return `in ${s}s`;
+  if (s < 60) return "in " + s + "s";
   const m = Math.floor(s / 60);
-  if (m < 60) return `in ${m}m`;
+  if (m < 60) return "in " + m + "m";
   const h = Math.floor(m / 60);
-  if (h < 24) return `in ${h}h`;
-  return `in ${Math.floor(h / 24)}d`;
+  if (h < 24) return "in " + h + "h";
+  return "in " + Math.floor(h / 24) + "d";
 }
-
-const fmtDur = (ms) => (ms == null ? "" : `${(ms / 1000).toFixed(1)}s`);
 const fmtElapsed = (ms) => {
-  if (ms == null) return "";
+  if (ms == null) return "—";
   const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
+  if (s < 60) return s + "s";
   const m = Math.floor(s / 60);
-  return `${m}m ${s % 60}s`;
+  return m + "m " + (s % 60) + "s";
 };
-const resultText = (r) => (r ? `+${r.staged ?? 0} −${r.dead ?? 0}` : "");
-
+const resultText = (r) => (r ? ("+" + (r.staged ?? 0) + " âˆ’" + (r.dead ?? 0)) : "");
 const fmtEta = (ms) => {
   if (ms == null || !isFinite(ms)) return "—";
   const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s`;
+  if (s < 60) return s + "s";
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
+  if (m < 60) return m + "m " + (s % 60) + "s";
   const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
+  return h + "h " + (m % 60) + "m";
 };
-
 function isDueClient(s) {
   if (!s.scheduled || s.cadence === "manual") return false;
   if (!s.lastRunAt) return true;
@@ -123,32 +123,153 @@ function isDueClient(s) {
   if (!isFinite(ms)) return false;
   return Date.now() - new Date(s.lastRunAt).getTime() >= ms;
 }
-
-// ── toast ───────────────────────────────────────────────────────────────────
-let toastTimer = null;
-function toast(msg, kind = "") {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.className = "toast show " + kind;
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 4500);
+function isErrorStatus(s) {
+  return s.lastStatus && s.lastStatus !== "ok" && s.lastRunAt;
 }
 
-// ── tabs ────────────────────────────────────────────────────────────────────
-function showTab(name) {
-  $$(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
-  $$(".bottom-nav .bn-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
-  $$(".panel").forEach((p) => p.classList.toggle("active", p.id === name));
-  if (name === "stats") renderAnalytics();
-  else if (name === "curation") renderCuration();
-  else if (name === "settings") renderSettings();
+let toasts = [];
+function toast(msg, kind) {
+  const region = $("#toastRegion");
+  const el = document.createElement("div");
+  el.className = "toast " + (kind || "");
+  const iconId = kind === "err" ? "ic-warning" : kind === "ok" ? "ic-check" : "ic-bell";
+  el.innerHTML =
+    '<svg class="ic" aria-hidden="true"><use href="#' + iconId + '"/></svg>' +
+    '<div class="body"></div>' +
+    '<button class="close" type="button" aria-label="Dismiss">' +
+    '<svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg>' +
+    '</button>';
+  el.querySelector(".body").textContent = msg;
+  const remove = () => {
+    el.style.transition = "opacity .15s, transform .15s";
+    el.style.opacity = "0";
+    el.style.transform = "translateY(8px)";
+    setTimeout(() => { el.remove(); toasts = toasts.filter((t) => t !== el); }, 160);
+  };
+  el.querySelector(".close").addEventListener("click", remove);
+  region.appendChild(el);
+  toasts.push(el);
+  setTimeout(remove, 4500);
 }
 
-// ── seeders table ───────────────────────────────────────────────────────────
+let activeModal = null, lastFocus = null, modalKeyHandler = null;
+function openModal(build) {
+  closeModal();
+  lastFocus = document.activeElement;
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  const modal = document.createElement("div");
+  modal.className = "modal";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("tabindex", "-1");
+  build(modal, closeModal);
+  backdrop.appendChild(modal);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeModal(); });
+  $("#modalRoot").appendChild(backdrop);
+  activeModal = backdrop;
+  const focusable = modal.querySelector("input, select, textarea, button, [tabindex]");
+  if (focusable) focusable.focus();
+  modalKeyHandler = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closeModal(); return; }
+    if (e.key !== "Tab") return;
+    const all = [...modal.querySelectorAll("input, select, textarea, button, [tabindex]")]
+      .filter((el) => !el.disabled && el.offsetParent !== null);
+    if (!all.length) return;
+    const first = all[0], last = all[all.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+  document.addEventListener("keydown", modalKeyHandler);
+}
+function closeModal() {
+  if (!activeModal) return;
+  activeModal.remove();
+  activeModal = null;
+  if (modalKeyHandler) document.removeEventListener("keydown", modalKeyHandler);
+  modalKeyHandler = null;
+  if (lastFocus && lastFocus.focus) lastFocus.focus();
+}
+function modalShell(modal, opts) {
+  const head = document.createElement("div");
+  head.className = "modal-head";
+  const h = document.createElement("h3");
+  h.textContent = opts.title;
+  const close = document.createElement("button");
+  close.className = "icon-btn";
+  close.type = "button";
+  close.setAttribute("aria-label", "Close");
+  close.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#ic-x"/></svg>';
+  close.addEventListener("click", closeModal);
+  head.append(h, close);
+  modal.appendChild(head);
+  if (opts.body) {
+    const m = document.createElement("div");
+    m.className = "modal-body";
+    if (typeof opts.body === "string") m.innerHTML = opts.body;
+    else m.appendChild(opts.body);
+    modal.appendChild(m);
+  }
+  if (opts.actions) {
+    const foot = document.createElement("div");
+    foot.className = "modal-foot";
+    opts.actions.forEach((a) => foot.appendChild(a));
+    modal.appendChild(foot);
+  }
+}
+
+function parseRoute() {
+  const hash = window.location.hash.replace(/^#/, "") || "/";
+  const parts = hash.split("/").filter(Boolean);
+  if (parts.length === 0) return { name: "dashboard", params: {} };
+  if (parts[0] === "seeders") return { name: "seeders", params: {} };
+  if (parts[0] === "log") return { name: "log", params: { source: parts[1] ? decodeURIComponent(parts[1]) : null } };
+  if (parts[0] === "pipeline") return { name: "pipeline", params: {} };
+  if (parts[0] === "stats") return { name: "stats", params: {} };
+  if (parts[0] === "curation") return { name: "curation", params: {} };
+  if (parts[0] === "timer") return { name: "timer", params: {} };
+  if (parts[0] === "settings") return { name: "settings", params: {} };
+  return { name: "dashboard", params: {} };
+}
+function navigate(hash) {
+  if (window.location.hash === hash) handleRouteChange();
+  else window.location.hash = hash;
+}
+function isPiNode() { return /pi/i.test(state.nodeId || ""); }
+function applyNodeVisibility() {
+  const show = isPiNode();
+  $$("[data-pi-only]").forEach((el) => { el.style.display = show ? "" : "none"; });
+  if (!show && state.route.name === "timer") navigate("#/");
+}
+function handleRouteChange() {
+  const r = parseRoute();
+  state.route = r;
+  $$(".panel").forEach((p) => p.classList.toggle("active", p.dataset.route === r.name));
+  $$(".sidenav-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === r.name));
+  if (r.name === "timer" && !isPiNode()) { navigate("#/"); return; }
+  if (r.name === "dashboard") renderDashboard();
+  if (r.name === "seeders") renderSeeders();
+  if (r.name === "pipeline") renderPipeline();
+  if (r.name === "stats") renderAnalytics();
+  if (r.name === "curation") renderCuration();
+  if (r.name === "settings") renderSettings();
+  if (r.name === "timer") renderTimer();
+  if (r.name === "log") {
+    // If no specific source, fall back to the first running seeder (or the
+    // most recent log source) so the mobile "Logs" nav item always lands.
+    const src = r.params.source || (state.running[0] && state.running[0].source) || logPageState.source;
+    openLogPage(src);
+  }
+  if (r.name !== "log") closeLogPage();
+}
+
+async function loadSeeders()    { state.seeders = await get("/api/seeders?limit=5000"); }
+async function loadRunning()    { const r = await get("/api/running").catch(() => ({ running: [] })); state.running = r.running || []; state.batch = r.batch || null; }
+async function loadPipeline()   { state.pipe = await get("/api/pipeline").catch(() => null); }
+
 function filtered() {
-  const f = $("#filter").value.trim().toLowerCase();
-  const tier = $("#tierFilter").value;
+  const f     = $("#filter").value.trim().toLowerCase();
+  const tier  = $("#tierFilter").value;
   const sched = $("#schedFilter").value;
   const status = $("#statusFilter").value;
   let rows = state.seeders;
@@ -160,233 +281,155 @@ function filtered() {
       (s.categoryLabel || "").toLowerCase().includes(f) ||
       (s.subcategoryLabel || "").toLowerCase().includes(f));
   }
-  if (tier === "news") rows = rows.filter((s) => s.isNews);
+  if (tier === "news")      rows = rows.filter((s) => s.isNews);
   if (tier === "evergreen") rows = rows.filter((s) => !s.isNews);
-  if (sched === "1") rows = rows.filter((s) => s.scheduled);
-  if (sched === "0") rows = rows.filter((s) => !s.scheduled);
-  if (status === "due") rows = rows.filter(isDueClient);
-  if (status === "errors") rows = rows.filter((s) => s.lastStatus && s.lastStatus !== "ok");
-
+  if (sched === "1")        rows = rows.filter((s) => s.scheduled);
+  if (sched === "0")        rows = rows.filter((s) => !s.scheduled);
+  if (status === "due")     rows = rows.filter(isDueClient);
+  if (status === "errors")  rows = rows.filter(isErrorStatus);
+  return rows;
+}
+function sorted(rows) {
   const k = state.sortKey;
   return [...rows].sort((a, b) => {
-    const av = a[k];
-    const bv = b[k];
+    const av = a[k], bv = b[k];
     if (av == null && bv == null) return 0;
     if (av == null) return 1;
     if (bv == null) return -1;
-    const cmp = typeof av === "number" ? av - bv
-      : String(av).localeCompare(String(bv), undefined, { sensitivity: "base" });
+    const cmp = typeof av === "number" ? av - bv : String(av).localeCompare(String(bv), undefined, { sensitivity: "base" });
     return cmp * state.sortDir;
   });
 }
 
 function renderSeeders() {
-  const rows = filtered();
-  $("#countLabel").textContent = `${rows.length} / ${state.seeders.length}`;
+  const rows = sorted(filtered());
+  const countLabel = $("#countLabel");
+  if (countLabel) countLabel.textContent = rows.length + " / " + state.seeders.length;
+  const runningSet = new Set(state.running.map((r) => r.source));
+  const badge = $("#seederCountBadge");
+  if (badge) badge.textContent = state.seeders.length;
   const tbody = $("#seederBody");
   tbody.innerHTML = "";
-  const runningSet = new Set(state.running.map((r) => r.source));
   for (const s of rows) {
     const tr = document.createElement("tr");
     const statusCls = s.lastStatus === "ok" ? "ok" : s.lastStatus ? "err" : "";
     const result = resultText(s.lastResult);
     const isRunning = runningSet.has(s.source);
-    tr.innerHTML = `
-      <td class="col-check"><input type="checkbox" data-source="${esc(s.source)}" ${state.selected.has(s.source) ? "checked" : ""}></td>
-      <td class="src" title="${esc(s.script)}">${esc(s.source)}${isRunning ? ' <span class="spin">●</span>' : ""}</td>
-      <td class="name muted"${s.description ? ` data-tip="${esc(s.description)}"` : ""}>${esc(s.displayName || "")}</td>
-      <td class="muted">${esc(s.categoryLabel || "")}${s.subcategoryLabel ? " · " + esc(s.subcategoryLabel) : ""}</td>
-      <td><span class="cadence ${s.scheduled ? "" : "manual"}" data-tip="${esc(CADENCE_TIP[s.cadence] || "")}">${esc(s.cadence)}</span></td>
-      <td><span class="tier ${s.isNews ? "news" : "evergreen"}" data-tip="${s.isNews ? "News — age-pruned by max-age." : "Evergreen — kept indefinitely."}">${s.isNews ? "news" : "evergreen"}</span></td>
-      <td>${fmtAgo(s.lastRunAt)}</td>
-      <td class="result ${statusCls}">${result || (s.lastError ? esc(s.lastError) : s.lastStatus ? esc(s.lastStatus) : "—")}</td>
-      <td>${fmtIn(s.nextRunAt)}</td>
-      <td class="col-actions">
-        <button class="mini" data-action="run" data-source="${esc(s.source)}" title="Run now">▶</button>
-        <button class="mini" data-action="schedule" data-source="${esc(s.source)}" title="Edit schedule">⚙</button>
-        <button class="mini" data-action="toggle" data-source="${esc(s.source)}" title="${s.scheduled ? "Disable (remove from schedule)" : "Enable (add to schedule)"}">${s.scheduled ? "⏻" : "+"}</button>
-        <button class="mini" data-action="info" data-source="${esc(s.source)}" title="View all metadata">ℹ</button>
-        <button class="mini" data-action="history" data-source="${esc(s.source)}" title="Run history">🗒</button>
-      </td>`;
+    tr.innerHTML =
+      '<td class="col-check"><input type="checkbox" data-source="' + esc(s.source) + '"' + (state.selected.has(s.source) ? " checked" : "") + ' aria-label="Select ' + esc(s.source) + '"></td>' +
+      '<td><a class="row-link" href="#/log/' + encodeURIComponent(s.source) + '">' + esc(s.source) + (isRunning ? ' <span class="spin-pulse" aria-label="running"></span>' : "") + '</a></td>' +
+      '<td class="muted">' + esc(s.displayName || "") + '</td>' +
+      '<td class="muted">' + esc(s.categoryLabel || "") + (s.subcategoryLabel ? " · " + esc(s.subcategoryLabel) : "") + '</td>' +
+      '<td><span class="cadence ' + (s.scheduled ? "" : "manual") + '" title="' + esc(CADENCE_TIP[s.cadence] || "") + '">' + esc(s.cadence) + '</span></td>' +
+      '<td><span class="tier ' + (s.isNews ? "news" : "evergreen") + '">' + (s.isNews ? "news" : "evergreen") + '</span></td>' +
+      '<td class="muted">' + esc(fmtAgo(s.lastRunAt)) + '</td>' +
+      '<td class="' + statusCls + '">' + esc(result || (s.lastError ? s.lastError : s.lastStatus || "—")) + '</td>' +
+      '<td class="muted">' + esc(fmtIn(s.nextRunAt)) + '</td>' +
+      '<td class="col-actions">' +
+        '<button class="icon-btn sm" data-action="run" data-source="' + esc(s.source) + '" aria-label="Run ' + esc(s.source) + '" title="Run now"><svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg></button>' +
+        '<button class="icon-btn sm" data-action="schedule" data-source="' + esc(s.source) + '" aria-label="Edit schedule" title="Edit schedule"><svg class="ic" aria-hidden="true"><use href="#ic-cog"/></svg></button>' +
+        '<button class="icon-btn sm" data-action="toggle" data-source="' + esc(s.source) + '" aria-label="Toggle schedule" title="' + (s.scheduled ? "Disable" : "Enable") + '"><svg class="ic" aria-hidden="true"><use href="#ic-power"/></svg></button>' +
+      '</td>';
     tbody.appendChild(tr);
   }
-
-  // Mobile card list (hidden on desktop via CSS; shown on small screens).
-  const cardsEl = $("#seederCards");
-  if (cardsEl) {
-    cardsEl.innerHTML = rows.map((s) => {
-      const isRunning = runningSet.has(s.source);
-      const statusCls = s.lastStatus === "ok" ? "ok" : s.lastStatus ? "err" : "";
-      const result = resultText(s.lastResult);
-      return `
-      <article class="seeder-card">
-        <div class="sc-head">
-          <label class="sc-check"><input type="checkbox" data-source="${esc(s.source)}" ${state.selected.has(s.source) ? "checked" : ""}></label>
-          <div class="sc-title">
-            <div class="sc-src">${esc(s.source)}${isRunning ? ' <span class="spin">●</span>' : ""}</div>
-            ${s.displayName ? `<div class="sc-name">${esc(s.displayName)}</div>` : ""}
-          </div>
-          <span class="cadence ${s.scheduled ? "" : "manual"}">${esc(s.cadence)}</span>
-          <span class="tier ${s.isNews ? "news" : "evergreen"}">${s.isNews ? "news" : "evergreen"}</span>
-        </div>
-        ${s.categoryLabel ? `<div class="sc-meta">${esc(s.categoryLabel)}${s.subcategoryLabel ? " · " + esc(s.subcategoryLabel) : ""}</div>` : ""}
-        <div class="sc-status ${statusCls}">${result || (s.lastError ? esc(s.lastError) : s.lastStatus ? esc(s.lastStatus) : "never run")}${s.lastRunAt ? ` · ${fmtAgo(s.lastRunAt)} ago` : ""}</div>
-        <div class="sc-actions">
-          <button class="mini" data-action="run" data-source="${esc(s.source)}" title="Run now">▶</button>
-          <button class="mini" data-action="schedule" data-source="${esc(s.source)}" title="Edit schedule">⚙</button>
-          <button class="mini" data-action="toggle" data-source="${esc(s.source)}" title="${s.scheduled ? "Disable (remove from schedule)" : "Enable (add to schedule)"}">${s.scheduled ? "⏻" : "+"}</button>
-          <button class="mini" data-action="info" data-source="${esc(s.source)}" title="View all metadata">ℹ</button>
-          <button class="mini" data-action="history" data-source="${esc(s.source)}" title="Run history">🗒</button>
-        </div>
-      </article>`;
-    }).join("");
-  }
-
-  $("#checkAll").checked = rows.length > 0 && rows.every((s) => state.selected.has(s.source));
-  $("#runSelectedBtn").disabled = state.selected.size === 0;
+  updateBulkBar();
+}
+function updateBulkBar() {
+  const checkAll = $("#checkAll");
+  const rows = filtered();
+  if (checkAll) checkAll.checked = rows.length > 0 && rows.every((s) => state.selected.has(s.source));
+  const sel = state.selected.size;
+  const runBtn = $("#runSelectedBtn");
+  if (runBtn) runBtn.disabled = sel === 0;
+  const enableBtn = $("#bulkEnableBtn");
+  const disableBtn = $("#bulkDisableBtn");
+  if (enableBtn)  enableBtn.disabled  = sel === 0;
+  if (disableBtn) disableBtn.disabled = sel === 0;
+  const selCount = $("#selectedCount");
+  if (selCount) selCount.textContent = sel ? (sel + " selected") : "";
 }
 
-// ── data loading / rendering ────────────────────────────────────────────────
-async function loadSeeders() {
-  state.seeders = await get("/api/seeders?limit=5000");
-}
-
-async function loadRunning() {
-  const r = await get("/api/running").catch(() => ({}));
-  state.running = Array.isArray(r) ? r : (r.running || []);
-  state.batch = Array.isArray(r) ? null : (r.batch || null);
-}
-
-async function loadPipeline() {
-  state.pipe = await get("/api/pipeline").catch(() => null);
-}
-
-function renderStats() {
+function renderDashboard() {
   const total = state.seeders.length;
   const scheduled = state.seeders.filter((s) => s.scheduled).length;
   const due = state.seeders.filter(isDueClient).length;
-  const errors = state.seeders.filter((s) => s.lastStatus && s.lastStatus !== "ok").length;
-  $("#stats").innerHTML = `
-    <div class="stat" data-goto="seeders" data-tip="Click to view all seeders.">
-      <span class="stat-num">${total}</span><span class="stat-label">seeders</span>
-    </div>
-    <div class="stat" data-goto="scheduled" data-tip="Click to view scheduled seeders and their cadence / tier / max-age.">
-      <span class="stat-num">${scheduled}</span><span class="stat-label">scheduled</span>
-    </div>
-    <div class="stat ${due ? "warn" : ""}" data-goto="due" data-tip="Click to view seeders due to run now.">
-      <span class="stat-num">${due}</span><span class="stat-label">due now</span>
-    </div>
-    <div class="stat ${errors ? "bad" : ""}" data-goto="errors" data-tip="Click to view an organized list of seeders whose last run failed.">
-      <span class="stat-num">${errors}</span><span class="stat-label">errors</span>
-    </div>`;
-}
+  const errors = state.seeders.filter(isErrorStatus).length;
+  $("#dashStats").innerHTML =
+    '<a class="stat" href="#/seeders" data-jump="all"><span class="stat-num">' + total + '</span><span class="stat-label">seeders</span></a>' +
+    '<a class="stat ok" href="#/seeders" data-jump="scheduled"><span class="stat-num">' + scheduled + '</span><span class="stat-label">scheduled</span></a>' +
+    '<a class="stat ' + (due ? "warn" : "") + '" href="#/seeders" data-jump="due"><span class="stat-num">' + due + '</span><span class="stat-label">due now</span></a>' +
+    '<a class="stat ' + (errors ? "err" : "") + '" href="#/seeders" data-jump="errors"><span class="stat-num">' + errors + '</span><span class="stat-label">errors</span></a>';
+  $("#dashStats").onclick = (e) => {
+    const card = e.target.closest("[data-jump]");
+    if (!card) return;
+    e.preventDefault();
+    const t = card.dataset.jump;
+    if (t === "scheduled") $("#schedFilter").value = "1";
+    else if (t === "due") $("#statusFilter").value = "due";
+    else if (t === "errors") $("#statusFilter").value = "errors";
+    else { $("#schedFilter").value = ""; $("#statusFilter").value = ""; }
+    navigate("#/seeders");
+  };
 
-function renderRunning() {
-  const el = $("#runningList");
-  if (!state.running.length) {
-    el.innerHTML = '<p class="muted">Nothing running.</p>';
-    return;
+  const runningEl = $("#runningList");
+  if (state.running.length) {
+    runningEl.innerHTML = state.running.map((r) =>
+      '<div class="due-row">' +
+        '<span class="spin-pulse"></span>' +
+        '<strong>' + esc(r.source) + '</strong>' +
+        '<span class="muted">' + esc(fmtElapsed(r.elapsedMs)) + '</span>' +
+        '<a class="btn btn-sm" href="#/log/' + encodeURIComponent(r.source) + '">View log</a>' +
+        '<button class="icon-btn sm" data-stop-one="' + esc(r.source) + '" aria-label="Stop ' + esc(r.source) + '" title="Stop">' +
+          '<svg class="ic" aria-hidden="true"><use href="#ic-stop"/></svg>' +
+        '</button>' +
+      '</div>').join("");
+  } else {
+    runningEl.innerHTML = '<p class="muted" style="padding: var(--space-3);">Nothing running.</p>';
   }
-  el.innerHTML = state.running.map((r) => `
-    <div class="due-row">
-      <span class="spin">●</span>
-      <strong>${esc(r.source)}</strong>
-      <span class="muted">${fmtElapsed(r.elapsedMs)}</span>
-      <button class="mini" data-action="stop-one" data-source="${esc(r.source)}" title="Stop this seeder">⏹</button>
-    </div>`).join("");
-}
 
-function renderFailures() {
-  const el = $("#failList");
-  const fails = state.seeders.filter((s) => s.lastStatus && s.lastStatus !== "ok")
-    .sort((a, b) => (b.lastRunAt || "").localeCompare(a.lastRunAt || ""));
-  if (!fails.length) {
-    el.innerHTML = '<p class="muted">No failures. 🎉</p>';
-    return;
+  const failEl = $("#failList");
+  const fails = state.seeders.filter(isErrorStatus).sort((a, b) => (b.lastRunAt || "").localeCompare(a.lastRunAt || ""));
+  if (fails.length) {
+    failEl.innerHTML = fails.slice(0, 30).map((s) =>
+      '<div class="due-row">' +
+        '<a class="row-link" href="#/log/' + encodeURIComponent(s.source) + '">' + esc(s.source) + '</a>' +
+        '<span class="badge err">' + esc(s.lastStatus || "error") + '</span>' +
+        '<span class="muted" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + esc(s.lastError || "") + '</span>' +
+        '<span class="muted">' + esc(fmtAgo(s.lastRunAt)) + '</span>' +
+        '<button class="icon-btn sm" data-action="run" data-source="' + esc(s.source) + '" aria-label="Retry ' + esc(s.source) + '" title="Retry now">' +
+          '<svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg>' +
+        '</button>' +
+      '</div>').join("");
+  } else {
+    failEl.innerHTML = '<p class="muted" style="padding: var(--space-3);">No failures. ✓</p>';
   }
-  el.innerHTML = fails.slice(0, 30).map((s) => `
-    <div class="fail-row">
-      <strong>${esc(s.source)}</strong>
-      <span class="badge err">${esc(s.lastStatus || "error")}</span>
-      <span class="muted">${esc(s.lastError || "")}</span>
-      <span class="muted">${fmtAgo(s.lastRunAt)}</span>
-      <button class="mini" data-action="run" data-source="${esc(s.source)}" title="Retry now">▶</button>
-    </div>`).join("");
-}
 
-async function renderDashboard() {
-  renderStats();
-  renderRunning();
-  renderFailures();
-  const due = state.seeders.filter(isDueClient);
-  const list = $("#dueList");
-  if (!due.length) {
-    list.innerHTML = '<p class="muted">Nothing due right now.</p>';
-    return;
+  const dueNow = state.seeders.filter(isDueClient);
+  const dueEl = $("#dueList");
+  if (dueNow.length) {
+    dueEl.innerHTML = dueNow.slice(0, 60).map((s) =>
+      '<div class="due-row">' +
+        '<a class="row-link" href="#/log/' + encodeURIComponent(s.source) + '" title="' + esc(s.script || "") + '">' + esc(s.source) + '</a>' +
+        '<span class="muted">' + esc(s.cadence) + '</span>' +
+        '<span class="muted">last ' + esc(fmtAgo(s.lastRunAt)) + '</span>' +
+        '<button class="icon-btn sm" data-action="run" data-source="' + esc(s.source) + '" aria-label="Run ' + esc(s.source) + '">' +
+          '<svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg>' +
+        '</button>' +
+      '</div>').join("");
+  } else {
+    dueEl.innerHTML = '<p class="muted" style="padding: var(--space-3);">Nothing due right now.</p>';
   }
-  list.innerHTML = due.slice(0, 60).map((s) => `
-    <div class="due-row">
-      <strong title="${esc(s.script)}">${esc(s.source)}</strong>
-      <span class="muted">${esc(s.cadence)}</span>
-      <span class="muted">last ${fmtAgo(s.lastRunAt)}</span>
-      <button class="mini" data-action="run" data-source="${esc(s.source)}">▶</button>
-    </div>`).join("");
 }
 
-function fmtAge(ms) {
-  if (ms == null) return "—";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ${m % 60}m ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
+async function loadSettings()   { const s = await get("/api/settings").catch(() => null); if (s) { state.nodeId = (s.node && s.node.id) || "local"; applyNodeVisibility(); } return s; }
+async function loadCategories() { state.categories = await get("/api/categories").catch(() => []); }
 
-function renderPipeline() {
-  const p = state.pipe;
-  if (!p) return;
-
-  const cards = Array.isArray(p.cards) ? p.cards : [];
-  $("#pipelineCards").innerHTML = cards.map((c) => `
-    <div class="pipe-card">
-      <div class="pipe-num">${esc(c.value ?? "—")}</div>
-      <div class="pipe-label">${esc(c.label)}</div>
-      ${c.sub ? `<div class="pipe-sub">${esc(c.sub)}</div>` : ""}
-      ${(c.actions || []).map((a) => `<button class="btn ${a.danger ? "danger" : "primary"}" data-pipe="${esc(a.id)}" ${a.danger ? 'data-danger="1"' : ""} title="${esc(a.label)}">${esc(a.label)}</button>`).join("")}
-    </div>`).join("");
-
-  const checks = Array.isArray(p.checks) ? p.checks : [];
-  $("#pipelineChecks").innerHTML = checks.map((c) =>
-    `<span class="prereq ${c.ok ? "ok" : "bad"}">${c.ok ? "✓" : "✗"} ${esc(c.label)}</span>`).join("");
-
-  const jobs = Array.isArray(p.jobs) ? p.jobs : [];
-  $("#pipelineJobs").innerHTML = jobs.length
-    ? jobs.map((j) =>
-        `<div class="job-row"><span class="job-status ${esc(j.status || "")}"></span><span>${esc(j.label)}</span><span class="job-state">${esc(j.status || "")}</span></div>`).join("")
-    : "";
-
-  $("#pipelineNote").textContent = p.note || "";
-  renderPipelineGaps();
-  renderTaggingTasks();
-}
-
-const GAP_LABELS = {
-  category: "Missing categories",
-  subcategory: "Missing subcategories",
-  tags: "Untagged URLs",
-  contentType: "Missing content types",
-  quality: "Missing quality",
-  attributes: "Missing attributes",
-};
-
-function gapCards(missing, total) {
-  if (!missing) return '<p class="muted">No offline DB available.</p>';
+function gapCards(g) {
+  if (!g) return '<p class="muted">No offline DB available.</p>';
   const order = ["category", "subcategory", "tags", "contentType", "quality", "attributes"];
   return order.map((k) => {
-    const n = missing[k] ?? 0;
-    return `<div class="stat"><span class="stat-num">${Number(n).toLocaleString()}</span><span class="stat-label">${GAP_LABELS[k]}</span></div>`;
+    const n = (g.missing && g.missing[k]) ?? 0;
+    return '<div class="stat" style="cursor: default;"><span class="stat-num">' + Number(n).toLocaleString() + '</span><span class="stat-label">' + GAP_LABELS[k] + '</span></div>';
   }).join("");
 }
 
@@ -396,42 +439,52 @@ async function loadTaggingGaps() {
   return g;
 }
 
-async function renderPipelineGaps() {
-  let g = state.taggingGaps;
-  if (!g) g = await loadTaggingGaps();
-  if (!g) { $("#taggingGaps").innerHTML = ""; return; }
-  $("#taggingGaps").innerHTML = gapCards(g.missing, g.total);
-}
-
-async function renderStatsGaps() {
-  const g = await loadTaggingGaps();
-  if (!g) { $("#statsGaps").innerHTML = '<p class="muted">Unavailable.</p>'; return; }
-  $("#statsGaps").innerHTML = gapCards(g.missing, g.total);
+async function renderPipeline() {
+  await loadPipeline();
+  const p = state.pipe || {};
+  const jobs = Array.isArray(p.jobs) ? p.jobs : [];
+  const cardsEl = $("#pipelineCards");
+  if (cardsEl) {
+    cardsEl.innerHTML = jobs.length
+      ? jobs.map((j) =>
+          '<div class="pipe-card' + (j.danger ? " danger" : "") + '">' +
+            '<span class="label">' + esc(j.label || j.key) + '</span>' +
+            '<span class="desc">' + esc(j.description || "") + '</span>' +
+            '<button class="btn ' + (j.danger ? "btn-danger" : "btn-primary") + '" data-pipe="' + esc(j.key) + '" data-danger="' + (j.danger ? "1" : "0") + '">' +
+              '<svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg>' +
+              '<span>Run</span>' +
+            '</button>' +
+          '</div>').join("")
+      : '<p class="muted">No pipeline jobs configured.</p>';
+  }
+  await loadTaggingGaps();
+  if (state.taggingGaps) $("#taggingGaps").innerHTML = gapCards(state.taggingGaps);
+  const note = $("#pipelineNote");
+  if (note) note.textContent = p.note || "";
+  await renderTaggingTasks();
 }
 
 async function renderTaggingTasks() {
-  try {
-    await loadTaggingGaps();
-    const g = state.taggingGaps;
-    const missing = g?.missing || {};
-    const tasks = [
-      { key: "fill-category", label: "Fill missing categories", count: missing.category },
-      { key: "fill-subcategory", label: "Fill missing subcategories", count: missing.subcategory },
-      { key: "fill-tags", label: "Add tags to untagged URLs", count: missing.tags },
-      { key: "fill-content-type", label: "Fill missing content types", count: missing.contentType },
-      { key: "fill-quality", label: "Fill missing quality", count: missing.quality },
-      { key: "fill-attributes", label: "Fill missing attributes", count: missing.attributes },
-    ];
-    const sel = $("#tagTask");
-    const prev = sel.value;
+  await loadTaggingGaps();
+  const g = state.taggingGaps;
+  const missing = (g && g.missing) || {};
+  const tasks = [
+    { key: "fill-category",    label: "Fill missing categories",    count: missing.category },
+    { key: "fill-subcategory", label: "Fill missing subcategories", count: missing.subcategory },
+    { key: "fill-tags",        label: "Add tags to untagged URLs",   count: missing.tags },
+    { key: "fill-content-type",label: "Fill missing content types", count: missing.contentType },
+    { key: "fill-quality",     label: "Fill missing quality",       count: missing.quality },
+    { key: "fill-attributes",  label: "Fill missing attributes",    count: missing.attributes },
+  ];
+  const sel = $("#tagTask");
+  const prev = sel && sel.value;
+  if (sel) {
     sel.innerHTML = '<option value="">Select a task…</option>' + tasks.map((t) =>
-      `<option value="${esc(t.key)}">${esc(t.label)}${t.count != null ? ` (${Number(t.count).toLocaleString()})` : ""}</option>`).join("");
+      '<option value="' + esc(t.key) + '">' + esc(t.label) + (t.count != null ? ' (' + Number(t.count).toLocaleString() + ')' : "") + '</option>').join("");
     if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
-    $("#runTaskBtn").disabled = false;
-  } catch (err) {
-    $("#tagTask").innerHTML = '<option value="">Unavailable</option>';
-    $("#runTaskBtn").disabled = true;
   }
+  const runBtn = $("#runTaskBtn");
+  if (runBtn) runBtn.disabled = false;
 }
 
 async function runTask() {
@@ -439,16 +492,9 @@ async function runTask() {
   if (!task) { toast("Select a task first.", "err"); return; }
   try {
     const res = await post("/api/tagging/run", { task });
-    toast(`Started ${res.task}.`);
-    // Open the live-log drawer to monitor progress.
-    const sources = state.running.length ? state.running.map((r) => r.source) : [];
-    openLogDrawer([...new Set([...sources, res.job])]);
-    startLogPolling();
-    await loadRunning();
-    renderLogTabs();
-  } catch (err) {
-    toast(err.message, "err");
-  }
+    toast("Started " + res.task + ".", "ok");
+    navigate("#/log/" + encodeURIComponent(res.job));
+  } catch (err) { toast(err.message, "err"); }
 }
 
 async function renderTimer() {
@@ -459,513 +505,395 @@ async function renderTimer() {
   $("#timerUnit").textContent = t.unit || "";
 }
 
-function updateRunningUI() {
-  const n = state.running.length;
-  $("#runningBadge").textContent = n ? `${n} running` : "";
-  $("#stopBtn").disabled = n === 0;
-  renderProgress();
-  updateShowLogBtn();
-  if (!n) stopLogPolling();
-}
-
-function renderProgress() {
-  const el = $("#runProgress");
-  if (!el) return;
-  const b = state.batch;
-  if (!b || !b.total) { el.textContent = ""; return; }
-  const eta = b.etaMs != null && b.etaMs > 0 ? ` · ~${fmtEta(b.etaMs)}` : "";
-  const cached = ` · +${Number(b.stagedTotal ?? 0).toLocaleString()} cached`;
-  el.textContent = `${b.remaining}/${b.total} remaining${eta}${cached}`;
-}
-
-// ── analytics / curation / settings tabs ───────────────────────────────────
 function barRow(label, count, pct) {
-  return `
-    <div class="bar-row">
-      <span class="bar-label">${esc(label)}</span>
-      <span class="bar-track"><span class="bar-fill" style="width:${Math.min(100, pct)}%"></span></span>
-      <span class="bar-count">${count.toLocaleString()} · ${pct}%</span>
-    </div>`;
+  return '<div class="bar-row">' +
+    '<span class="bar-label">' + esc(label) + '</span>' +
+    '<span class="bar-track"><span class="bar-fill" style="width:' + Math.min(100, pct) + '%"></span></span>' +
+    '<span class="bar-count">' + count.toLocaleString() + ' · ' + pct + '%</span>' +
+  '</div>';
 }
 
 async function renderAnalytics() {
   try {
     const s = await get("/api/stats");
-    $("#analyticsCards").innerHTML = `
-      <div class="stat"><span class="stat-num">${s.total.toLocaleString()}</span><span class="stat-label">staged URLs</span></div>
-      <div class="stat"><span class="stat-num">${s.seeders.toLocaleString()}</span><span class="stat-label">seeders</span></div>`;
+    $("#analyticsCards").innerHTML =
+      '<div class="stat" style="cursor: default;"><span class="stat-num">' + s.total.toLocaleString() + '</span><span class="stat-label">staged URLs</span></div>' +
+      '<div class="stat" style="cursor: default;"><span class="stat-num">' + s.seeders.toLocaleString() + '</span><span class="stat-label">seeders</span></div>';
     const list = (title, arr, limit) =>
-      (arr.length ? `<h3>${title}</h3>` + arr.slice(0, limit ?? arr.length).map((r) => barRow(r.label ?? r.key, r.count, r.pct)).join("") : "");
+      (arr.length ? '<h3 class="h-section">' + title + '</h3>' + arr.slice(0, limit || arr.length).map((r) => barRow(r.label || r.key, r.count, r.pct)).join("") : "");
     $("#analyticsBody").innerHTML = s.total
       ? list("By seeder", s.bySource, 25) + list("By category", s.byCategory) + list("By subcategory", s.bySubcategory, 25) + list("By language", s.byLanguage)
       : '<p class="muted">No staged results yet.</p>';
-    renderStatsGaps();
+    await loadTaggingGaps();
+    if (state.taggingGaps) $("#statsGaps").innerHTML = gapCards(state.taggingGaps);
   } catch (err) {
-    $("#analyticsBody").innerHTML = `<p class="muted">${esc(err.message)}</p>`;
-  }
-}
-
-async function renderSettings() {
-  try {
-    const s = await get("/api/settings");
-    const peers = s.remote.peers.length ? s.remote.peers.map((p) => `${esc(p.id)} → ${esc(p.url)}`).join("<br>") : "(none)";
-    $("#settingsBody").innerHTML = `
-      <div class="stats">
-        <div class="stat"><span class="stat-num">${esc(s.node.id)}</span><span class="stat-label">node id</span></div>
-        <div class="stat"><span class="stat-num">${s.node.allowRemote ? "ON" : "OFF"}</span><span class="stat-label">allow remote</span></div>
-        <div class="stat"><span class="stat-num">${s.remote.hasToken ? "set" : "—"}</span><span class="stat-label">token</span></div>
-      </div>
-      <p>${s.node.allowRemote ? "This node is a <strong>worker</strong> — it accepts remote control from a master." : "This node is <strong>standalone</strong> — a normal seeder manager."}</p>
-      <p class="muted">Peers: ${peers}</p>
-      <p><button id="toggleRemoteBtn" class="btn ${s.node.allowRemote ? "danger" : "primary"}">${s.node.allowRemote ? "⏻ Turn off remote control" : "⏻ Turn on remote control (worker)"}</button></p>`;
-    $("#toggleRemoteBtn").addEventListener("click", async () => {
-      try {
-        await post("/api/settings", { allowRemote: !s.node.allowRemote });
-        toast(s.node.allowRemote ? "Remote control off." : "Remote control on (worker).");
-        renderSettings();
-      } catch (err) { toast(err.message, "err"); }
-    });
-  } catch (err) {
-    $("#settingsBody").innerHTML = `<p class="muted">${esc(err.message)}</p>`;
+    $("#analyticsBody").innerHTML = '<p class="muted">' + esc(err.message) + '</p>';
   }
 }
 
 async function renderCuration() {
   try {
     const c = await get("/api/cache");
-    const stagedRows = c.staged.reduce((n, f) => n + f.count, 0);
-    const staged = c.staged.length
-      ? `<h3>Staged (${c.staged.length} sources, ${stagedRows.toLocaleString()} rows)</h3>
-        <div class="table-wrap"><table><thead><tr><th>Source</th><th>Rows</th><th>KB</th><th></th></tr></thead><tbody>
-        ${c.staged.map((f) => `<tr><td>${esc(f.source)}</td><td>${f.count.toLocaleString()}</td><td>${(f.bytes / 1024).toFixed(1)}</td><td><button class="mini" data-action="clear-staged" data-source="${esc(f.source)}">clear</button></td></tr>`).join("")}
-        </tbody></table></div>`
-      : '<p class="muted">No staged results.</p>';
-    const discovery = c.discovery.length
-      ? `<h3>Discovery cache (${c.discovery.length} files)</h3>
-        <div class="table-wrap"><table><thead><tr><th>Source</th><th>KB</th><th></th></tr></thead><tbody>
-        ${c.discovery.map((d) => `<tr><td>${esc(d.source)}</td><td>${(d.bytes / 1024).toFixed(1)}</td><td><button class="mini" data-action="clear-discovery" data-source="${esc(d.source)}">clear</button></td></tr>`).join("")}
-        </tbody></table></div>`
-      : '<p class="muted">No discovery cache.</p>';
-    $("#curationBody").innerHTML = staged + discovery;
+    const stageRows = (c.staged || []).reduce((n, f) => n + f.count, 0);
+    const body = $("#curationBody");
+
+    const stagedSection = (c.staged || []).length
+      ? '<div class="curate-section">' +
+          '<h2 class="h-section">Staged (' + c.staged.length + ' sources, ' + stageRows.toLocaleString() + ' rows)</h2>' +
+          (c.staged || []).map((f) =>
+            '<div class="curate-row">' +
+              '<div class="info">' +
+                '<div class="name">' + esc(f.originalSource !== f.source ? f.originalSource : f.source) + '</div>' +
+                (f.originalSource !== f.source ? '<div class="meta">file: ' + esc(f.source) + '</div>' : "") +
+              '</div>' +
+              '<div class="stat">' +
+                '<span class="count">' + f.count.toLocaleString() + '</span>' +
+                '<span class="bytes">' + (f.bytes / 1024).toFixed(1) + ' KB</span>' +
+              '</div>' +
+              '<div class="actions">' +
+                '<button class="btn btn-sm" data-action="clear-discovery" data-source="' + esc(f.originalSource) + '">Clear discovery</button>' +
+                '<button class="btn btn-sm btn-danger" data-action="clear-staged" data-source="' + esc(f.originalSource) + '">Clear staged</button>' +
+              '</div>' +
+            '</div>').join("") +
+        '</div>'
+      : '<h2 class="h-section">Staged</h2><p class="muted">No staged results.</p>';
+
+    const discoverySection = (c.discovery || []).length
+      ? '<div class="curate-section">' +
+          '<h2 class="h-section">Discovery cache (' + c.discovery.length + ' files)</h2>' +
+          (c.discovery || []).map((d) =>
+            '<div class="curate-row">' +
+              '<div class="info"><div class="name">' + esc(d.source) + '</div></div>' +
+              '<div class="stat"><span class="bytes">' + (d.bytes / 1024).toFixed(1) + ' KB</span></div>' +
+            '</div>').join("") +
+        '</div>'
+      : '';
+
+    body.innerHTML = stagedSection + discoverySection;
   } catch (err) {
-    $("#curationBody").innerHTML = `<p class="muted">${esc(err.message)}</p>`;
+    $("#curationBody").innerHTML = '<p class="muted">' + esc(err.message) + '</p>';
   }
 }
 
-async function refreshAll() {
+async function renderSettings() {
+  const body = $("#settingsBody");
   try {
-    await loadSeeders();
-    await loadRunning();
-    await loadPipeline();
-    renderSeeders();
-    await renderDashboard();
-    await renderTimer();
-    renderPipeline();
-    updateRunningUI();
-    $("#apiLabel").textContent = `api → ${apiBase()}`;
-    $("#apiLabel").classList.remove("offline");
+    const s = await get("/api/settings");
+    const peers = s.remote && s.remote.peers && s.remote.peers.length
+      ? s.remote.peers.map((p) => '<li><code>' + esc(p.id) + '</code> → ' + esc(p.url) + '</li>').join("")
+      : "<li class='muted'>(none)</li>";
+    body.innerHTML =
+      '<div class="grid grid-stats mb-4">' +
+        '<div class="stat" style="cursor: default;"><span class="stat-num">' + esc((s.node && s.node.id) || "—") + '</span><span class="stat-label">node id</span></div>' +
+        '<div class="stat ' + ((s.node && s.node.allowRemote) ? "warn" : "ok") + '" style="cursor: default;"><span class="stat-num">' + ((s.node && s.node.allowRemote) ? "ON" : "OFF") + '</span><span class="stat-label">remote control</span></div>' +
+        '<div class="stat" style="cursor: default;"><span class="stat-num">' + (s.remote && s.remote.hasToken ? "set" : "—") + '</span><span class="stat-label">token</span></div>' +
+      '</div>' +
+      '<p>' + ((s.node && s.node.allowRemote) ? "This node is a <strong>worker</strong> — it accepts remote control from a master." : "This node is <strong>standalone</strong> — a normal seeder manager.") + '</p>' +
+      '<h2 class="h-section">Peers</h2>' +
+      '<ul style="padding-left: var(--space-5); line-height: 1.8;">' + peers + '</ul>' +
+      '<h2 class="h-section">Remote control</h2>' +
+      '<p><button class="btn ' + ((s.node && s.node.allowRemote) ? "btn-danger" : "btn-primary") + '" id="toggleRemoteBtn" type="button">' +
+        ((s.node && s.node.allowRemote) ? "Turn off remote control" : "Turn on remote control (worker)") +
+      '</button></p>' +
+      '<h2 class="h-section">API endpoint</h2>' +
+      '<div class="field">' +
+        '<label for="apiBase">Base URL (blank = this origin)</label>' +
+        '<input id="apiBase" type="text" value="' + esc(state.apiBase) + '" placeholder="' + esc(window.location.origin) + '" />' +
+        '<span class="hint">If you are running the GUI on a different host from the API, set the full URL here.</span>' +
+      '</div>' +
+      '<h2 class="h-section">Auto-refresh</h2>' +
+      '<label class="toggle">' +
+        '<input id="live" type="checkbox" />' +
+        '<span class="toggle-track"></span>' +
+        '<span class="muted">Refresh the dashboard every 10 seconds</span>' +
+      '</label>';
+    body.addEventListener("click", (e) => {
+      const t = e.target.closest("#toggleRemoteBtn");
+      if (t) toggleRemote(!!(s.node && s.node.allowRemote));
+    });
+    const apiInput = $("#apiBase");
+    if (apiInput) apiInput.addEventListener("change", () => {
+      state.apiBase = apiInput.value.trim();
+      localStorage.setItem("skyhook.apiBase", state.apiBase);
+      $("#apiLabel").textContent = "api → " + apiBase();
+      refreshAll();
+    });
+    const liveInput = $("#live");
+    if (liveInput) {
+      liveInput.checked = !!state.live;
+      liveInput.addEventListener("change", () => {
+        if (liveInput.checked) state.live = setInterval(refreshAll, 10000);
+        else if (state.live) { clearInterval(state.live); state.live = null; }
+      });
+    }
   } catch (err) {
-    $("#apiLabel").textContent = `offline — ${err.message}`;
-    $("#apiLabel").classList.add("offline");
-    toast("Cannot reach API: " + err.message, "err");
+    body.innerHTML = '<p class="muted">' + esc(err.message) + '</p>';
   }
 }
 
-// ── actions ─────────────────────────────────────────────────────────────────
-function runConcurrency() {
-  return Math.max(1, Number($("#concurrency").value) || 1);
-}
-function runWithHeadless() {
-  return $("#withHeadless").checked;
-}
-function runAggressive() {
-  return $("#aggressive").checked;
-}
-function runForceHeadless() {
-  return $("#forceHeadless").checked;
-}
-function runNoCache() {
-  return $("#noCache").checked;
+let logPageState = {
+  source: null,
+  sources: [],
+  active: null,
+  pollTimer: null,
+  followLog: true,
+};
+
+function openLogPage(source) {
+  logPageState.source = source;
+  const runningSources = state.running.map((r) => r.source);
+  const sources = [...new Set([source].concat(runningSources))].filter(Boolean);
+  logPageState.sources = sources;
+  logPageState.active = source;
+  renderLogPageHead();
+  renderLogTabs();
+  renderLogBody();
+  if (source) startLogPagePolling();
+  else if (logPageState.pollTimer) { clearInterval(logPageState.pollTimer); logPageState.pollTimer = null; }
 }
 
-async function runSources(sources) {
+function closeLogPage() {
+  if (logPageState.pollTimer) { clearInterval(logPageState.pollTimer); logPageState.pollTimer = null; }
+}
+
+function renderLogPageHead() {
+  const s = state.seeders.find((x) => x.source === logPageState.source);
+  const running = state.running.find((r) => r.source === logPageState.source);
+  $("#logSourceTitle").textContent = logPageState.source
+    ? ((s && s.displayName) || logPageState.source)
+    : "Live log";
+  const meta = [];
+  if (s && s.categoryLabel) meta.push(s.categoryLabel + (s.subcategoryLabel ? " · " + s.subcategoryLabel : ""));
+  if (s && s.cadence) meta.push(s.cadence);
+  if (running) meta.push("running · " + fmtElapsed(running.elapsedMs));
+  else if (s && s.lastStatus) meta.push(s.lastStatus);
+  $("#logSourceMeta").textContent = logPageState.source
+    ? (meta.join(" · ") || "—")
+    : "Run a seeder to see its output here.";
+  const runBtn = $("#logRunBtn");
+  const stopBtn = $("#logStopBtn");
+  if (runBtn) runBtn.disabled = !!running || !logPageState.source;
+  if (stopBtn) stopBtn.disabled = !running;
+}
+
+function renderLogTabs() {
+  const container = $("#logTabs");
+  if (!container) return;
+  const runningSet = new Set(state.running.map((r) => r.source));
+  container.innerHTML = logPageState.sources.map((src) => {
+    const run = runningSet.has(src);
+    const isActive = src === logPageState.active;
+    return '<button class="log-tab ' + (isActive ? "active" : "") + ' ' + (run ? "live" : "") + '" data-logtab="' + esc(src) + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '">' +
+      '<span class="spin-pulse" aria-hidden="true"></span>' +
+      '<span>' + esc(src) + '</span>' +
+    '</button>';
+  }).join("");
+}
+
+let logRenderSeq = 0;
+async function renderLogBody() {
+  const seq = ++logRenderSeq;
+  const body = $("#logBody");
+  if (!body) return;
+  if (!logPageState.sources.length) {
+    body.innerHTML = '<p class="log-empty">No sources.</p>';
+    return;
+  }
+  const sourcesToShow = [logPageState.active].filter(Boolean);
+  const blocks = [];
+  for (const src of sourcesToShow) {
+    let lines = [];
+    try {
+      const res = await get("/api/logs/" + encodeURIComponent(src) + "?tail=300");
+      lines = res.lines || [];
+    } catch (e) { lines = []; }
+    const seeder = state.seeders.find((x) => x.source === src);
+    blocks.push(
+      '<div class="log-block">' +
+        '<div class="log-source-head">' + esc(src) + '</div>' +
+        (seeder && seeder.description ? '<div class="log-source-desc">' + esc(seeder.description) + '</div>' : "") +
+        '<pre class="log-lines">' + esc(lines.join("\n")) || '<span class="log-empty">(no output yet)</span>' + '</pre>' +
+      '</div>');
+  }
+  if (seq !== logRenderSeq) return;
+  const prevScroll = body.scrollTop;
+  body.innerHTML = blocks.join("");
+  body.scrollTop = logPageState.followLog ? body.scrollHeight : prevScroll;
+}
+
+function startLogPagePolling() {
+  if (logPageState.pollTimer) return;
+  logPageState.pollTimer = setInterval(async () => {
+    await loadRunning();
+    const runningSources = state.running.map((r) => r.source);
+    const newSources = runningSources.filter((s) => logPageState.sources.indexOf(s) === -1);
+    if (newSources.length) logPageState.sources = logPageState.sources.concat(newSources);
+    renderLogPageHead();
+    renderLogTabs();
+    await renderLogBody();
+  }, 1000);
+}
+
+async function runSources(sources, opts) {
   if (!sources.length) return;
-  const concurrency = runConcurrency();
   try {
     const res = await post("/api/run", {
       sources,
-      parallel: concurrency,
-      withHeadless: runWithHeadless(),
-      aggressive: runAggressive(),
-      forceHeadless: runForceHeadless(),
-      noCache: runNoCache(),
+      parallel: (opts && opts.parallel) || 1,
+      withHeadless:   !!(opts && opts.withHeadless),
+      aggressive:     !!(opts && opts.aggressive),
+      forceHeadless:  !!(opts && opts.forceHeadless),
+      noCache:        !!(opts && opts.noCache),
     });
-    toast(`Started ${res.started.length} seeder(s) — parallel=${concurrency}.`);
-  } catch (err) {
-    toast("Run failed: " + err.message, "err");
-    return;
-  }
+    toast("Started " + ((res.started && res.started.length) || sources.length) + " seeder(s).", "ok");
+  } catch (err) { toast("Run failed: " + err.message, "err"); return; }
   await loadRunning();
-  openLogDrawer(sources);
-  renderRunning();
-  startLogPolling();
-  updateRunningUI();
+  if (sources.length === 1) navigate("#/log/" + encodeURIComponent(sources[0]));
+  else navigate("#/");
 }
 
 async function stopRuns(source) {
   try {
     const res = await post("/api/stop", source ? { source } : {});
-    toast(source ? `Stopped ${source}.` : `Stopped ${res.stopped.length} run(s).`);
-  } catch (err) {
-    toast("Stop failed: " + err.message, "err");
-  }
+    toast(source ? ("Stopped " + source + ".") : ("Stopped " + ((res.stopped && res.stopped.length) || 0) + " run(s)."));
+  } catch (err) { toast("Stop failed: " + err.message, "err"); }
   await refreshAll();
 }
 
-async function bulkEnable() {
-  const srcs = [...state.selected];
-  if (!srcs.length) { toast("Nothing selected."); return; }
-  for (const source of srcs) {
-    try { await post("/api/enable", { source, cadence: "weekly" }); } catch {}
-  }
-  toast(`Enabled ${srcs.length} seeder(s) (weekly).`);
-  await refreshAll();
+async function bulkEnable()  { for (const s of state.selected) await post("/api/enable", { source: s, cadence: "weekly" }).catch(() => {}); await refreshAll(); }
+async function bulkDisable() { for (const s of state.selected) await post("/api/disable", { source: s }).catch(() => {}); await refreshAll(); }
+
+async function toggleRemote(currentlyOn) {
+  try {
+    await post("/api/settings", { allowRemote: !currentlyOn });
+    toast(currentlyOn ? "Remote control off." : "Remote control on (worker).", "ok");
+    renderSettings();
+  } catch (err) { toast(err.message, "err"); }
 }
 
-async function bulkDisable() {
-  const srcs = [...state.selected];
-  if (!srcs.length) { toast("Nothing selected."); return; }
-  for (const source of srcs) {
-    try { await post("/api/disable", { source }); } catch {}
-  }
-  toast(`Disabled ${srcs.length} seeder(s).`);
-  await refreshAll();
-}
-
-// ── live log drawer ─────────────────────────────────────────────────────────
-function openLogDrawer(sources) {
-  // Union with everything we already know about — never shrink logSources.
-  // Otherwise starting the tagger destroys all the finished seeder tabs.
-  const all = [...new Set([...state.logSources, ...sources, ...state.running.map((r) => r.source)])];
-  state.logSources = all;
-  state.followLog = true;
-  // Set an initial userTab on first open only. After that the click handler owns it.
-  if (!state.userTab) {
-    const runningSet = new Set(state.running.map((r) => r.source));
-    state.userTab = all.find((s) => runningSet.has(s)) || "__all__";
-  }
-  $("#logDrawer").hidden = false;
-  renderLogTabs();
-  renderLogs();
-}
-
-function closeLogDrawer() {
-  $("#logDrawer").hidden = true;
-  stopLogPolling();
-  state.userTab = null; // reset so next open auto-selects again
-  updateShowLogBtn();
-}
-
-function renderLogTabs() {
-  const container = $("#logTabs");
-  const running = new Map(state.running.map((r) => [r.source, r]));
-  const tabs = [{ key: "__all__", label: "All" }];
-  for (const source of state.logSources) {
-    if (source !== "__all__") tabs.push({ key: source, label: source });
-  }
-  // Active class driven by state.userTab (immutable to everything but the
-  // tab click handler). On first load (null) fall back to first running source.
-  const activeKey = state.userTab || tabs.find((t) => t.key !== "__all__" && running.has(t.key))?.key || "__all__";
-  container.innerHTML = tabs.map((t) => {
-    const active = t.key === activeKey ? " active" : "";
-    const run = t.key !== "__all__" ? running.get(t.key) : null;
-    const spin = run ? ' <span class="spin">●</span>' : "";
-    const time = run && run.elapsedMs != null
-      ? ` <span class="log-tab-time">${fmtElapsed(run.elapsedMs)}</span>` : "";
-    return `<button class="log-tab${active}" data-logtab="${esc(t.key)}">${esc(t.label)}${spin}${time}</button>`;
-  }).join("");
-}
-
-function updateShowLogBtn() {
-  $("#showLogBtn").hidden = state.running.length === 0 && state.logSources.length === 0;
-}
-
-// Render-generation counter: only the most recent render is allowed to write to
-// #logBody. The 1s poll tick and a tab click can both render at once, and an
-// in-flight "All" render (many serial fetches) used to finish after a single-tab
-// render and clobber it with mixed output. The guard discards stale writes.
-let logRenderSeq = 0;
-
-async function renderLogs() {
-  const seq = ++logRenderSeq;
-  const body = $("#logBody");
-  if (!state.logSources.length) {
-    body.innerHTML = '<p class="muted">No active run.</p>';
-    return;
-  }
-  const runningSet = new Set(state.running.map((r) => r.source));
-  // state.userTab is the single source of truth — only the tab click handler
-  // sets it. openLogDrawer, renderLogTabs, and the poll tick never touch it.
-  const activeKey = state.userTab;
-  let sources;
-  if (activeKey && activeKey !== "__all__") {
-    sources = [activeKey];
-  } else {
-    // Running sources last → the bottom-following auto-scroll always shows live output.
-    sources = [...state.logSources].sort(
-      (a, b) => (runningSet.has(a) ? 1 : 0) - (runningSet.has(b) ? 1 : 0),
-    );
-  }
-  const blocks = [];
-  for (const source of sources) {
-    let lines = [];
-    try {
-      const res = await get(`/api/logs/${encodeURIComponent(source)}?tail=300`);
-      lines = res.lines || [];
-    } catch { lines = []; }
-    const seeder = state.seeders.find((x) => x.source === source);
-    const live = runningSet.has(source) ? ' <span class="spin">●</span>' : "";
-    const desc = seeder?.description ? `<div class="log-desc">${esc(seeder.description)}</div>` : "";
-    blocks.push(`<div class="log-source">${esc(source)}${live}</div>${desc}`);
-    blocks.push(`<pre class="log-lines">${esc(lines.join("\n")) || "(no output yet)"}</pre>`);
-  }
-  if (seq !== logRenderSeq) return; // a newer render started — discard this stale one
-  const prevScroll = body.scrollTop;
-  body.innerHTML = blocks.join("");
-  // Follow the bottom unless the user has scrolled up to read (smart-follow).
-  body.scrollTop = state.followLog ? body.scrollHeight : prevScroll;
-}
-
-function startLogPolling() {
-  if (state.logTimer) return;
-  state.wasRunning = state.running.length > 0;
-  state.logTimer = setInterval(async () => {
-    await loadRunning();
-    const n = state.running.length;
-    // Keep logSources in sync — add newly started sources so tabs stay current.
-    const runningSources = new Set(state.running.map((r) => r.source));
-    if (runningSources.size) {
-      state.logSources = [...new Set([...state.logSources, ...runningSources])];
-    }
-    if (state.wasRunning && n === 0) {
-      // A run (or job) just finished — refresh tables/dashboard/history once.
-      await refreshAll();
-      if (!$("#historyModal").hidden && state.historySource) openHistory(state.historySource);
-    }
-    state.wasRunning = n > 0;
-    renderRunning();
-    updateRunningUI();
-    updateShowLogBtn();
-    renderLogTabs();
-    await renderLogs();
-    const jobKeys = new Set((state.pipe?.jobs || []).map((j) => j.key));
-    if (state.running.some((r) => jobKeys.has(r.source))) {
-      await loadPipeline();
-      renderPipeline();
-    }
-  }, 1000);
-}
-
-function stopLogPolling() {
-  if (state.logTimer) { clearInterval(state.logTimer); state.logTimer = null; }
-}
-
-// ── schedule ────────────────────────────────────────────────────────────────
 let scheduleSource = null;
-let bulkSchedule = false;
-
-function fillScheduleFields(s) {
-  $("#schedCadence").innerHTML = CADENCES.map((c) =>
-    `<option value="${c}" ${c === s.cadence ? "selected" : ""} title="${esc(CADENCE_TIP[c] || "")}">${c}</option>`).join("");
-  $("#schedTier").value = s.isNews ? "news" : "evergreen";
-  $("#schedAge").value = s.maxAgeDays || 0;
-}
 
 function openSchedule(source) {
   const s = state.seeders.find((x) => x.source === source);
-  if (!s) return;
-  scheduleSource = source;
-  bulkSchedule = false;
-  $("#schedTitle").textContent = `Schedule — ${source}`;
-  fillScheduleFields(s);
-  $("#scheduleModal").hidden = false;
-}
-
-function openBulkSchedule() {
-  const srcs = [...state.selected];
-  if (!srcs.length) { toast("Nothing selected."); return; }
-  const s = state.seeders.find((x) => x.source === srcs[0]);
-  if (!s) return;
-  scheduleSource = srcs[0];
-  bulkSchedule = true;
-  $("#schedTitle").textContent = `Schedule — ${srcs.length} selected`;
-  fillScheduleFields(s);
-  $("#scheduleModal").hidden = false;
-}
-
-async function saveSchedule() {
-  const body = {
-    cadence: $("#schedCadence").value,
-    isNews: $("#schedTier").value === "news",
-    maxAgeDays: Number($("#schedAge").value) || null,
-  };
-  try {
-    if (bulkSchedule) {
-      const srcs = [...state.selected];
-      for (const source of srcs) {
-        await post("/api/schedule", { source, ...body });
-      }
-      toast(`Scheduled ${srcs.length} seeder(s).`);
-    } else {
-      await post("/api/schedule", { source: scheduleSource, ...body });
-      toast(`Updated ${scheduleSource}.`);
-    }
-    $("#scheduleModal").hidden = true;
-    await refreshAll();
-  } catch (err) {
-    toast("Schedule failed: " + err.message, "err");
-  }
-}
-
-// ── history ─────────────────────────────────────────────────────────────────
-async function openHistory(source) {
-  state.historySource = source;
-  $("#histTitle").textContent = `History — ${source}`;
-  $("#historyModal").hidden = false;
-  const runningNow = state.running.some((r) => r.source === source);
-  if (runningNow) {
-    $("#histBody").innerHTML = '<p class="muted"><span class="spin">●</span> Running… history is written when this run finishes.</p>';
-    return;
-  }
-  $("#histBody").innerHTML = '<p class="muted">Loading…</p>';
-  try {
-    const runs = await get(`/api/history/${encodeURIComponent(source)}`);
-    if (!runs.length) {
-      $("#histBody").innerHTML = '<p class="muted">No runs recorded.</p>';
-      return;
-    }
-    const errors = runs.filter((r) => r.error).map((r) => `${(r.started_at || "").slice(0, 16)}: ${r.error}`);
-    $("#histBody").innerHTML = `
-      <table class="hist-table">
-        <thead><tr><th>Started</th><th>Status</th><th>Result</th><th>Duration</th></tr></thead>
-        <tbody>${runs.map((r) => `
-          <tr>
-            <td>${esc((r.started_at || "").replace("T", " ").slice(0, 19))}</td>
-            <td class="${r.status === "ok" ? "ok" : "err"}">${esc(r.status)}</td>
-            <td>+${r.staged ?? 0} −${r.dead ?? 0} skip${r.skipped ?? 0}</td>
-            <td>${fmtDur(r.duration_ms)}</td>
-          </tr>`).join("")}
-        </tbody>
-      </table>
-      ${errors.length ? `<p class="err-text">${esc(errors.join("\n"))}</p>` : ""}`;
-  } catch (err) {
-    $("#histBody").innerHTML = `<p class="err-text">${esc(err.message)}</p>`;
-  }
-}
-
-// ── info ─────────────────────────────────────────────────────────────────────
-function openInfo(source) {
-  const s = state.seeders.find((x) => x.source === source);
   if (!s) { toast("Seeder not found.", "err"); return; }
-  $("#infoTitle").textContent = s.displayName ? `${s.displayName} — ${source}` : source;
-  const last = s.lastRunAt ? `${s.lastRunAt.replace("T", " ").slice(0, 19)} (${fmtAgo(s.lastRunAt)})` : "—";
-  const result = s.lastResult
-    ? `+${s.lastResult.staged ?? 0} −${s.lastResult.dead ?? 0} skip ${s.lastResult.skipped ?? 0}`
-    : "—";
-  const next = s.nextRunAt ? `${s.nextRunAt.replace("T", " ").slice(0, 19)} (${fmtIn(s.nextRunAt)})` : "—";
-  const rows = [
-    ["Source", s.source],
-    ["Name", s.displayName || "—"],
-    ["Script", s.script],
-    ["Description", s.description || "—"],
-    ["Category", s.categoryLabel ? `${s.categoryLabel}${s.subcategoryLabel ? " · " + s.subcategoryLabel : ""}` : "—"],
-    ["Cadence", s.cadence],
-    ["Tier", s.isNews ? "news (age-pruned)" : "evergreen"],
-    ["Max age", s.maxAgeDays != null ? `${s.maxAgeDays} day${s.maxAgeDays === 1 ? "" : "s"}` : "none"],
-    ["Access", s.access || "—"],
-    ["Scheduled", s.scheduled ? "yes" : "no"],
-    ["Last run", last],
-    ["Last status", s.lastStatus || "—"],
-    ["Last duration", s.lastDurationMs != null ? fmtElapsed(s.lastDurationMs) : "—"],
-    ["Last result", result],
-    ["Last error", s.lastError || "—"],
-    ["Next run", next],
-  ];
-  $("#infoBody").innerHTML = `
-    <div class="info-grid">
-      ${rows.map(([k, v]) => `<div class="info-k">${esc(k)}</div><div class="info-v">${esc(v)}</div>`).join("")}
-    </div>`;
-  state.infoSource = source;
-  const del = $("#infoDelete");
-  del.dataset.confirm = "";
-  del.textContent = "🗑 Delete";
-  $("#infoModal").hidden = false;
+  scheduleSource = source;
+  openModal((modal) => {
+    modal.classList.add("wide");
+    const body = document.createElement("div");
+    body.className = "modal-body";
+    body.innerHTML =
+      '<div class="field"><label for="schedCadence">Cadence</label>' +
+        '<select id="schedCadence">' +
+          CADENCES.map((c) => '<option value="' + c + '"' + (c === s.cadence ? " selected" : "") + '>' + c + '</option>').join("") +
+        '</select>' +
+      '</div>' +
+      '<div class="field"><label for="schedTier">Tier</label>' +
+        '<select id="schedTier">' +
+          '<option value="evergreen"' + (!s.isNews ? " selected" : "") + '>evergreen</option>' +
+          '<option value="news"' + (s.isNews ? " selected" : "") + '>news (age-pruned)</option>' +
+        '</select>' +
+      '</div>' +
+      '<div class="field"><label for="schedAge">Max age (days, 0 = none)</label>' +
+        '<input id="schedAge" type="number" min="0" value="' + (s.maxAgeDays || 0) + '" />' +
+      '</div>' +
+      '<p class="muted">' + esc(s.source) + ' — ' + esc(s.displayName || "") + '</p>';
+    const cancel = mkBtn("Cancel", "btn");
+    const save = mkBtn("Save", "btn-primary");
+    cancel.addEventListener("click", closeModal);
+    save.addEventListener("click", saveSchedule);
+    modalShell(modal, { title: "Schedule — " + s.source, body, actions: [cancel, save] });
+  });
 }
 
-// ── build new seeder ────────────────────────────────────────────────────────
-async function loadCategories() {
-  try { state.categories = await get("/api/categories"); }
-  catch { state.categories = []; }
-}
 
-function fillBuildCadence() {
-  $("#buildCadence").innerHTML = CADENCES.map((c) =>
-    `<option value="${c}" ${c === "manual" ? "selected" : ""}>${c}</option>`).join("");
-}
-
-function populateBuildSubcategories(preserve) {
-  const catName = $("#buildCategory").value;
-  const cat = (state.categories || []).find((c) => c.name === catName);
-  const sub = $("#buildSubcategory");
-  sub.innerHTML = (cat?.subcategories || []).map((s) =>
-    `<option value="${esc(s.name)}">${esc(s.label)}</option>`).join("");
-  if (preserve && [...sub.options].some((o) => o.value === preserve)) sub.value = preserve;
-}
-
-function populateBuildCategories(preserveSub) {
-  const cat = $("#buildCategory");
-  const prev = cat.value;
-  cat.innerHTML = (state.categories || []).map((c) =>
-    `<option value="${esc(c.name)}">${esc(c.label)}</option>`).join("");
-  if (prev && [...cat.options].some((o) => o.value === prev)) cat.value = prev;
-  populateBuildSubcategories(preserveSub);
+function mkBtn(label, cls) {
+  const b = document.createElement("button");
+  b.className = cls;
+  b.type = "button";
+  b.textContent = label;
+  return b;
 }
 
 function openBuildModal() {
-  $("#buildTitle").textContent = "New seeder";
-  $("#buildUrl").value = "";
-  $("#buildName").value = "";
-  $("#buildSource").value = "";
-  $("#buildFeed").value = "";
-  $("#buildDesc").value = "";
-  $("#buildPreview").textContent = "";
-  fillBuildCadence();
-  populateBuildCategories(null);
-  $("#buildModal").hidden = false;
-  $("#buildUrl").focus();
+  openModal((modal) => {
+    modal.classList.add("wide");
+    const body = document.createElement("div");
+    body.className = "modal-body";
+    body.innerHTML =
+      '<div class="field"><label for="buildUrl">Website URL</label>' +
+        '<input id="buildUrl" type="url" placeholder="https://example.com" />' +
+        '<span id="buildPreview" class="hint"></span>' +
+      '</div>' +
+      '<div class="field" style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3);">' +
+        '<div><label for="buildName">Display name</label><input id="buildName" type="text" placeholder="Example Site" /></div>' +
+        '<div><label for="buildSource">Source (unique slug)</label><input id="buildSource" type="text" placeholder="example" /></div>' +
+      '</div>' +
+      '<div class="field" style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3);">' +
+        '<div><label for="buildCategory">Category</label><select id="buildCategory"></select></div>' +
+        '<div><label for="buildSubcategory">Subcategory</label><select id="buildSubcategory"></select></div>' +
+      '</div>' +
+      '<div class="field"><label for="buildFeed">Feed URL (optional — auto-discovered if blank)</label>' +
+        '<input id="buildFeed" type="url" placeholder="https://example.com/feed/" /></div>' +
+      '<div class="field"><label for="buildCadence">Cadence</label><select id="buildCadence"></select></div>';
+    const cancel = mkBtn("Cancel", "btn");
+    const save = mkBtn("Save", "btn-primary");
+    const test = mkBtn("Save & test", "btn-primary");
+    cancel.addEventListener("click", closeModal);
+    save.addEventListener("click", async () => {
+      const src = await submitBuild(false);
+      if (src) closeModal();
+    });
+    test.addEventListener("click", async () => {
+      const src = await submitBuild(true);
+      if (src) closeModal();
+    });
+    modalShell(modal, { title: "New seeder", body, actions: [cancel, save, test] });
+    setTimeout(() => {
+      fillBuildCategory();
+      $("#buildCategory").addEventListener("change", () => fillBuildSubcategory(""));
+      $("#buildUrl").addEventListener("blur", debounce(previewUrl, 500));
+    }, 0);
+  });
 }
 
-let buildPreviewTimer = null;
+function fillBuildCategory() {
+  const sel = $("#buildCategory");
+  if (!sel) return;
+  sel.innerHTML = (state.categories || []).map((c) =>
+    '<option value="' + esc(c.name) + '">' + esc(c.label) + '</option>').join("");
+  fillBuildSubcategory("");
+}
+
+function fillBuildSubcategory(preserve) {
+  const catName = $("#buildCategory").value;
+  const cat = (state.categories || []).find((c) => c.name === catName);
+  const sel = $("#buildSubcategory");
+  if (!sel) return;
+  sel.innerHTML = (cat && cat.subcategories ? cat.subcategories : []).map((s) =>
+    '<option value="' + esc(s.name) + '">' + esc(s.label) + '</option>').join("");
+  if (preserve && [...sel.options].some((o) => o.value === preserve)) sel.value = preserve;
+  const cad = $("#buildCadence");
+  if (cad) cad.innerHTML = CADENCES.map((c) =>
+    '<option value="' + c + '"' + (c === "manual" ? " selected" : "") + '>' + c + '</option>').join("");
+}
+
 async function previewUrl() {
   const url = $("#buildUrl").value.trim();
   if (!/^https?:\/\//i.test(url)) { $("#buildPreview").textContent = ""; return; }
   $("#buildPreview").textContent = "Fetching site metadata…";
   try {
     const meta = await post("/api/seeders/preview", { url });
-    if (!$("#buildName").value) $("#buildName").value = meta.title || meta.siteName || meta.siteDomain || "";
+    if (!$("#buildName").value)   $("#buildName").value   = meta.title || meta.siteName || meta.siteDomain || "";
     if (!$("#buildSource").value) $("#buildSource").value = meta.source || "";
-    if (!$("#buildDesc").value) $("#buildDesc").value = meta.description || "";
-    $("#buildPreview").textContent = meta.title ? `✓ ${meta.title}` : "✓ fetched";
-  } catch (err) {
-    $("#buildPreview").textContent = `⚠ ${err.message}`;
-  }
+    $("#buildPreview").textContent = meta.title ? ("✓ " + meta.title) : "✓ fetched";
+  } catch (err) { $("#buildPreview").textContent = "⚠ " + err.message; }
 }
 
-async function buildSeeder() {
+async function submitBuild(runAfter) {
   const url = $("#buildUrl").value.trim();
+  if (!url) { toast("Enter a website URL.", "err"); return null; }
   const category = $("#buildCategory").value;
   const subcategory = $("#buildSubcategory").value;
-  if (!url) { toast("Enter a website URL.", "err"); return null; }
   if (!category || !subcategory) { toast("Pick a category and subcategory.", "err"); return null; }
   try {
     const res = await post("/api/seeders/new", {
@@ -975,110 +903,77 @@ async function buildSeeder() {
       category,
       subcategory,
       feedUrl: $("#buildFeed").value.trim(),
-      description: $("#buildDesc").value.trim(),
       cadence: $("#buildCadence").value,
     });
-    $("#buildModal").hidden = true;
-    toast(`Created seeder "${res.seeder.source}".`);
+    toast("Created \"" + ((res.seeder && res.seeder.source) || res.source) + "\".", "ok");
     await refreshAll();
-    return res.seeder.source;
+    const src = (res.seeder && res.seeder.source) || res.source;
+    if (runAfter && src) await runSources([src]);
+    return src;
   } catch (err) {
     toast("Create failed: " + err.message, "err");
     return null;
   }
 }
 
-async function removeSeeder(source) {
+async function saveSchedule() {
+  if (!scheduleSource) return;
+  const cadence = $("#schedCadence").value;
+  const tier = $("#schedTier").value;
+  const maxAge = parseInt($("#schedAge").value, 10) || 0;
   try {
-    await post("/api/seeders/delete", { source });
-    $("#infoModal").hidden = true;
-    toast(`Deleted ${source}.`);
+    await post("/api/schedule", {
+      source: scheduleSource,
+      cadence,
+      isNews: tier === "news",
+      maxAgeDays: maxAge || null,
+    });
+    toast("Updated " + scheduleSource + ".", "ok");
+    closeModal();
     await refreshAll();
-  } catch (err) {
-    toast("Delete failed: " + err.message, "err");
-  }
+  } catch (err) { toast("Schedule failed: " + err.message, "err"); }
 }
 
-function confirmDeleteSeeder() {
-  const btn = $("#infoDelete");
-  const src = state.infoSource;
-  if (!src) return;
-  if (btn.dataset.confirm === src) { removeSeeder(src); return; }
-  btn.dataset.confirm = src;
-  btn.textContent = "⚠ Really delete?";
-  setTimeout(() => { if (btn.dataset.confirm === src) { btn.dataset.confirm = ""; btn.textContent = "🗑 Delete"; } }, 3000);
+function openApiBasePrompt() {
+  const inp = prompt("API base URL (blank = this origin):", state.apiBase);
+  if (inp == null) return;
+  state.apiBase = inp.trim();
+  localStorage.setItem("skyhook.apiBase", state.apiBase);
+  $("#apiLabel").textContent = "api → " + apiBase();
+  refreshAll();
 }
 
-async function writeTimer() {
+let offlineFails = 0;
+async function refreshAll() {
   try {
-    const t = await post("/api/timer", {});
-    toast(`Timer regenerated → OnCalendar=${t.onCalendar || "—"}`);
-    await renderTimer();
+    await Promise.all([loadSeeders(), loadRunning(), loadPipeline(), loadSettings()]);
+    offlineFails = 0;
+    $("#apiLabel").textContent = "api → " + apiBase();
+    $("#apiLabel").classList.remove("offline");
+    handleRouteChange();
   } catch (err) {
-    toast("Timer failed: " + err.message, "err");
+    offlineFails++;
+    $("#apiLabel").textContent = "offline — " + err.message;
+    $("#apiLabel").classList.add("offline");
+    if (offlineFails === 3) toast("Cannot reach API: " + err.message, "err");
   }
 }
 
-// ── navigation helpers ──────────────────────────────────────────────────────
-function goToSeeders(target) {
-  $("#schedFilter").value = "";
-  $("#statusFilter").value = "";
-  $("#tierFilter").value = "";
-  if (target === "scheduled") $("#schedFilter").value = "1";
-  else if (target === "due") $("#statusFilter").value = "due";
-  else if (target === "errors") $("#statusFilter").value = "errors";
-  showTab("seeders");
-  renderSeeders();
-}
 
-// ── pipeline actions ────────────────────────────────────────────────────────
-async function startPipeline(kind) {
-  let jobKey = null;
-  try {
-    const res = await post(`/api/pipeline/${kind}`);
-    jobKey = res.job;
-    toast(`Started ${jobKey}.`);
-  } catch (err) {
-    toast(err.message, "err");
-    return;
-  }
-  await loadRunning();
-  await loadPipeline();
-  renderPipeline();
-  renderRunning();
-  updateRunningUI();
-  if (jobKey && state.running.some((r) => r.source === jobKey)) {
-    openLogDrawer([jobKey]);
-    startLogPolling();
-  }
-}
+// ─── event wiring (delegation) ─────────────────────────────────────────
 
-// ── wiring ──────────────────────────────────────────────────────────────────
 function bind() {
-  $$(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
-  $$(".bottom-nav .bn-item").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   $("#refreshBtn").addEventListener("click", () => refreshAll());
+  $("#apiBaseBtn").addEventListener("click", openApiBasePrompt);
 
-  $("#apiBase").addEventListener("change", () => {
-    state.apiBase = $("#apiBase").value.trim();
-    localStorage.setItem("skyhook.apiBase", state.apiBase);
-    refreshAll();
-  });
-
-  $("#live").addEventListener("change", () => {
-    if ($("#live").checked) state.live = setInterval(refreshAll, 10000);
-    else if (state.live) { clearInterval(state.live); state.live = null; }
-  });
-
-  $("#stats").addEventListener("click", (e) => {
-    const card = e.target.closest(".stat[data-goto]");
-    if (card) goToSeeders(card.dataset.goto);
-  });
-
-  $("#filter").addEventListener("input", renderSeeders);
-  $("#tierFilter").addEventListener("change", renderSeeders);
-  $("#schedFilter").addEventListener("change", renderSeeders);
-  $("#statusFilter").addEventListener("change", renderSeeders);
+  const filterEl = $("#filter");
+  if (filterEl) filterEl.addEventListener("input", debounce(renderSeeders, 80));
+  const tierEl = $("#tierFilter");
+  if (tierEl) tierEl.addEventListener("change", renderSeeders);
+  const schedEl = $("#schedFilter");
+  if (schedEl) schedEl.addEventListener("change", renderSeeders);
+  const statusEl = $("#statusFilter");
+  if (statusEl) statusEl.addEventListener("change", renderSeeders);
 
   $$("#seederTable th[data-sort]").forEach((th) =>
     th.addEventListener("click", () => {
@@ -1088,160 +983,230 @@ function bind() {
       renderSeeders();
     }));
 
-  $("#checkAll").addEventListener("change", () => {
-    const on = $("#checkAll").checked;
+  const checkAll = $("#checkAll");
+  if (checkAll) checkAll.addEventListener("change", () => {
+    const on = checkAll.checked;
     filtered().forEach((s) => { on ? state.selected.add(s.source) : state.selected.delete(s.source); });
     renderSeeders();
   });
 
-  function seederCheckbox(e) {
-    const cb = e.target.closest('input[type="checkbox"]');
-    if (!cb) return;
-    const src = cb.dataset.source;
-    cb.checked ? state.selected.add(src) : state.selected.delete(src);
-    renderSeeders();
-  }
-
-  async function seederAction(e) {
-    const btn = e.target.closest("button[data-action]");
-    if (!btn) return;
-    const { action, source } = btn.dataset;
-    if (action === "run") await runSources([source]);
-    else if (action === "schedule") openSchedule(source);
-    else if (action === "info") openInfo(source);
-    else if (action === "history") openHistory(source);
-    else if (action === "toggle") {
-      const s = state.seeders.find((x) => x.source === source);
-      try {
-        if (s?.scheduled) { await post("/api/disable", { source }); toast(`Disabled ${source}.`); }
-        else { await post("/api/enable", { source, cadence: "weekly" }); toast(`Enabled ${source} (weekly).`); }
-        await refreshAll();
-      } catch (err) { toast(err.message, "err"); }
-    }
-  }
-
-  ["#seederBody", "#seederCards"].forEach((sel) => {
+  for (const sel of ["#seederBody", "#seederCards"]) {
     const el = $(sel);
-    if (!el) return;
-    el.addEventListener("change", seederCheckbox);
-    el.addEventListener("click", seederAction);
-  });
+    if (!el) continue;
+    el.addEventListener("change", (e) => {
+      const cb = e.target.closest('input[type="checkbox"]');
+      if (!cb) return;
+      const src = cb.dataset.source;
+      cb.checked ? state.selected.add(src) : state.selected.delete(src);
+      updateBulkBar();
+    });
+    el.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-action]");
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const source = btn.dataset.source;
+      if (action === "run") runSources([source]);
+      else if (action === "schedule") openSchedule(source);
+      else if (action === "toggle") {
+        const s = state.seeders.find((x) => x.source === source);
+        const p = s && s.scheduled
+          ? post("/api/disable", { source }).then(() => toast("Disabled " + source + "."))
+          : post("/api/enable", { source, cadence: "weekly" }).then(() => toast("Enabled " + source + " (weekly)."));
+        p.then(refreshAll);
+      }
+    });
+  }
 
-  $("#runSelectedBtn").addEventListener("click", () => runSources([...state.selected]));
-  $("#bulkEnableBtn").addEventListener("click", bulkEnable);
-  $("#bulkDisableBtn").addEventListener("click", bulkDisable);
-  $("#bulkScheduleBtn").addEventListener("click", openBulkSchedule);
-  $("#newSeederBtn").addEventListener("click", openBuildModal);
-
-  $("#dueList").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-action='run']");
-    if (btn) runSources([btn.dataset.source]);
-  });
-
-  $("#failList").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-action='run']");
-    if (btn) runSources([btn.dataset.source]);
-  });
-
-  $("#runningList").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-action='stop-one']");
-    if (btn) stopRuns(btn.dataset.source);
-  });
-
-  $("#runDueBtn").addEventListener("click", () => {
-    const srcs = ($("#forceDue").checked
+  const runSel = $("#runSelectedBtn");
+  if (runSel) runSel.addEventListener("click", () => runSources([...state.selected]));
+  const be = $("#bulkEnableBtn");
+  if (be) be.addEventListener("click", bulkEnable);
+  const bd = $("#bulkDisableBtn");
+  if (bd) bd.addEventListener("click", bulkDisable);
+  const ns = $("#newSeederBtn");
+  if (ns) ns.addEventListener("click", openBuildModal);
+  const rd = $("#runDueBtn");
+  if (rd) rd.addEventListener("click", () => {
+    const sources = ($("#forceDue") && $("#forceDue").checked
       ? state.seeders.filter((s) => s.scheduled)
       : state.seeders.filter(isDueClient)).map((s) => s.source);
-    runSources(srcs);
+    runSources(sources);
+  });
+  const et = $("#emitTimerBtn");
+  if (et) et.addEventListener("click", writeTimer);
+
+  const due = $("#dueList");
+  if (due) due.addEventListener("click", (e) => {
+    const btn = e.target.closest('[data-action="run"]');
+    if (btn) runSources([btn.dataset.source]);
+  });
+  const fl = $("#failList");
+  if (fl) fl.addEventListener("click", (e) => {
+    const btn = e.target.closest('[data-action="run"]');
+    if (btn) runSources([btn.dataset.source]);
+  });
+  const rl = $("#runningList");
+  if (rl) rl.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-stop-one]");
+    if (btn) stopRuns(btn.dataset.stopOne);
   });
 
-  $("#emitTimerBtn").addEventListener("click", writeTimer);
-  $("#writeTimerBtn").addEventListener("click", writeTimer);
-  $("#stopBtn").addEventListener("click", () => stopRuns());
-  $("#closeLogBtn").addEventListener("click", closeLogDrawer);
-  $("#showLogBtn").addEventListener("click", () => {
-    const sources = state.running.length ? state.running.map((r) => r.source) : state.logSources;
-    openLogDrawer(sources);
-    if (state.running.length) startLogPolling();
-  });
-  $("#logTabs").addEventListener("click", (e) => {
-    const tab = e.target.closest("button[data-logtab]");
-    if (!tab) return;
-    state.userTab = tab.dataset.logtab;
-    state.followLog = true;
-    // Toggle the active highlight directly on the button — no rebuild.
-    $$("#logTabs .log-tab").forEach((b) => {
-      b.classList.toggle("active", b.dataset.logtab === state.userTab);
-    });
-    renderLogs();
-  });
-  $("#logBody").addEventListener("scroll", () => {
-    const b = $("#logBody");
-    state.followLog = b.scrollHeight - b.scrollTop - b.clientHeight < 40;
-  });
-
-  $("#schedSave").addEventListener("click", saveSchedule);
-  $("#schedCancel").addEventListener("click", () => { $("#scheduleModal").hidden = true; });
-  $("#histClose").addEventListener("click", () => { $("#historyModal").hidden = true; });
-  $("#infoClose").addEventListener("click", () => { $("#infoModal").hidden = true; });
-  $("#infoDelete").addEventListener("click", confirmDeleteSeeder);
-  $("#scheduleModal").addEventListener("click", (e) => { if (e.target.id === "scheduleModal") $("#scheduleModal").hidden = true; });
-  $("#historyModal").addEventListener("click", (e) => { if (e.target.id === "historyModal") $("#historyModal").hidden = true; });
-  $("#infoModal").addEventListener("click", (e) => { if (e.target.id === "infoModal") $("#infoModal").hidden = true; });
-  $("#buildCancel").addEventListener("click", () => { $("#buildModal").hidden = true; });
-  $("#buildModal").addEventListener("click", (e) => { if (e.target.id === "buildModal") $("#buildModal").hidden = true; });
-  $("#buildSave").addEventListener("click", buildSeeder);
-  $("#buildTest").addEventListener("click", async () => {
-    const source = await buildSeeder();
-    if (source) runSources([source]);
-  });
-  $("#buildUrl").addEventListener("blur", () => {
-    clearTimeout(buildPreviewTimer);
-    buildPreviewTimer = setTimeout(previewUrl, 150);
-  });
-  $("#buildCategory").addEventListener("change", () => populateBuildSubcategories(null));
-
-  $("#runTaskBtn").addEventListener("click", runTask);
-  $("#pipelineCards").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-pipe]");
+  const pc = $("#pipelineCards");
+  if (pc) pc.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-pipe]");
     if (!btn) return;
-    if (btn.dataset.danger === "1" && !confirm(`Run "${btn.dataset.pipe}"? This is destructive and cannot be undone.`)) return;
+    if (btn.dataset.danger === "1" && !confirm('Run "' + btn.dataset.pipe + '"? This is destructive and cannot be undone.')) return;
     startPipeline(btn.dataset.pipe);
   });
 
-  $("#pruneBtn").addEventListener("click", async () => {
+  const pb = $("#pruneBtn");
+  if (pb) pb.addEventListener("click", async () => {
     try {
       const filter = {};
-      const src = $("#curateSource").value.trim();
-      const before = $("#curateBefore").value;
+      const src = $("#curateSource") && $("#curateSource").value.trim();
+      const before = $("#curateBefore") && $("#curateBefore").value;
       if (src) filter.source = src;
       if (before) filter.before = before;
       const r = await post("/api/cache/prune", { filter });
-      toast(`Deleted ${r.deleted} staged URL(s) (kept ${r.kept}).`);
+      toast("Deleted " + r.deleted + " URL(s) (kept " + r.kept + ").", "ok");
       renderCuration();
     } catch (err) { toast(err.message, "err"); }
   });
-
-  $("#curateRefreshBtn").addEventListener("click", renderCuration);
-
-  $("#curationBody").addEventListener("click", async (e) => {
-    const btn = e.target.closest("button[data-action]");
+  const cr = $("#curateRefreshBtn");
+  if (cr) cr.addEventListener("click", renderCuration);
+  const cb = $("#curationBody");
+  if (cb) cb.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-action]");
     if (!btn) return;
-    const { action, source } = btn.dataset;
+    const action = btn.dataset.action;
+    const source = btn.dataset.source;
     try {
-      if (action === "clear-staged") { await post("/api/cache/clear", { source }); toast(`Cleared staged for ${source}.`); }
-      else if (action === "clear-discovery") { await post("/api/cache/clear", { source, kind: "discovery" }); toast(`Cleared discovery cache for ${source}.`); }
+      if (action === "clear-staged") {
+        await post("/api/cache/clear", { source });
+        toast("Cleared staged for " + source + ".", "ok");
+      } else if (action === "clear-discovery") {
+        await post("/api/cache/clear", { source, kind: "discovery" });
+        toast("Cleared discovery cache for " + source + ".", "ok");
+      }
       renderCuration();
     } catch (err) { toast(err.message, "err"); }
   });
+
+  const lb = $("#logBackBtn");
+  if (lb) lb.addEventListener("click", () => navigate("#/seeders"));
+  const lr = $("#logRunBtn");
+  if (lr) lr.addEventListener("click", () => logPageState.source && runSources([logPageState.source]));
+  const ls = $("#logStopBtn");
+  if (ls) ls.addEventListener("click", () => logPageState.source && stopRuns(logPageState.source));
+  const lsc = $("#logScheduleBtn");
+  if (lsc) lsc.addEventListener("click", () => logPageState.source && openSchedule(logPageState.source));
+  const lt = $("#logTabs");
+  if (lt) lt.addEventListener("click", (e) => {
+    const tab = e.target.closest("[data-logtab]");
+    if (!tab) return;
+    logPageState.active = tab.dataset.logtab;
+    logPageState.followLog = true;
+    $$("#logTabs .log-tab").forEach((b) => b.classList.toggle("active", b.dataset.logtab === logPageState.active));
+    renderLogBody();
+  });
+  const lb2 = $("#logBody");
+  if (lb2) lb2.addEventListener("scroll", () => {
+    const b = $("#logBody");
+    logPageState.followLog = b.scrollHeight - b.scrollTop - b.clientHeight < 40;
+  });
+
+  const wt = $("#writeTimerBtn");
+  if (wt) wt.addEventListener("click", writeTimer);
+
+  const fs = $("#filterSheetBtn");
+  if (fs) fs.addEventListener("click", () => {
+    openModal((modal) => {
+      const body = document.createElement("div");
+      body.className = "modal-body";
+      body.innerHTML =
+        '<div class="field"><label for="modalTier">Tier</label>' +
+          '<select id="modalTier"><option value="">All tiers</option><option value="news">News</option><option value="evergreen">Evergreen</option></select>' +
+        '</div>' +
+        '<div class="field"><label for="modalSched">Schedule</label>' +
+          '<select id="modalSched"><option value="">Scheduled + manual</option><option value="1">Scheduled only</option><option value="0">Manual only</option></select>' +
+        '</div>' +
+        '<div class="field"><label for="modalStatus">Status</label>' +
+          '<select id="modalStatus"><option value="">Any status</option><option value="due">Due</option><option value="errors">Errors</option></select>' +
+        '</div>';
+      const apply = mkBtn("Apply", "btn-primary");
+      apply.addEventListener("click", () => {
+        $("#tierFilter").value = $("#modalTier").value;
+        $("#schedFilter").value = $("#modalSched").value;
+        $("#statusFilter").value = $("#modalStatus").value;
+        closeModal();
+        renderSeeders();
+      });
+      modalShell(modal, { title: "More filters", body, actions: [apply] });
+    });
+  });
+
+  // Keyboard shortcuts (skip when typing in a form).
+  document.addEventListener("keydown", (e) => {
+    if (e.target.matches("input, textarea, select")) return;
+    if (e.key === "/") { e.preventDefault(); if ($("#filter")) $("#filter").focus(); }
+    else if (e.key === "r" && !e.metaKey && !e.ctrlKey) refreshAll();
+    else if (e.key === "g") {
+      const once = (e2) => {
+        document.removeEventListener("keydown", once);
+        if (e2.key === "d") navigate("#/");
+        else if (e2.key === "s") navigate("#/seeders");
+        else if (e2.key === "p") navigate("#/pipeline");
+        else if (e2.key === "c") navigate("#/curation");
+      };
+      document.addEventListener("keydown", once, { once: true });
+      setTimeout(() => document.removeEventListener("keydown", once), 1000);
+    }
+  });
+
+  window.addEventListener("hashchange", handleRouteChange);
+}
+
+async function startPipeline(kind) {
+  let jobKey = null;
+  try {
+    const res = await post("/api/pipeline/" + kind);
+    jobKey = res.job;
+    toast("Started " + jobKey + ".", "ok");
+  } catch (err) { toast(err.message, "err"); return; }
+  await loadRunning();
+  if (jobKey && state.running.some((r) => r.source === jobKey)) {
+    navigate("#/log/" + encodeURIComponent(jobKey));
+  } else {
+    await loadPipeline();
+    handleRouteChange();
+  }
+}
+
+async function writeTimer() {
+  try {
+    const t = await post("/api/timer", {});
+    toast("Timer regenerated: " + (t.onCalendar || "none"), "ok");
+    await renderTimer();
+  } catch (err) { toast("Timer failed: " + err.message, "err"); }
 }
 
 async function init() {
-  $("#apiBase").value = state.apiBase;
-  $("#apiLabel").textContent = `api → ${apiBase()}`;
+  $("#apiLabel").textContent = "api: " + apiBase();
   bind();
   await loadCategories();
   await refreshAll();
+  handleRouteChange();
 }
 
-init();
+init().catch((err) => {
+  console.error("init failed:", err);
+  document.body.innerHTML =
+    '<div style="padding:32px;color:#ff5c5c;font-family:monospace;">' +
+      '<h1>Skyhook GUI failed to start</h1>' +
+      '<pre>' + esc(err.message) + '\n' + esc(err.stack || "") + '</pre>' +
+      '<p>Check the browser dev tools console for details.</p>' +
+    '</div>';
+});
+
+  const rt = $("#runTaskBtn");
+  if (rt) rt.addEventListener("click", runTask);
