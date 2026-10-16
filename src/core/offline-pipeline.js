@@ -198,6 +198,25 @@ function importStaged(db, config, knownDb) {
   return { files: files.length, imported, skipped };
 }
 
+/** Import staged seeder JSONL into the offline DB without a Supabase round-trip. */
+export function importStagedToOffline({ config }) {
+  const db = openOffline(config);
+  try {
+    const kPath = knownDbPath(config);
+    mkdirSync(dirname(kPath), { recursive: true });
+    const kdb = new Database(kPath);
+    try {
+      kdb.exec("CREATE TABLE IF NOT EXISTS known_urls (url TEXT PRIMARY KEY)");
+      kdb.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
+      return importStaged(db, config, kdb);
+    } finally {
+      kdb.close();
+    }
+  } finally {
+    db.close();
+  }
+}
+
 /** Pull: sync known-URLs index, pull untagged/all URLs, import staged seeders. */
 export async function pullOffline({ config, force = false, max = null, indexOnly = false }) {
   const sb = await sbClient(config);

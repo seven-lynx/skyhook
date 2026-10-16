@@ -13,7 +13,7 @@ npm install
 
 > Skyhook isn't published to npm (the `skyhook` name is taken by an unrelated
 > project). To use it as a dependency elsewhere, install from GitHub instead:
-> `npm install github:seven-lynx/skyhook#v0.3.6`.
+> `npm install github:seven-lynx/skyhook#v0.3.7`.
 
 ## 2. Try it (offline, no database)
 

@@ -50,6 +50,7 @@ const COMMANDS = [
   ["tag",        "Offline LLM tag worker (resumes; --mode retag-add|retag-replace for a second pass)"],
   ["pull",       "Pull untagged (--force all, --index-only just the dedup index) URLs from storage"],
   ["upload",     "Upload staged URLs + local tags/attributes/quality to storage"],
+  ["import-staged", "Import staged seeder JSONL into the offline DB (no Supabase round-trip)"],
   ["settings",   "View or toggle node settings (allowRemote, peers)"],
   ["init",       "Scaffold a new Skyhook setup (config, config/, seeders/, .skyhook/)"],
   ["tui",        "Interactive menu (terminal control center)"],
@@ -689,6 +690,18 @@ async function cmdUpload(a) {
   }
 }
 
+async function cmdImportStaged(a) {
+  const c = getConfig();
+  const { importStagedToOffline } = await import("../src/core/offline-pipeline.js");
+  try {
+    const r = await importStagedToOffline({ config: c });
+    console.log(`Imported ${r.imported.toLocaleString()} staged URLs, ${r.skipped.toLocaleString()} skipped (${r.files} files).`);
+  } catch (err) {
+    console.error("Import error:", err.message);
+    process.exitCode = 1;
+  }
+}
+
 // ── serve ───────────────────────────────────────────────────────────────────
 async function cmdServe(a) {
   const port = parseInt(val(a, "--port", "4173"), 10) || 4173;
@@ -721,6 +734,7 @@ async function main() {
     case "tag": await cmdTag(args); break;
     case "pull": await cmdPull(args); break;
     case "upload": await cmdUpload(args); break;
+  case "import-staged": await cmdImportStaged(args); break;
     case "settings": cmdSettings(args); break;
     case "init": cmdInit(args); break;
     case "tui": await cmdTui(); break;

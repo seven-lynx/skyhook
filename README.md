@@ -56,7 +56,7 @@ node bin/skyhook.js init --provider sqlite
 
 > **Not on npm.** Skyhook is distributed as a GitHub dependency — the `skyhook`
 > name on npm belongs to an unrelated project. Install via clone, or add
-> `github:seven-lynx/skyhook#v0.3.6` as a dependency.
+> `github:seven-lynx/skyhook#v0.3.7` as a dependency.
 
 ## Requirements
 
@@ -144,7 +144,12 @@ test/                   # smoke tests (node --test)
 
 ## Status
 
-**v0.3.6** — pipeline page now shows the status cards (counts + grouped run
+**v0.3.7** — the pipeline reports distinct tagged URLs (not the raw tag-row
+count); the dashboard shows the LLM worker once with a task label
+(LLM-Tagging, LLM-Fill-Categories, …); a single-instance guard (server registry
++ lock file) prevents two LLM workers at once; a new "Import into offline DB"
+action pulls staged seeder JSONL into the offline DB so a running tagger picks
+it up. Plus **v0.3.6** — pipeline page now shows the status cards (counts + grouped run
 buttons) instead of bare job buttons; the tagging worker's "running" state is a
 fresh heartbeat (no more stale "running" after a crash) and its log is written
 to `logs/tagger.log` and linked from the dashboard; live-log header text is

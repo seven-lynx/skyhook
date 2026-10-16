@@ -41,7 +41,7 @@ import {
   listRunning, runProgress, stopRun, stopAll, logPath, runJob,
   listCategories, fetchSiteMeta, createSeeder, deleteSeeder,
 } from "../engine/seeder-engine.js";
-import { pipelineStatus, startPipelineJob } from "./pipeline.js";
+import { pipelineStatus, startPipelineJob, isLlmKind } from "./pipeline.js";
 import { nodeId, getConfig } from "../config.js";
 import {
   routeSeeders, peerFor, runRemote, forwardSchedule, remoteToken,
@@ -367,12 +367,15 @@ export function startServer(port = 4173) {
         if (!taskKey) return send(res, 400, { error: "task is required" });
         const c = getConfig();
         if (!c.pipeline?.offlineDb) return send(res, 400, { error: "pipeline.offlineDb not configured" });
-        if (listRunning().some((r) => r.source === `task:${taskKey}`)) {
-          return send(res, 409, { error: `task:${taskKey} already running` });
+        const jobKey = `task:${taskKey}`;
+        if (listRunning().some((r) => r.source === jobKey)) {
+          return send(res, 409, { error: `${jobKey} already running` });
+        }
+        if (listRunning().some((r) => isLlmKind(r.source))) {
+          return send(res, 409, { error: "another LLM worker is already running" });
         }
         // Launch via runJob — the task worker runs as a CLI subprocess so it
         // shows up in the live-log drawer with its own tab.
-        const jobKey = `task:${taskKey}`;
         const skyhookPath = join(__dirname, "..", "..", "bin", "skyhook.js");
         runJob({ key: jobKey, scriptPath: skyhookPath, args: ["tag", "--task", taskKey] })
           .then(() => {})

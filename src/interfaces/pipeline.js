@@ -104,13 +104,21 @@ async function runTag() {
   return { tagged: tagged.length };
 }
 
+export function isLlmKind(kind) {
+  return kind === "tag" || kind === "retag-add" || kind === "retag-replace" ||
+    (typeof kind === "string" && kind.startsWith("task:"));
+}
+
 export function startPipelineJob(kind) {
   const job = pipelineConfig().jobs?.[kind];
   if (job) {
     const command = Array.isArray(job.command) ? job.command : [];
     const [script, ...args] = command;
     if (!script) return null;
-    if (listRunning().some((r) => r.source === kind)) return { key: kind, alreadyRunning: true };
+    const running = listRunning();
+    if (running.some((r) => r.source === kind)) return { key: kind, alreadyRunning: true };
+    // Only one LLM worker at a time (they share the local model endpoint).
+    if (isLlmKind(kind) && running.some((r) => isLlmKind(r.source))) return { key: kind, alreadyRunning: true };
     runJob({ key: kind, scriptPath: script, args })
       .then(() => {})
       .catch((err) => console.error(`pipeline ${kind} error:`, err.message));

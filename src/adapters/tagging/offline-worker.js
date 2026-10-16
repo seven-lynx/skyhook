@@ -12,8 +12,8 @@
  * own prompt, URL filter, parse logic, and write target.
  */
 import Database from "better-sqlite3";
-import { appendFileSync, existsSync, mkdirSync } from "fs";
-import { dirname } from "path";
+import { appendFileSync, existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
 import { loadText } from "./index.js";
 import { canonicalizeTagList } from "./canonicalize.js";
 import { getTask, loadTaskPromptFile, buildTaskUserMessage, parseTaskResponse } from "./tasks.js";
@@ -30,6 +30,29 @@ const VALID_CONTENT_TYPE = new Set([
   "reference", "gallery", "interactive", "other",
 ]);
 const VALID_DEPTH = new Set(["quick-read", "medium", "deep-dive", "reference"]);
+
+const TAG_LOCK_STALE_MS = 15 * 60 * 1000;
+
+function acquireTagLock(lockPath) {
+  const payload = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(lockPath, payload, { flag: "wx" });
+      return;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      let stale = false;
+      try { stale = Date.now() - statSync(lockPath).mtimeMs >= TAG_LOCK_STALE_MS; } catch { stale = true; }
+      if (!stale) throw new Error("another tagger is already running (lock file is fresh)");
+      try { unlinkSync(lockPath); } catch {}
+    }
+  }
+  throw new Error("could not acquire tagger lock");
+}
+
+function releaseTagLock(lockPath) {
+  try { unlinkSync(lockPath); } catch {}
+}
 
 /** Load a system prompt, extracting the "## System Prompt" section if present. */
 export function loadPrompt(file) {
@@ -245,6 +268,14 @@ export async function runOfflineTagWorker(opts = {}) {
     console.log(`Task: ${task.label} (target: ${task.target})`);
   }
 
+  // Single-instance guard: only one LLM worker may run against this DB at a
+  // time. The lock file also covers CLI launches the server can't see, and a
+  // stale lock (crashed worker) is reclaimed.
+  const lockPath = join(dirname(dbPath), ".tagger.lock");
+  let lockHeld = false;
+  acquireTagLock(lockPath);
+  lockHeld = true;
+
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = OFF");
@@ -316,7 +347,7 @@ export async function runOfflineTagWorker(opts = {}) {
   updateProgress.run(tier, cp.last_url_id ?? null, totalProcessed, totalFailed, totalSkipped, ratePerHour);
 
   let shuttingDown = false;
-  const cleanup = () => { try { db.close(); } catch {} };
+  const cleanup = () => { try { if (lockHeld) releaseTagLock(lockPath); } catch {} try { db.close(); } catch {} };
   process.on("SIGINT", () => {
     if (shuttingDown) { cleanup(); process.exit(1); }
     shuttingDown = true;

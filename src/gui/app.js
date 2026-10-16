@@ -382,6 +382,42 @@ function updateBulkBar() {
   if (selCount) selCount.textContent = sel ? (sel + " selected") : "";
 }
 
+function isLlmSource(source) {
+  return source === "tag" || source === "retag-add" || source === "retag-replace" ||
+    (typeof source === "string" && source.startsWith("task:"));
+}
+const LLM_LABELS = {
+  tag: "LLM-Tagging",
+  "retag-add": "LLM-Tagging (2nd pass: add)",
+  "retag-replace": "LLM-Tagging (2nd pass: replace)",
+  "task:fill-category": "LLM-Fill-Categories",
+  "task:fill-subcategory": "LLM-Fill-Subcategories",
+  "task:fill-tags": "LLM-Fill-Tags",
+  "task:fill-content-type": "LLM-Fill-Content-Types",
+  "task:fill-quality": "LLM-Fill-Quality",
+  "task:fill-attributes": "LLM-Fill-Attributes",
+};
+function llmLabel(source) {
+  return LLM_LABELS[source] ||
+    (typeof source === "string" && source.startsWith("task:") ? "LLM-" + source.slice(5) : "LLM-Tagging");
+}
+function runRow(label, r, isHeartbeat) {
+  const logHref = isHeartbeat ? "#/log/tagger" : "#/log/" + encodeURIComponent(r.source);
+  let html =
+    '<div class="due-row">' +
+      '<span class="spin-pulse"></span>' +
+      '<strong>' + esc(label) + '</strong>' +
+      '<span class="muted">' + (isHeartbeat ? "running" : esc(fmtElapsed(r.elapsedMs))) + '</span>' +
+      '<a class="btn btn-sm" href="' + logHref + '">View log</a>';
+  if (!isHeartbeat) {
+    html +=
+      '<button class="icon-btn sm" data-stop-one="' + esc(r.source) + '" aria-label="Stop ' + esc(r.source) + '" title="Stop">' +
+        '<svg class="ic" aria-hidden="true"><use href="#ic-stop"/></svg>' +
+      '</button>';
+  }
+  return html + '</div>';
+}
+
 function renderDashboard() {
   const total = state.seeders.length;
   const scheduled = state.seeders.filter((s) => s.scheduled).length;
@@ -406,28 +442,18 @@ function renderDashboard() {
 
   const runningEl = $("#runningList");
   const workerRunning = state.pipe && /Worker status:\s*running/i.test(state.pipe.note || "");
+  const llmRunning = state.running.filter((r) => isLlmSource(r.source));
+  const otherRunning = state.running.filter((r) => !isLlmSource(r.source));
   const items = [];
-  if (workerRunning) {
-    items.push(
-      '<div class="due-row">' +
-        '<span class="spin-pulse"></span>' +
-        '<strong>Tagger worker</strong>' +
-        '<span class="muted">running</span>' +
-        '<a class="btn btn-sm" href="#/log/tagger">View log</a>' +
-      '</div>');
+  // Show the LLM worker exactly once. Prefer the server-known run (it carries
+  // the task key, e.g. task:fill-category); fall back to the DB heartbeat for
+  // workers launched outside the server.
+  if (llmRunning.length) {
+    for (const r of llmRunning) items.push(runRow(llmLabel(r.source), r, false));
+  } else if (workerRunning) {
+    items.push(runRow("LLM-Tagging", null, true));
   }
-  for (const r of state.running) {
-    items.push(
-      '<div class="due-row">' +
-        '<span class="spin-pulse"></span>' +
-        '<strong>' + esc(r.source) + '</strong>' +
-        '<span class="muted">' + esc(fmtElapsed(r.elapsedMs)) + '</span>' +
-        '<a class="btn btn-sm" href="#/log/' + encodeURIComponent(r.source) + '">View log</a>' +
-        '<button class="icon-btn sm" data-stop-one="' + esc(r.source) + '" aria-label="Stop ' + esc(r.source) + '" title="Stop">' +
-          '<svg class="ic" aria-hidden="true"><use href="#ic-stop"/></svg>' +
-        '</button>' +
-      '</div>');
-  }
+  for (const r of otherRunning) items.push(runRow(r.source, r, false));
   if (items.length) {
     runningEl.innerHTML = items.join("");
   } else {
