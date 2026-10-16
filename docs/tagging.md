@@ -74,7 +74,7 @@ to the LLM. Each task is config-driven and ships with a draft prompt you can edi
 
 ### Task list (offline DB)
 
-| Task key | Fills | Reads missing from | Prompt file |
+| Task key | Fills | Selects URLs where | Prompt file |
 |---|---|---|---|
 | `fill-category` | `urls.category_id` | `category_id IS NULL` | `config/prompts/fill-category.md` |
 | `fill-subcategory` | `urls.subcategory_id` | `subcategory_id IS NULL` (category set) | `config/prompts/fill-subcategory.md` |
@@ -82,6 +82,20 @@ to the LLM. Each task is config-driven and ships with a draft prompt you can edi
 | `fill-content-type` | `local_url_attributes.content_type` | no attributes row, or `content_type IS NULL` | `config/prompts/fill-content-type.md` |
 | `fill-quality` | `local_url_quality` (all fields) | no quality row, or `quality_score IS NULL` | `config/prompts/fill-quality.md` |
 | `fill-attributes` | `local_url_attributes` (audience/depth/tone/is_news) | no attributes row, or `audience_level IS NULL` | `config/prompts/fill-attributes.md` |
+| `fill-tags-sparse` | `local_url_tags` | fewer than `minTags` tags (default 3) | `tagging.promptFile` (canonical) |
+
+**Recheck** tasks (`reprocess: true` — reprocess already-filled URLs):
+
+| Task key | Rechecks | Selects URLs where |
+|---|---|---|
+| `recheck-category` | category | all eligible URLs |
+| `recheck-subcategory` | subcategory | category already set |
+| `recheck-tags` | tags | all eligible URLs |
+| `recheck-content-type` | content type | all eligible URLs |
+| `recheck-quality` | quality | all eligible URLs |
+| `recheck-attributes` | attributes | all eligible URLs |
+| `recheck-low-confidence-attributes` | attributes | existing fill has `confidence < 0.7` |
+| `recheck-low-confidence-quality` | quality | existing fill has `confidence < 0.7` |
 
 ### Config
 
@@ -92,22 +106,37 @@ tagging:
   tasks:
     - { key: "fill-category",  label: "Fill missing categories",
         promptFile: "config/prompts/fill-category.md",
-        filter: "category",   target: "category" }
+        filterClause: "AND u.category_id IS NULL", target: "category",
+        resumeSource: "task:fill-category" }
+    - { key: "recheck-category", label: "Recheck all categories",
+        promptFile: "config/prompts/fill-category.md",
+        filterClause: "", target: "category",
+        resumeSource: "task:recheck-category", reprocess: true }
+    - { key: "fill-tags-sparse", label: "Add tags to URLs with few tags",
+        target: "tags", resumeSource: "task:fill-tags-sparse", minTags: 3 }
 ```
 
-The task's `resumeSource` marker (e.g. `task:fill-category`) ensures each task
-resumes independently — running "fill categories" won't clobber the main `tag`
-run's progress.
+Task fields: `key`, `label`, `promptFile` (with a `## System Prompt` section),
+`filterClause` (a SQL `WHERE` fragment against `urls u`), `target`
+(category / subcategory / tags / contentType / quality / attributes), and
+`resumeSource` (an independent resume marker).
+
+- `reprocess: true` skips the "already tagged by this run" exclusion, so the
+  task re-runs every eligible URL (used by the `recheck-*` tasks).
+- `minTags: N` (tags target only) selects URLs with fewer than `N` tags — set it
+  in config, or override it from the GUI's "Min tags" input.
 
 ### Running a task
 
-- **GUI** — Pipeline tab → **"Fill missing info (LLM)"** dropdown picks a task;
-  the **Run** button launches it. Progress streams in the live-log drawer under a
-  `task:<key>` tab. The **Tagging Gaps** cards (Pipeline tab and Stats tab) show
-  how many URLs are missing each kind of info.
-- **CLI** — `skyhook tag --task fill-category` (also `--task fill-tags`, etc.)
-- **API** — `GET /api/tagging/missing` (counts), `POST /api/tagging/run { task }`.
-
+- **GUI** — Pipeline tab → **"Targeted LLM tasks"**: pick a **Task**, optionally
+  pick a **Model** (detected from your configured providers; blank uses
+  `tagging.model`), set **Min tags** for the sparse-tags task, then **Run**.
+  Progress streams in the live-log drawer under a `task:<key>` tab. The
+  **Tagging Gaps** cards show how many URLs are missing each kind of info.
+- **CLI** — `skyhook tag --task fill-category [--model NAME] [--provider NAME] [--min-tags N]`
+- **API** — `GET /api/tagging/tasks` (task list), `GET /api/tagging/models`
+  (installed models), `GET /api/tagging/missing` (counts), and
+  `POST /api/tagging/run { task, model?, provider?, minTags? }`.
 ### Prompt convention
 
 Task prompts use the same `## System Prompt` section convention as

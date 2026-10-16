@@ -42,7 +42,7 @@ const state = {
   apiBase: localStorage.getItem("skyhook.apiBase") || "",
   live: null, logSources: [], followLog: true, userTab: null,
   historySource: null, wasRunning: false, categories: [],
-  infoSource: null, taggingGaps: null,
+  infoSource: null, taggingGaps: null, tagTasks: [],
   route: { name: "dashboard", params: {} },
   nodeId: "local",
 };
@@ -555,33 +555,86 @@ async function renderPipeline() {
 }
 
 async function renderTaggingTasks() {
-  await loadTaggingGaps();
-  const g = state.taggingGaps;
+  const GT = ">";
+  const [g, tasksRes, modelsRes] = await Promise.all([
+    loadTaggingGaps(),
+    get("/api/tagging/tasks").catch(() => null),
+    get("/api/tagging/models").catch(() => null),
+  ]);
   const missing = (g && g.missing) || {};
-  const tasks = [
-    { key: "fill-category",    label: "Fill missing categories",    count: missing.category },
-    { key: "fill-subcategory", label: "Fill missing subcategories", count: missing.subcategory },
-    { key: "fill-tags",        label: "Add tags to untagged URLs",   count: missing.tags },
-    { key: "fill-content-type",label: "Fill missing content types", count: missing.contentType },
-    { key: "fill-quality",     label: "Fill missing quality",       count: missing.quality },
-    { key: "fill-attributes",  label: "Fill missing attributes",    count: missing.attributes },
+  const FALLBACK_TASKS = [
+    { key: "fill-category", label: "Fill missing categories", gap: "category" },
+    { key: "fill-subcategory", label: "Fill missing subcategories", gap: "subcategory" },
+    { key: "fill-tags", label: "Add tags to untagged URLs", gap: "tags" },
+    { key: "fill-content-type", label: "Fill missing content types", gap: "contentType" },
+    { key: "fill-quality", label: "Fill missing quality", gap: "quality" },
+    { key: "fill-attributes", label: "Fill missing attributes", gap: "attributes" },
   ];
+  state.tagTasks = (tasksRes && Array.isArray(tasksRes.tasks)) ? tasksRes.tasks : FALLBACK_TASKS;
+  const tasks = state.tagTasks;
+
   const sel = $("#tagTask");
   const prev = sel && sel.value;
   if (sel) {
-    sel.innerHTML = '<option value="">Select a task…</option>' + tasks.map((t) =>
-      '<option value="' + esc(t.key) + '">' + esc(t.label) + (t.count != null ? ' (' + Number(t.count).toLocaleString() + ')' : "") + '</option>').join("");
+    sel.innerHTML = '<option value=""' + GT + 'Select a task…' + '</option' + GT + tasks.map((t) => {
+      let suffix = "";
+      if (t.gap && missing[t.gap] != null) suffix = " (" + Number(missing[t.gap]).toLocaleString() + ")";
+      else if (t.reprocess) suffix = " — recheck";
+      else if (t.minTags != null) suffix = " — min " + t.minTags + " tags";
+      return '<option value="' + esc(t.key) + '"' + GT + esc(t.label) + suffix + '</option' + GT;
+    }).join("");
     if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
   }
+
+  const mSel = $("#tagModel");
+  const mPrev = mSel && mSel.value;
+  const models = (modelsRes && Array.isArray(modelsRes.models)) ? modelsRes.models : [];
+  if (mSel) {
+    const opts = ['<option value=""' + GT + 'Configured model' + '</option' + GT];
+    for (const m of models) {
+      opts.push('<option value="' + esc(m.id) + '" data-provider="' + esc(m.provider || "") + '"' + GT + esc(m.label || m.id) + '</option' + GT);
+    }
+    mSel.innerHTML = opts.join("");
+    if (mPrev && [...mSel.options].some((o) => o.value === mPrev)) mSel.value = mPrev;
+    else if (modelsRes && modelsRes.configured && [...mSel.options].some((o) => o.value === modelsRes.configured)) {
+      mSel.value = modelsRes.configured;
+    }
+  }
+
+  syncTagMinTags();
   const runBtn = $("#runTaskBtn");
   if (runBtn) runBtn.disabled = false;
 }
 
+function syncTagMinTags() {
+  const wrap = $("#tagMinTagsWrap");
+  const input = $("#tagMinTags");
+  if (!wrap || !input) return;
+  const taskKey = $("#tagTask") && $("#tagTask").value;
+  const t = state.tagTasks.find((x) => x.key === taskKey);
+  const show = !!(t && t.minTags != null);
+  wrap.style.display = show ? "" : "none";
+  if (show && t.minTags && !input.value) input.value = t.minTags;
+}
+
 async function runTask() {
-  const task = $("#tagTask").value;
+  const taskSel = $("#tagTask");
+  const task = taskSel && taskSel.value;
   if (!task) { toast("Select a task first.", "err"); return; }
+  const t = state.tagTasks.find((x) => x.key === task);
+  const mSel = $("#tagModel");
+  const model = mSel && mSel.value ? mSel.value : null;
+  const provider = model && mSel.selectedIndex >= 0 && mSel.options[mSel.selectedIndex]
+    ? (mSel.options[mSel.selectedIndex].dataset.provider || null) : null;
+  const body = { task };
+  if (model) body.model = model;
+  if (provider) body.provider = provider;
+  if (t && t.minTags != null) {
+    const n = parseInt(($("#tagMinTags") && $("#tagMinTags").value) || "", 10);
+    if (Number.isFinite(n) && n > 0) body.minTags = n;
+  }
   try {
-    const res = await post("/api/tagging/run", { task });
+    const res = await post("/api/tagging/run", body);
     toast("Started " + res.task + ".", "ok");
     navigate("#/log/" + encodeURIComponent(res.job));
   } catch (err) { toast(err.message, "err"); }
@@ -1148,6 +1201,11 @@ function bind() {
     if (btn.dataset.danger === "1" && !confirm('Run "' + btn.dataset.pipe + '"? This is destructive and cannot be undone.')) return;
     startPipeline(btn.dataset.pipe);
   });
+
+  const rtb = $("#runTaskBtn");
+  if (rtb) rtb.addEventListener("click", runTask);
+  const tt = $("#tagTask");
+  if (tt) tt.addEventListener("change", syncTagMinTags);
 
   const pb = $("#pruneBtn");
   if (pb) pb.addEventListener("click", async () => {

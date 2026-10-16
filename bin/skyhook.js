@@ -644,13 +644,14 @@ async function cmdTag(a) {
   const opts = {
     dbPath: c.pipeline?.offlineDb,
     provider,
-    model: c.tagging?.model,
+    model: val(a, "--model", c.tagging?.model),
     prompt: loadPrompt(c.tagging?.promptFile),
     modelSource: val(a, "--model-source", c.tagging?.worker?.modelSource || "llm"),
     batchSize: parseInt(val(a, "--batch-size", String(c.tagging?.worker?.batchSize || 25)), 10) || 25,
     max: parseInt(val(a, "--max", "0"), 10) || null,
     mode: val(a, "--mode", "tag"),
     tier: parseInt(val(a, "--tier", "0"), 10) || 0,
+    minTags: parseInt(val(a, "--min-tags", "0"), 10) || null,
     task: taskKey,
     logFile: join(c.logDir, "tagger.log"),
   };

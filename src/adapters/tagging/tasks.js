@@ -19,42 +19,98 @@ const prompt = (rel) => join(PACKAGE_ROOT, rel);
 
 const DEFAULT_TASKS = [
   {
-    key: "fill-category", label: "Fill missing categories",
+    key: "fill-category", label: "Fill missing categories", gap: "category",
     promptFile: prompt("config/prompts/fill-category.md"),
     filterClause: "AND u.category_id IS NULL",
     target: "category", resumeSource: "task:fill-category",
   },
   {
-    key: "fill-subcategory", label: "Fill missing subcategories",
+    key: "fill-subcategory", label: "Fill missing subcategories", gap: "subcategory",
     promptFile: prompt("config/prompts/fill-subcategory.md"),
     filterClause: "AND u.subcategory_id IS NULL AND u.category_id IS NOT NULL",
     target: "subcategory", resumeSource: "task:fill-subcategory",
   },
   {
-    key: "fill-tags", label: "Add tags to untagged URLs",
+    key: "fill-tags", label: "Add tags to untagged URLs", gap: "tags",
     promptFile: null,
     filterClause: "AND u.id NOT IN (SELECT url_id FROM local_url_tags)",
     target: "tags", resumeSource: "task:fill-tags",
   },
   {
-    key: "fill-content-type", label: "Fill missing content types",
+    key: "fill-content-type", label: "Fill missing content types", gap: "contentType",
     promptFile: prompt("config/prompts/fill-content-type.md"),
     filterClause: `AND (u.id NOT IN (SELECT url_id FROM local_url_attributes) OR u.id IN (SELECT url_id FROM local_url_attributes WHERE content_type IS NULL))`,
     target: "contentType", resumeSource: "task:fill-content-type",
   },
   {
-    key: "fill-quality", label: "Fill missing quality assessments",
+    key: "fill-quality", label: "Fill missing quality assessments", gap: "quality",
     promptFile: prompt("config/prompts/fill-quality.md"),
     filterClause: `AND (u.id NOT IN (SELECT url_id FROM local_url_quality) OR u.id IN (SELECT url_id FROM local_url_quality WHERE quality_score IS NULL))`,
     target: "quality", resumeSource: "task:fill-quality",
   },
   {
-    key: "fill-attributes", label: "Fill missing attributes",
+    key: "fill-attributes", label: "Fill missing attributes", gap: "attributes",
     promptFile: prompt("config/prompts/fill-attributes.md"),
     filterClause: `AND (u.id NOT IN (SELECT url_id FROM local_url_attributes) OR u.id IN (SELECT url_id FROM local_url_attributes WHERE audience_level IS NULL))`,
     target: "attributes", resumeSource: "task:fill-attributes",
   },
+
+  // Recheck every URL, including ones already filled (reprocess bypasses the
+  // "already tagged by this run" exclusion).
+  {
+    key: "recheck-category", label: "Recheck all categories",
+    promptFile: prompt("config/prompts/fill-category.md"),
+    filterClause: "", target: "category", resumeSource: "task:recheck-category", reprocess: true,
+  },
+  {
+    key: "recheck-subcategory", label: "Recheck all subcategories",
+    promptFile: prompt("config/prompts/fill-subcategory.md"),
+    filterClause: "AND u.category_id IS NOT NULL",
+    target: "subcategory", resumeSource: "task:recheck-subcategory", reprocess: true,
+  },
+  {
+    key: "recheck-tags", label: "Recheck tags on all URLs",
+    promptFile: null,
+    filterClause: "", target: "tags", resumeSource: "task:recheck-tags", reprocess: true,
+  },
+  {
+    key: "recheck-content-type", label: "Recheck all content types",
+    promptFile: prompt("config/prompts/fill-content-type.md"),
+    filterClause: "", target: "contentType", resumeSource: "task:recheck-content-type", reprocess: true,
+  },
+  {
+    key: "recheck-quality", label: "Recheck all quality assessments",
+    promptFile: prompt("config/prompts/fill-quality.md"),
+    filterClause: "", target: "quality", resumeSource: "task:recheck-quality", reprocess: true,
+  },
+  {
+    key: "recheck-attributes", label: "Recheck all attributes",
+    promptFile: prompt("config/prompts/fill-attributes.md"),
+    filterClause: "", target: "attributes", resumeSource: "task:recheck-attributes", reprocess: true,
+  },
+
+  // Recheck only URLs whose existing fill was low-confidence.
+  {
+    key: "recheck-low-confidence-attributes", label: "Recheck low-confidence attributes",
+    promptFile: prompt("config/prompts/fill-attributes.md"),
+    filterClause: "AND u.id IN (SELECT url_id FROM local_url_attributes WHERE confidence IS NOT NULL AND confidence < 0.7)",
+    target: "attributes", resumeSource: "task:recheck-low-confidence-attributes", reprocess: true,
+  },
+  {
+    key: "recheck-low-confidence-quality", label: "Recheck low-confidence quality",
+    promptFile: prompt("config/prompts/fill-quality.md"),
+    filterClause: "AND u.id IN (SELECT url_id FROM local_url_quality WHERE confidence IS NOT NULL AND confidence < 0.7)",
+    target: "quality", resumeSource: "task:recheck-low-confidence-quality", reprocess: true,
+  },
+
+  // Add tags to URLs that have fewer than minTags tags (configurable).
+  {
+    key: "fill-tags-sparse", label: "Add tags to URLs with few tags",
+    promptFile: null,
+    filterClause: "", target: "tags", resumeSource: "task:fill-tags-sparse", minTags: 3,
+  },
 ];
+
 export function getTasks() {
   const cfg = getConfig();
   return cfg.tagging?.tasks?.length ? cfg.tagging.tasks : DEFAULT_TASKS;

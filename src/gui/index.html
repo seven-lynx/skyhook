@@ -259,11 +259,18 @@
         <div class="card flex gap-3" style="align-items: center; flex-wrap: wrap;">
           <label for="tagTask" class="muted" style="font-size: var(--text-sm);">Task</label>
           <select id="tagTask" style="flex: 1; min-width: 200px;"></select>
+          <label for="tagModel" class="muted" style="font-size: var(--text-sm);">Model</label>
+          <select id="tagModel" style="flex: 1; min-width: 180px;"></select>
+          <span id="tagMinTagsWrap" style="display:none; align-items:center; gap:var(--space-1);">
+            <label for="tagMinTags" class="muted" style="font-size: var(--text-sm);">Min tags</label>
+            <input id="tagMinTags" type="number" min="1" step="1" value="3" style="width: 90px;" />
+          </span>
           <button id="runTaskBtn" class="btn-primary" type="button">
             <svg class="ic" aria-hidden="true"><use href="#ic-play"/></svg>
             <span>Run task</span>
           </button>
         </div>
+
         <h2 class="h-section">Active jobs</h2>
         <div class="card" id="pipelineJobs"></div>
       </section>

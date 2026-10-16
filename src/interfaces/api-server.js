@@ -51,7 +51,8 @@ import { readStaged } from "../core/staged.js";
 import { mergeRemoteRows, pushStagedToStorage } from "../core/sync.js";
 import { statsFromStaged } from "../core/analytics.js";
 import { listCache, pruneStaged, clearDiscovery, clearStaged } from "../core/data.js";
-import { countMissingSync } from "../adapters/tagging/tasks.js";
+import { countMissingSync, getTasks } from "../adapters/tagging/tasks.js";
+import { detectModels } from "../adapters/tagging/index.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -361,6 +362,23 @@ export function startServer(port = 4173) {
       }
 
       // ── tagging task run (launch a targeted LLM pass) ──────────────────
+      // ── tagging task definitions (config-driven) ───────────────────────
+      if (method === "GET" && path === "/api/tagging/tasks") {
+        const tasks = getTasks().map((t) => ({
+          key: t.key, label: t.label, target: t.target ?? null,
+          gap: t.gap ?? null, reprocess: !!t.reprocess,
+          minTags: t.minTags ?? null,
+        }));
+        return send(res, 200, { tasks });
+      }
+
+      // ── tagging models (probe configured providers) ────────────────────
+      if (method === "GET" && path === "/api/tagging/models") {
+        const c = getConfig();
+        const models = await detectModels(c.tagging?.providers || []);
+        return send(res, 200, { models, configured: c.tagging?.model ?? null });
+      }
+
       if (method === "POST" && path === "/api/tagging/run") {
         const body = await readBody(req);
         const taskKey = (body.task || "").trim();
@@ -377,7 +395,14 @@ export function startServer(port = 4173) {
         // Launch via runJob — the task worker runs as a CLI subprocess so it
         // shows up in the live-log drawer with its own tab.
         const skyhookPath = join(__dirname, "..", "..", "bin", "skyhook.js");
-        runJob({ key: jobKey, scriptPath: skyhookPath, args: ["tag", "--task", taskKey] })
+        const args = ["tag", "--task", taskKey];
+        const model = (body.model || "").trim();
+        const provider = (body.provider || "").trim();
+        const minTags = parseInt(body.minTags, 10);
+        if (model) args.push("--model", model);
+        if (provider) args.push("--provider", provider);
+        if (Number.isFinite(minTags) && minTags > 0) args.push("--min-tags", String(minTags));
+        runJob({ key: jobKey, scriptPath: skyhookPath, args })
           .then(() => {})
           .catch((err) => console.error(`task ${taskKey} error:`, err.message));
         return send(res, 200, { ok: true, job: jobKey, task: taskKey });

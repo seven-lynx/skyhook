@@ -240,7 +240,7 @@ export async function runOfflineTagWorker(opts = {}) {
   const {
     dbPath, provider, model, prompt,
     validTags = null, modelSource = "llm", batchSize = 25, max = null,
-    mode = "tag", tier = 0, task: taskKey = null, logFile = null,
+    mode = "tag", tier = 0, task: taskKey = null, logFile = null, minTags = null,
   } = opts;
 
   // Tee console output to a persistent log file so the GUI can show the
@@ -263,10 +263,8 @@ export async function runOfflineTagWorker(opts = {}) {
 
   // Resolve task (if --task was given). Task mode overrides the default prompt + mode.
   const task = taskKey ? getTask(taskKey) : null;
-  if (task) {
-    if (!task) throw new Error(`Unknown task: ${taskKey}`);
-    console.log(`Task: ${task.label} (target: ${task.target})`);
-  }
+  if (taskKey && !task) throw new Error(`Unknown task: ${taskKey}`);
+  if (task) console.log(`Task: ${task.label} (target: ${task.target})`);
 
   // Single-instance guard: only one LLM worker may run against this DB at a
   // time. The lock file also covers CLI launches the server can't see, and a
@@ -290,11 +288,15 @@ export async function runOfflineTagWorker(opts = {}) {
   const resolvedPrompt = taskActive ? (loadTaskPromptFile(task) || prompt) : prompt;
   const resolvedModelSource = taskActive ? task.resumeSource : modelSource;
 
-  const reprocess = mode === "retag-add" || mode === "retag-replace";
+  const reprocess = mode === "retag-add" || mode === "retag-replace" || (taskActive && task.reprocess === true);
   const taggedFilter = reprocess
     ? ""
     : `AND u.id NOT IN (SELECT url_id FROM local_url_tagged_by WHERE model_source IN ('${resolvedModelSource}', '${resolvedModelSource}:failed'))`;
   const taskFilter = taskActive ? (task.filterClause || "") : "";
+  const resolvedMinTags = minTags ?? (taskActive && task.minTags != null ? Number(task.minTags) : null);
+  const minTagsFilter = (resolvedMinTags != null && resolvedMinTags > 0)
+    ? `AND (u.id NOT IN (SELECT url_id FROM local_url_tags) OR (SELECT COUNT(*) FROM local_url_tags t WHERE t.url_id = u.id) < ${resolvedMinTags})`
+    : "";
   const URL_QUERY = `
     SELECT u.id, u.title, u.description, u.url
     FROM urls u
@@ -302,6 +304,7 @@ export async function runOfflineTagWorker(opts = {}) {
       AND u.title IS NOT NULL AND u.title != ''
       ${taggedFilter}
       ${taskFilter}
+      ${minTagsFilter}
     ORDER BY u.id
   `;
 
@@ -309,6 +312,11 @@ export async function runOfflineTagWorker(opts = {}) {
   const insertTaggedBy = db.prepare(`INSERT OR IGNORE INTO local_url_tagged_by (url_id, model_source) VALUES (?, ?)`);
   const deleteTagsFor = db.prepare(`DELETE FROM local_url_tags WHERE url_id = ? AND source = ?`);
   const insertAttr = db.prepare(`INSERT OR REPLACE INTO local_url_attributes (url_id, audience_level, content_type, depth, tone, is_news, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  // Targeted attribute writes so gap-fill tasks don't clobber each other's
+  // columns (INSERT OR REPLACE nulls any column a task isn't filling).
+  const ensureAttr = db.prepare(`INSERT OR IGNORE INTO local_url_attributes (url_id) VALUES (?)`);
+  const updateContentType = db.prepare(`UPDATE local_url_attributes SET content_type = ?, confidence = ? WHERE url_id = ?`);
+  const updateAttributes = db.prepare(`UPDATE local_url_attributes SET audience_level = ?, depth = ?, tone = ?, is_news = ?, confidence = ? WHERE url_id = ?`);
   const insertQuality = db.prepare(`INSERT OR REPLACE INTO local_url_quality (url_id, url_type, quality_score, is_parked, is_product, is_spam, is_paywalled, is_login_required, is_broken, is_thin, is_clickbait, is_english, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 // Task-specific write helpers.
   const updateCategory = db.prepare(`UPDATE urls SET category_id = ? WHERE id = ?`);
@@ -399,7 +407,8 @@ export async function runOfflineTagWorker(opts = {}) {
                 }
                 break;
               case "contentType":
-                insertAttr.run(url.id, null, r.contentType, null, null, null, r.confidence ?? 0.5);
+                ensureAttr.run(url.id);
+                updateContentType.run(r.contentType, r.confidence ?? 0.5, url.id);
                 break;
               case "quality":
                 insertQuality.run(url.id, r.url_type, r.quality_score,
@@ -409,7 +418,8 @@ export async function runOfflineTagWorker(opts = {}) {
                   r.is_english ? 1 : 0, r.confidence ?? 0.5);
                 break;
               case "attributes":
-                insertAttr.run(url.id, r.audience_level, null, r.depth, r.tone, r.is_news ? 1 : 0, r.confidence ?? 0.5);
+                ensureAttr.run(url.id);
+                updateAttributes.run(r.audience_level, r.depth, r.tone, r.is_news ? 1 : 0, r.confidence ?? 0.5, url.id);
                 break;
             }
           }

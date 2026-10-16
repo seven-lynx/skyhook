@@ -137,6 +137,7 @@ function importStaged(db, config, knownDb) {
   let cols = db.prepare("PRAGMA table_info(urls)").all().map((c) => c.name);
   if (!cols.includes("is_staged")) { db.exec("ALTER TABLE urls ADD COLUMN is_staged INTEGER DEFAULT 0"); cols.push("is_staged"); }
   db.exec("CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url)");
+  try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_urls_url_uniq ON urls(url)"); } catch { /* legacy duplicate rows - in-memory + known/roam checks still guard */ }
 
   const knownHas = knownDb.prepare("SELECT 1 FROM known_urls WHERE url = ?");
   const knownAdd = knownDb.prepare("INSERT OR IGNORE INTO known_urls (url) VALUES (?)");
@@ -149,10 +150,11 @@ function importStaged(db, config, knownDb) {
     seeder_score: "seeder_score", approved: "approved", inactive: "inactive", is_staged: "is_staged",
   };
   const insertCols = Object.values(FIELD_TO_COL).filter((c) => cols.includes(c));
-  const insertStmt = db.prepare(`INSERT INTO urls (${insertCols.join(", ")}) VALUES (${insertCols.map(() => "?").join(", ")})`);
+  const insertStmt = db.prepare(`INSERT OR IGNORE INTO urls (${insertCols.join(", ")}) VALUES (${insertCols.map(() => "?").join(", ")})`);
 
   const consumedDir = join(dir, "consumed");
   let imported = 0, skipped = 0, total = 0;
+  const seen = new Set(); // URLs inserted this run (in-memory dedup within the import)
 
   for (const file of files) {
     const path = join(dir, file);
@@ -165,6 +167,7 @@ function importStaged(db, config, knownDb) {
       for (const r of rows) {
         if (!r.url) continue;
         total++;
+        if (seen.has(r.url)) { skipped++; continue; }
         if (knownHas.get(r.url)) { skipped++; continue; }
         if (roamHas.get(r.url)) { skipped++; knownAdd.run(r.url); continue; }
         const vals = insertCols.map((col) => {
@@ -187,6 +190,7 @@ function importStaged(db, config, knownDb) {
           }
         });
         insertStmt.run(...vals);
+        seen.add(r.url);
         knownAdd.run(r.url);
         imported++;
       }
