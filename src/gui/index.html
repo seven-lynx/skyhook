@@ -112,6 +112,8 @@
           <svg class="ic" aria-hidden="true"><use href="#ic-cog"/></svg>
           <span>Settings</span>
         </a>
+      </div>
+    </nav>
 
     <!-- ── main ──────────────────────────────────────────────────────── -->
     <main id="main">
@@ -206,6 +208,15 @@
                 <th data-sort="lastRunAt">Last run</th>
                 <th>Result</th>
                 <th data-sort="nextRunAt">Next</th>
+                <th class="col-actions"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="seederBody"></tbody>
+          </table>
+        </div>
+
+        <div class="seeder-cards" id="seederCards" aria-label="Seeders (cards)"></div>
+      </section>
 
       <!-- Seeder detail / live log (route: /log/<source>) ───────────── -->
       <section id="panel-log" class="panel" data-route="log" aria-label="Seeder log">
@@ -311,6 +322,14 @@
             </button>
           </div>
         </div>
+      </section>
+
+      <!-- Settings -->
+      <section id="panel-settings" class="panel" data-route="settings" aria-label="Settings">
+        <h1 class="h-page">Settings</h1>
+        <div id="settingsBody"></div>
+      </section>
+    </main>
 
     <!-- ── bottom nav (mobile) ─────────────────────────────────────── -->
     <nav class="bottomnav" id="bottomnav" aria-label="Primary (mobile)">
@@ -353,27 +372,3 @@
   <script type="module" src="/app.js"></script>
 </body>
 </html>
-
-      </section>
-
-      <!-- Settings ─────────────────────────────────────────────── -->
-      <section id="panel-settings" class="panel" data-route="settings" aria-label="Settings">
-        <h1 class="h-page">Settings</h1>
-        <div id="settingsBody"></div>
-      </section>
-    </main>
-
-                <th class="col-actions"><span class="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody id="seederBody"></tbody>
-          </table>
-        </div>
-
-        <div class="seeder-cards" id="seederCards" aria-label="Seeders (cards)"></div>
-      </section>
-
-      </div>
-    </nav>
-
-
