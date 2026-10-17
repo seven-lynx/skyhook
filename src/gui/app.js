@@ -40,7 +40,7 @@ const state = {
   seeders: [], running: [], batch: null, pipe: null,
   sortKey: "source", sortDir: 1, selected: new Set(),
   apiBase: localStorage.getItem("skyhook.apiBase") || "",
-  live: null, logSources: [], followLog: true, userTab: null,
+  live: null, _liveWired: false, logSources: [], followLog: true, userTab: null,
   historySource: null, wasRunning: false, categories: [],
   infoSource: null, taggingGaps: null, tagTasks: [],
   route: { name: "dashboard", params: {} },
@@ -492,6 +492,25 @@ function renderDashboard() {
   } else {
     dueEl.innerHTML = '<p class="muted" style="padding: var(--space-3);">Nothing due right now.</p>';
   }
+
+  renderBatchProgress();
+}
+
+function renderBatchProgress() {
+  const el = $("#batchProgress");
+  if (!el) return;
+  const b = state.batch;
+  if (!b || !b.total) { el.innerHTML = ""; return; }
+  const pct = b.total ? Math.min(100, Math.round((b.completed / b.total) * 100)) : 0;
+  const eta = b.etaMs != null && isFinite(b.etaMs) ? fmtEta(b.etaMs) : "—";
+  el.innerHTML =
+    '<div class="card" style="margin-top: var(--space-2);">' +
+      '<div class="bar-row">' +
+        '<span class="bar-label">Batch</span>' +
+        '<span class="bar-track"><span class="bar-fill" style="width:' + pct + '%"></span></span>' +
+        '<span class="bar-count">' + b.completed.toLocaleString() + '/' + b.total.toLocaleString() + ' · ETA ' + esc(eta) + '</span>' +
+      '</div>' +
+    '</div>';
 }
 
 async function loadSettings()   { const s = await get("/api/settings").catch(() => null); if (s) { state.nodeId = (s.node && s.node.id) || "local"; applyNodeVisibility(); } return s; }
@@ -549,9 +568,61 @@ async function renderPipeline() {
   }
   await loadTaggingGaps();
   if (state.taggingGaps) $("#taggingGaps").innerHTML = gapCards(state.taggingGaps);
+  renderPipelineStatus(p);
+  await renderTaggingTasks();
+}
+
+function renderPipelineStatus(p) {
+  // Note text (fallback).
   const note = $("#pipelineNote");
   if (note) note.textContent = p.note || "";
-  await renderTaggingTasks();
+
+  // Tagging progress bar + metric chips.
+  const progEl = $("#pipelineProgress");
+  const metricsEl = $("#pipelineMetrics");
+
+  if (progEl) {
+    if (p.progress && p.progress.total) {
+      const pct = Math.min(100, Number(p.progress.pct) || 0);
+      progEl.style.display = "";
+      progEl.innerHTML =
+        '<div class="bar-row">' +
+          '<span class="bar-label">Tagging</span>' +
+          '<span class="bar-track"><span class="bar-fill" style="width:' + pct + '%"></span></span>' +
+          '<span class="bar-count">' + Number(p.progress.done).toLocaleString() + ' of ' + Number(p.progress.total).toLocaleString() + ' · ' + pct + '%</span>' +
+        '</div>';
+    } else {
+      progEl.style.display = "none";
+      progEl.innerHTML = "";
+    }
+  }
+
+  if (metricsEl) {
+    const chips = [];
+    const m = Array.isArray(p.metrics) ? p.metrics : [];
+    for (const x of m) {
+      chips.push(
+        '<span class="metric-chip">' +
+          '<span class="metric-k">' + esc(x.label) + '</span>' +
+          '<span class="metric-v">' + esc(x.value) + '</span>' +
+        '</span>');
+    }
+    if (p.progress && p.progress.workerStatus) {
+      const running = p.progress.workerStatus === "running";
+      chips.push(
+        '<span class="metric-chip ' + (running ? "worker-running" : "worker-stopped") + '">' +
+          '<span class="metric-k">Worker</span>' +
+          '<span class="metric-v">' + (running ? "running" : "stopped") + '</span>' +
+        '</span>');
+    }
+    if (chips.length) {
+      metricsEl.style.display = "";
+      metricsEl.innerHTML = chips.join("");
+    } else {
+      metricsEl.style.display = "none";
+      metricsEl.innerHTML = "";
+    }
+  }
 }
 
 async function renderTaggingTasks() {
@@ -589,15 +660,30 @@ async function renderTaggingTasks() {
   const mSel = $("#tagModel");
   const mPrev = mSel && mSel.value;
   const models = (modelsRes && Array.isArray(modelsRes.models)) ? modelsRes.models : [];
+  const configured = modelsRes && modelsRes.configured;
   if (mSel) {
-    const opts = ['<option value=""' + GT + 'Configured model' + '</option' + GT];
+    const defLabel = configured ? ("Configured model (" + configured + ")") : "Configured model";
+    const opts = ['<option value=""' + GT + esc(defLabel) + '</option' + GT];
     for (const m of models) {
-      opts.push('<option value="' + esc(m.id) + '" data-provider="' + esc(m.provider || "") + '"' + GT + esc(m.label || m.id) + '</option' + GT);
+      opts.push(
+        '<option value="' + esc(m.id) + '" data-provider="' + esc(m.provider || "") + '" data-instance="' + esc(m.instanceId || "") + '"' + GT +
+          esc(m.label || m.id) + (m.isLoaded ? " (loaded)" : "") + '</option' + GT);
     }
     mSel.innerHTML = opts.join("");
     if (mPrev && [...mSel.options].some((o) => o.value === mPrev)) mSel.value = mPrev;
-    else if (modelsRes && modelsRes.configured && [...mSel.options].some((o) => o.value === modelsRes.configured)) {
-      mSel.value = modelsRes.configured;
+    else if (configured && [...mSel.options].some((o) => o.value === configured)) mSel.value = configured;
+  }
+
+  // Hint: tell the user why models might be missing.
+  const hint = $("#tagModelHint");
+  if (hint) {
+    if (!models.length) {
+      const err = (modelsRes && modelsRes.errors && modelsRes.errors[0]) || "";
+      hint.style.display = "";
+      hint.textContent = "⚠ No models detected — is your platform running?" + (err ? " (" + err + ")" : "");
+    } else {
+      hint.style.display = "none";
+      hint.textContent = "";
     }
   }
 
@@ -617,15 +703,45 @@ function syncTagMinTags() {
   if (show && t.minTags && !input.value) input.value = t.minTags;
 }
 
+/** Returns { model, provider } from the currently selected model option. */
+function selectedModel() {
+  const mSel = $("#tagModel");
+  const model = mSel && mSel.value ? mSel.value : null;
+  const provider = model && mSel.selectedIndex >= 0 && mSel.options[mSel.selectedIndex]
+    ? (mSel.options[mSel.selectedIndex].dataset.provider || null) : null;
+  return { model, provider };
+}
+
+async function loadSelectedModel() {
+  const { model, provider } = selectedModel();
+  if (!model) { toast("Pick a model first.", "err"); return false; }
+  const btn = $("#loadModelBtn");
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin-pulse" aria-hidden="true"></span><span>Loading…</span>'; }
+  try {
+    const res = await post("/api/tagging/models/load", { model, provider: provider || undefined });
+    toast("Model ready: " + model + (res.alreadyLoaded ? " (was already loaded)." : " (loaded in " + (res.loadTimeSeconds ?? "?") + "s)."), "ok");
+    await renderTaggingTasks();
+    return true;
+  } catch (err) {
+    toast("Load failed: " + err.message, "err");
+    return false;
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg><span>Load model</span>'; }
+  }
+}
+
 async function runTask() {
   const taskSel = $("#tagTask");
   const task = taskSel && taskSel.value;
   if (!task) { toast("Select a task first.", "err"); return; }
   const t = state.tagTasks.find((x) => x.key === task);
-  const mSel = $("#tagModel");
-  const model = mSel && mSel.value ? mSel.value : null;
-  const provider = model && mSel.selectedIndex >= 0 && mSel.options[mSel.selectedIndex]
-    ? (mSel.options[mSel.selectedIndex].dataset.provider || null) : null;
+  const { model, provider } = selectedModel();
+  // If the user picked a specific model (not "Configured model"), make sure it's
+  // loaded into memory first (ejects any other loaded model, then loads ours).
+  if (model) {
+    const loaded = await loadSelectedModel();
+    if (!loaded) return;
+  }
   const body = { task };
   if (model) body.model = model;
   if (provider) body.provider = provider;
@@ -734,6 +850,15 @@ async function renderSettings() {
       '<p>' + ((s.node && s.node.allowRemote) ? "This node is a <strong>worker</strong> — it accepts remote control from a master." : "This node is <strong>standalone</strong> — a normal seeder manager.") + '</p>' +
       '<h2 class="h-section">Peers</h2>' +
       '<ul style="padding-left: var(--space-5); line-height: 1.8;">' + peers + '</ul>' +
+      '<h2 class="h-section">Tagging platform</h2>' +
+      '<div class="field">' +
+        '<label for="taggingPlatform">LLM platform</label>' +
+        '<select id="taggingPlatform">' +
+          ((s.tagging && Array.isArray(s.tagging.platforms) ? s.tagging.platforms : [])
+            .map((p) => '<option value="' + esc(p.id) + '"' + (s.tagging && s.tagging.activePlatform === p.id ? " selected" : "") + '>' + esc(p.id) + ' (' + esc(p.baseUrl || "") + ')</option>').join("")) +
+        '</select>' +
+        '<span class="hint">Which platform Skyhook should probe for models and load models from.</span>' +
+      '</div>' +
       '<h2 class="h-section">Remote control</h2>' +
       '<p><button class="btn ' + ((s.node && s.node.allowRemote) ? "btn-danger" : "btn-primary") + '" id="toggleRemoteBtn" type="button">' +
         ((s.node && s.node.allowRemote) ? "Turn off remote control" : "Turn on remote control (worker)") +
@@ -750,6 +875,8 @@ async function renderSettings() {
         '<span class="toggle-track"></span>' +
         '<span class="muted">Refresh the dashboard every 10 seconds</span>' +
       '</label>';
+    // Wire remote-toggle button (once per render — delegation here is fine since
+    // the button is inside the body and we rebind each time).
     body.addEventListener("click", (e) => {
       const t = e.target.closest("#toggleRemoteBtn");
       if (t) toggleRemote(!!(s.node && s.node.allowRemote));
@@ -761,17 +888,43 @@ async function renderSettings() {
       $("#apiLabel").textContent = "api → " + apiBase();
       refreshAll();
     });
-    const liveInput = $("#live");
-    if (liveInput) {
-      liveInput.checked = !!state.live;
-      liveInput.addEventListener("change", () => {
-        if (liveInput.checked) state.live = setInterval(refreshAll, 10000);
-        else if (state.live) { clearInterval(state.live); state.live = null; }
+    const platInput = $("#taggingPlatform");
+    if (platInput) {
+      platInput.addEventListener("change", async () => {
+        const id = platInput.value;
+        try {
+          await post("/api/settings", { taggingPlatform: id });
+          toast("Tagging platform set to " + id + ".", "ok");
+        } catch (err) { toast("Save failed: " + err.message, "err"); }
       });
     }
+    wireLiveToggle();
   } catch (err) {
     body.innerHTML = '<p class="muted">' + esc(err.message) + '</p>';
   }
+}
+
+function wireLiveToggle() {
+  const liveInput = $("#live");
+  if (!liveInput) return;
+  liveInput.checked = !!state.live;
+  // Restore from localStorage if not already running.
+  if (!state.live && localStorage.getItem("skyhook.live") === "1") {
+    state.live = setInterval(refreshAll, 10000);
+    liveInput.checked = true;
+  }
+  if (state._liveWired) return;
+  state._liveWired = true;
+  liveInput.addEventListener("change", () => {
+    if (liveInput.checked) {
+      state.live = setInterval(refreshAll, 10000);
+      localStorage.setItem("skyhook.live", "1");
+    } else if (state.live) {
+      clearInterval(state.live);
+      state.live = null;
+      localStorage.setItem("skyhook.live", "0");
+    }
+  });
 }
 
 let logPageState = {
@@ -1093,7 +1246,9 @@ async function refreshAll() {
     offlineFails = 0;
     $("#apiLabel").textContent = "api → " + apiBase();
     $("#apiLabel").classList.remove("offline");
-    handleRouteChange();
+    // Don't re-render the Settings panel during auto-refresh — it tears down
+    // the live toggle and resets the checkbox state.
+    if (state.route.name !== "settings") handleRouteChange();
   } catch (err) {
     offlineFails++;
     $("#apiLabel").textContent = "offline — " + err.message;
@@ -1123,6 +1278,13 @@ function bind() {
       const k = th.dataset.sort;
       if (state.sortKey === k) state.sortDir *= -1;
       else { state.sortKey = k; state.sortDir = 1; }
+      // Update sort-direction indicator arrows.
+      $$("#seederTable th[data-sort]").forEach((h) => {
+        h.classList.remove("sort-asc", "sort-desc");
+        if (h.dataset.sort === state.sortKey) {
+          h.classList.add(state.sortDir > 0 ? "sort-asc" : "sort-desc");
+        }
+      });
       renderSeeders();
     }));
 
@@ -1206,6 +1368,8 @@ function bind() {
   if (rtb) rtb.addEventListener("click", runTask);
   const tt = $("#tagTask");
   if (tt) tt.addEventListener("change", syncTagMinTags);
+  const lmb = $("#loadModelBtn");
+  if (lmb) lmb.addEventListener("click", loadSelectedModel);
 
   const pb = $("#pruneBtn");
   if (pb) pb.addEventListener("click", async () => {
@@ -1341,6 +1505,10 @@ async function writeTimer() {
 async function init() {
   $("#apiLabel").textContent = "api: " + apiBase();
   bind();
+  // Restore auto-refresh from localStorage if it was on.
+  if (localStorage.getItem("skyhook.live") === "1" && !state.live) {
+    state.live = setInterval(refreshAll, 10000);
+  }
   await loadCategories();
   await refreshAll();
   handleRouteChange();

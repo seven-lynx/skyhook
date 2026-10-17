@@ -13,6 +13,7 @@ import { pushStagedToStorage } from "../core/sync.js";
 import { detectModels, tag, loadText } from "../adapters/tagging/index.js";
 import { getCategories } from "../adapters/categories/index.js";
 import { listRunning, runJob } from "../engine/seeder-engine.js";
+import { getActiveTaggingProvider } from "../core/settings.js";
 
 export function pipelineConfig() {
   return getConfig().pipeline || {};
@@ -64,7 +65,6 @@ export function pipelineStatus() {
     base.jobs = base.jobs.map((j) => ({ ...j, status: running.includes(j.key) ? "running" : j.status }));
   }
   base.running = running;
-  if (running.length) base.note = [base.note, `Running: ${running.join(", ")}`].filter(Boolean).join("\n");
   return base;
 }
 
@@ -81,10 +81,10 @@ function resolveIds({ category, subcategory }) {
 
 async function runTag() {
   const cfg = getConfig().tagging || {};
-  const providers = cfg.providers || [];
-  if (!providers.length) throw new Error("No tagging.providers configured.");
-  const provider = providers.find((p) => p.id === "ollama") ?? providers[0];
-  const model = cfg.model ?? (await detectModels(providers))[0]?.id;
+  const provider = getActiveTaggingProvider() ?? (cfg.providers || [])[0];
+  if (!provider) throw new Error("No tagging.providers configured.");
+  const { models } = await detectModels([provider]);
+  const model = cfg.model ?? models[0]?.id;
   if (!model) throw new Error("No tagging model configured or detected.");
 
   const prompt = loadText(cfg.promptFile) || "";

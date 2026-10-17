@@ -27,5 +27,5 @@ export {
 export {
   loadCategories, getCategories, findSubcategory, getSubcategoryId,
 } from "./adapters/categories/index.js";
-export { detectModels, tag, buildPrompt, loadText } from "./adapters/tagging/index.js";
+export { detectModels, ensureModelLoaded, tag, buildPrompt, loadText } from "./adapters/tagging/index.js";
 export { logRun, logCrash, queryRuns, getStats, runLogFile } from "./adapters/log/run-log.js";

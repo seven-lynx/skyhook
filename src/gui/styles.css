@@ -177,7 +177,6 @@ code, kbd {
 .brand-logo {
   width: 32px; height: 32px;
   border-radius: var(--radius);
-  background: var(--brand-deep);
   display: grid; place-items: center;
   flex-shrink: 0;
   overflow: hidden;
@@ -445,6 +444,30 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--brand); }
   .bar-label { width: 96px; }
   .bar-count { width: 84px; }
 }
+
+/* Metric chips (pipeline status strip) */
+.metric-strip {
+  display: flex; flex-wrap: wrap; gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.metric-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.metric-chip .metric-k { color: var(--text-subtle); }
+.metric-chip .metric-v {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.metric-chip.worker-running { border-color: var(--ok-border); background: var(--ok-bg); }
+.metric-chip.worker-running .metric-v { color: var(--ok); }
+.metric-chip.worker-stopped { border-color: var(--border); }
 
 .badge {
   display: inline-flex; align-items: center; gap: 4px;

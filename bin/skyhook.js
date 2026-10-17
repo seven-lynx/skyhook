@@ -20,7 +20,7 @@ import {
 } from "../src/engine/seeder-engine.js";
 import { nodeId, getConfig } from "../src/config.js";
 import { routeSeeders, peerFor, runRemote, getPeers, pullStaged } from "../src/core/remote.js";
-import { settingsView, saveSettings } from "../src/core/settings.js";
+import { settingsView, saveSettings, getActiveTaggingProvider } from "../src/core/settings.js";
 import { statsFromStaged } from "../src/core/analytics.js";
 import { listCache, pruneStaged, clearDiscovery, clearStaged } from "../src/core/data.js";
 import { mergeRemoteRows, pushStagedToStorage } from "../src/core/sync.js";
@@ -637,7 +637,7 @@ async function cmdTag(a) {
   const { runOfflineTagWorker, loadPrompt } = await import("../src/adapters/tagging/offline-worker.js");
 
   const providers = c.tagging?.providers || [];
-  const provider = providers.find((p) => p.id === (val(a, "--provider") || null)) || providers[0];
+  const provider = providers.find((p) => p.id === (val(a, "--provider") || null)) || getActiveTaggingProvider() || providers[0];
 
   const taskKey = val(a, "--task", null);
 

@@ -3,17 +3,29 @@
 Optional classification stage: run each discovered item through a local or remote
 model to assign a **category / subcategory** and **controlled tags**.
 
+## Platform selection
+
+In the Settings page (GUI) or via `POST /api/settings { taggingPlatform }`, choose
+your active LLM platform from the list of providers configured in
+`skyhook.config.json`. Skyhook uses the active platform for model detection, model
+loading, and tagging. The selection persists in `.skyhook/settings.json` across restarts.
+
 ## Providers & model detection
 
-Configure a list of providers; Skyhook probes each and shows one dropdown of
-every available model.
+Configure a list of providers; Skyhook probes the active platform and shows every
+available model. For LM Studio, the **native REST API** (`GET /api/v1/models`)
+returns all **downloaded** models (not just the one loaded into memory), including
+each model's loaded state and instance id.
 
 | Provider | How it's detected |
 |---|---|
 | Ollama | `GET http://localhost:11434/api/tags` |
-| LM Studio | `GET http://localhost:1234/v1/models` |
+| LM Studio | Native REST: `GET http://localhost:1234/api/v1/models` (all downloaded models, with `loaded_instances`) |
 | llama.cpp / vLLM | OpenAI-compatible `/v1/models` on a configurable base URL |
 | OpenAI / Anthropic / Groq / OpenRouter / Mistral | OpenAI-compatible, only if the API key is set |
+
+When model detection fails (e.g. the platform is not running), the error is
+returned alongside the models list and surfaced in the GUI as a hint.
 
 ## Config
 
@@ -28,6 +40,20 @@ tagging:
   promptFile: "config/tagging-prompt.txt"
   vocabFile:  "config/tags.json"
 ```
+
+## Model load/unload (LM Studio)
+
+When a user selects a specific model and clicks **Load model** (or runs a tagging
+task), Skyhook automatically manages the model lifecycle:
+
+1. Queries the list of downloaded models to check current state.
+2. If the requested model is **already loaded** → no action.
+3. If a **different** model is loaded → unloads it first (avoids double instances).
+4. Loads the target model via `POST /api/v1/models/load`.
+
+This happens server-side before any tagging worker is launched. The API is
+`POST /api/tagging/models/load { model, provider? }` and returns
+`{ alreadyLoaded, loaded, instanceId, loadTimeSeconds }`.
 
 ## Prompt
 
@@ -46,15 +72,18 @@ Seeded from `categories.json` by default.
 
 ## Editing (GUI)
 
-Open `skyhook serve` → **Pipeline → Tagging**: **Detect models** → pick one → edit
-the **prompt** (textarea) → edit the **tag list** → **test on a sample** → save.
+Open `skyhook serve` → **Pipeline → Tagging**: choose a platform in
+**Settings**, then use **Detect models** to list all downloaded models → pick one →
+load it → edit the **prompt** → edit the **tag list** → run a task.
 
 ## Programmatic
 
 ```js
-import { detectModels, tag, loadText } from "skyhook";
+import { detectModels, tag, ensureModelLoaded, loadText } from "skyhook";
 
-const models = await detectModels(cfg.tagging.providers);
+const { models, errors } = await detectModels(cfg.tagging.providers);
+const loaded = await ensureModelLoaded(provider, chosenModel);
+
 const tagged = await tag(rows, {
   provider: models[0],
   model: cfg.tagging.model,

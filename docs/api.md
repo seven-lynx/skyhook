@@ -60,11 +60,13 @@ API is fully open — fine for localhost, not for a LAN or the internet.
 | GET | `/api/pipeline` | Offline pipeline status |
 | POST | `/api/pipeline/:kind` | Run a pipeline job (`tag`, `push`, or any `pipeline.jobs` key) |
 | GET | `/api/tagging/missing` | Counts of URLs missing category/subcategory/tags/content-type/quality/attributes |
-| POST | `/api/tagging/run` | `{ task }` — launch a targeted LLM gap-filling pass |
+| GET | `/api/tagging/models` | `{ models, errors, configured, provider }` — probe the active platform for downloaded models |
+| POST | `/api/tagging/models/load` | `{ model, provider? }` — unload any loaded model, then load the target (LM Studio) |
+| POST | `/api/tagging/run` | `{ task, model?, provider?, minTags? }` — launch a targeted LLM gap-filling pass (loads model first if needed) |
 
 ### Settings
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/settings` | Node settings (id, allowRemote, peers) |
-| POST | `/api/settings` | `{ allowRemote }` — toggle the node into a worker |
+| GET | `/api/settings` | Node settings (id, allowRemote, peers, tagging platform) |
+| POST | `/api/settings` | `{ allowRemote?, taggingPlatform? }` — toggle node mode or select the active LLM platform |

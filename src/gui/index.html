@@ -56,7 +56,7 @@
     <!-- ── topbar ──────────────────────────────────────────────────────── -->
     <header class="topbar" role="banner">
       <a href="#/" class="brand" aria-label="Skyhook — go to dashboard">
-        <span class="brand-logo"><img src="/icons/icon-192.png" alt="" width="32" height="32" /></span>
+        <span class="brand-logo"><img src="/icons/logo.png" alt="" width="32" height="32" /></span>
         <span class="brand-text">
           <span class="brand-name">Skyhook</span>
           <span class="brand-sub" id="apiLabel">connecting…</span>
@@ -137,6 +137,7 @@
 
         <h2 class="h-section">Running</h2>
         <div class="card" id="runningList" aria-live="polite"></div>
+        <div id="batchProgress" aria-live="polite"></div>
 
         <h2 class="h-section">Recent failures</h2>
         <div class="card" id="failList"></div>
@@ -202,11 +203,11 @@
                 <th class="col-check"><span class="sr-only">Select</span></th>
                 <th data-sort="source">Source</th>
                 <th data-sort="displayName">Name</th>
-                <th>Category</th>
+                <th data-sort="categoryLabel">Category</th>
                 <th data-sort="cadence">Cadence</th>
-                <th>Tier</th>
+                <th data-sort="isNews">Tier</th>
                 <th data-sort="lastRunAt">Last run</th>
-                <th>Result</th>
+                <th data-sort="lastStaged">Result</th>
                 <th data-sort="nextRunAt">Next</th>
                 <th class="col-actions"><span class="sr-only">Actions</span></th>
               </tr>
@@ -252,6 +253,8 @@
       <section id="panel-pipeline" class="panel" data-route="pipeline" aria-label="Pipeline">
         <h1 class="h-page">Pipeline</h1>
         <p class="muted" id="pipelineNote"></p>
+        <div class="card" id="pipelineProgress" style="display: none; margin-bottom: var(--space-3);"></div>
+        <div class="metric-strip" id="pipelineMetrics" style="display: none;"></div>
         <div class="grid grid-stats" id="pipelineCards"></div>
         <h2 class="h-section">Tagging gaps</h2>
         <div class="grid grid-stats" id="taggingGaps"></div>
@@ -261,6 +264,10 @@
           <select id="tagTask" style="flex: 1; min-width: 200px;"></select>
           <label for="tagModel" class="muted" style="font-size: var(--text-sm);">Model</label>
           <select id="tagModel" style="flex: 1; min-width: 180px;"></select>
+          <button id="loadModelBtn" class="btn" type="button" aria-label="Load selected model into memory">
+            <svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg>
+            <span>Load model</span>
+          </button>
           <span id="tagMinTagsWrap" style="display:none; align-items:center; gap:var(--space-1);">
             <label for="tagMinTags" class="muted" style="font-size: var(--text-sm);">Min tags</label>
             <input id="tagMinTags" type="number" min="1" step="1" value="3" style="width: 90px;" />
@@ -270,6 +277,7 @@
             <span>Run task</span>
           </button>
         </div>
+        <p class="muted" id="tagModelHint" style="display: none;"></p>
 
         <h2 class="h-section">Active jobs</h2>
         <div class="card" id="pipelineJobs"></div>
