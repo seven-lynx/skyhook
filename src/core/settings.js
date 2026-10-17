@@ -38,9 +38,29 @@ export function allowRemote() {
   return !!(s.allowRemote ?? cfg.node?.allowRemote ?? false);
 }
 
+/** Effective FlareSolverr settings — runtime settings override static config. */
+export function getFlareSolverrSettings() {
+  const cfg = getConfig();
+  const s = loadSettings();
+  const c = cfg.flaresolverr ?? {};
+  const f = s.flaresolverr ?? {};
+  return {
+    enabled: !!(f.enabled ?? c.enabled ?? false),
+    exePath: f.exePath ?? c.exePath ?? null,
+    url: f.url ?? c.url ?? null,
+    port: f.port ?? c.port ?? 8191,
+    maxTimeout: f.maxTimeout ?? c.maxTimeout ?? 60000,
+  };
+}
+
+
 /** Settings view for the API/GUI (hides nothing sensitive but the token). */
 export function settingsView() {
   const cfg = getConfig();
+  const s = loadSettings();
+  const providers = cfg.tagging?.providers || [];
+  const defaultPlatform = s.taggingPlatform ?? providers[0]?.id ?? null;
+  const fr = getFlareSolverrSettings();
   return {
     node: {
       id: cfg.node?.id ?? "local",
@@ -50,5 +70,25 @@ export function settingsView() {
       peers: (cfg.remote?.peers ?? []).map((p) => ({ id: p.id, url: p.url })),
       hasToken: !!(cfg.remote?.token || process.env.SKYHOOK_REMOTE_TOKEN),
     },
+    tagging: {
+      platforms: providers.map((p) => ({ id: p.id, baseUrl: p.baseUrl })),
+      activePlatform: defaultPlatform,
+    },
+    flaresolverr: {
+      enabled: fr.enabled,
+      exePath: fr.exePath,
+      url: fr.url,
+      port: fr.port,
+      maxTimeout: fr.maxTimeout,
+    },
   };
+}
+
+/** Returns the full provider object for the active tagging platform. */
+export function getActiveTaggingProvider() {
+  const cfg = getConfig();
+  const s = loadSettings();
+  const providers = cfg.tagging?.providers || [];
+  const id = s.taggingPlatform ?? providers[0]?.id ?? null;
+  return providers.find((p) => p.id === id) ?? null;
 }

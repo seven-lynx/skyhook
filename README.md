@@ -37,6 +37,8 @@ discover ──▶ enrich ──▶ stage ──▶ curate ──▶ tag ──�
   and merge results between them with URL dedup.
 - **Offline pipeline** — pull untagged URLs from your DB into a local SQLite
   copy, tag offline, then upload tags/attributes/quality back.
+- **Cloudflare bypass** — optional FlareSolverr integration for bot-protected
+  sites, launched on demand and torn down after each run.
 
 ## Quick start
 
@@ -66,6 +68,39 @@ node bin/skyhook.js init --provider sqlite
   clean installs).
 - The **headless-browser** tier is optional and off by default. Run
   `npx playwright install chromium` once to enable it.
+
+## Cloudflare bypass (FlareSolverr)
+
+Some sites (e.g. Product Hunt) sit behind Cloudflare and return 403 to plain
+HTTP clients. Seeders opt in by passing `bypassCloudflare: true` to
+`upsertUrls()` / `fetchWithRetry()` / `fetchOgMeta()`, or by calling
+`resolveRedirect(url)` to follow a bot-blocked redirect.
+
+Skyhook uses [FlareSolverr](https://github.com/FlareSolverr/FlareSolverr) as the
+browser backend. It is **not assumed to be running** — Skyhook launches the
+configured executable on demand and stops it when the run (or batch) finishes.
+
+Enable it from the GUI / TUI **Settings**, or statically in `skyhook.config.json`:
+
+```json
+{
+  "flaresolverr": {
+    "enabled": true,
+    "exePath": "C:\\tools\\flaresolverr\\flaresolverr.exe",
+    "port": 8191,
+    "maxTimeout": 60000
+  }
+}
+```
+
+- `exePath` set → Skyhook spawns the executable on demand and waits for
+  "FlareSolverr is ready!".
+- `exePath` empty → Skyhook assumes an instance is already listening on `port`
+  (e.g. the Docker container).
+- Disabled / missing → bypass is a no-op and everything behaves as before.
+
+Env fallbacks: `FLARESOLVERR_ENABLED=1`, `FLARESOLVERR_EXE`, `FLARESOLVERR_URL`,
+`FLARESOLVERR_PORT`.
 
 ## Commands
 

@@ -46,13 +46,13 @@ import { nodeId, getConfig } from "../config.js";
 import {
   routeSeeders, peerFor, runRemote, forwardSchedule, remoteToken,
 } from "../core/remote.js";
-import { loadSettings, saveSettings, settingsView, allowRemote } from "../core/settings.js";
+import { loadSettings, saveSettings, settingsView, allowRemote, getActiveTaggingProvider } from "../core/settings.js";
 import { readStaged } from "../core/staged.js";
 import { mergeRemoteRows, pushStagedToStorage } from "../core/sync.js";
 import { statsFromStaged } from "../core/analytics.js";
 import { listCache, pruneStaged, clearDiscovery, clearStaged } from "../core/data.js";
 import { countMissingSync, getTasks } from "../adapters/tagging/tasks.js";
-import { detectModels } from "../adapters/tagging/index.js";
+import { detectModels, ensureModelLoaded } from "../adapters/tagging/index.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -87,6 +87,7 @@ function readBody(req) {
 }
 
 function seederView(s, st) {
+  const lastResult = st?.last_result ? JSON.parse(st.last_result) : null;
   return {
     source: s.source,
     script: s.script,
@@ -104,7 +105,8 @@ function seederView(s, st) {
     description: s.description ?? null,
     lastRunAt: st?.last_run_at ?? null,
     lastStatus: st?.last_status ?? null,
-    lastResult: st?.last_result ? JSON.parse(st.last_result) : null,
+    lastResult,
+    lastStaged: lastResult ? (lastResult.staged ?? 0) : null,
     lastDurationMs: st?.last_duration_ms ?? null,
     lastError: st?.last_error ?? null,
     nextRunAt: st?.next_run_at ?? null,
@@ -332,6 +334,19 @@ export function startServer(port = 4173) {
         const body = await readBody(req);
         const patch = {};
         if (typeof body.allowRemote === "boolean") patch.allowRemote = body.allowRemote;
+        if (typeof body.taggingPlatform === "string") patch.taggingPlatform = body.taggingPlatform;
+        if (body.flaresolverr && typeof body.flaresolverr === "object") {
+          patch.flaresolverr = {
+            enabled: typeof body.flaresolverr.enabled === "boolean" ? body.flaresolverr.enabled : undefined,
+            exePath: typeof body.flaresolverr.exePath === "string" ? body.flaresolverr.exePath : undefined,
+            url: typeof body.flaresolverr.url === "string" ? body.flaresolverr.url : undefined,
+            port: body.flaresolverr.port != null ? parseInt(body.flaresolverr.port, 10) || 8191 : undefined,
+            maxTimeout: body.flaresolverr.maxTimeout != null ? parseInt(body.flaresolverr.maxTimeout, 10) || 60000 : undefined,
+          };
+          for (const k of Object.keys(patch.flaresolverr)) {
+            if (patch.flaresolverr[k] === undefined) delete patch.flaresolverr[k];
+          }
+        }
         saveSettings(patch);
         return send(res, 200, { ok: true, settings: settingsView() });
       }
@@ -372,11 +387,27 @@ export function startServer(port = 4173) {
         return send(res, 200, { tasks });
       }
 
-      // ── tagging models (probe configured providers) ────────────────────
+      // ── tagging models (probe the active provider) ────────────────────
       if (method === "GET" && path === "/api/tagging/models") {
         const c = getConfig();
-        const models = await detectModels(c.tagging?.providers || []);
-        return send(res, 200, { models, configured: c.tagging?.model ?? null });
+        const provider = getActiveTaggingProvider();
+        const { models, errors } = await detectModels(provider ? [provider] : (c.tagging?.providers || []));
+        return send(res, 200, { models, errors, configured: c.tagging?.model ?? null, provider: provider?.id ?? null });
+      }
+
+      // ── load a model into memory (LM Studio) before tagging ──────────
+      if (method === "POST" && path === "/api/tagging/models/load") {
+        const body = await readBody(req);
+        const modelId = (body.model || "").trim();
+        if (!modelId) return send(res, 400, { error: "model is required" });
+        const c = getConfig();
+        const provider = (body.provider?.trim())
+          ? (c.tagging?.providers || []).find((p) => p.id === body.provider.trim())
+          : getActiveTaggingProvider();
+        if (!provider) return send(res, 400, { error: "No active tagging provider configured" });
+        const result = await ensureModelLoaded(provider, modelId);
+        if (result.error) return send(res, 502, result);
+        return send(res, 200, result);
       }
 
       if (method === "POST" && path === "/api/tagging/run") {
@@ -399,6 +430,19 @@ export function startServer(port = 4173) {
         const model = (body.model || "").trim();
         const provider = (body.provider || "").trim();
         const minTags = parseInt(body.minTags, 10);
+
+        // If a specific model was chosen, ensure it's loaded before tagging
+        // (ejects any other loaded model, then loads ours — no double instances).
+        if (model) {
+          const targetProvider = provider
+            ? (c.tagging?.providers || []).find((p) => p.id === provider)
+            : getActiveTaggingProvider();
+          if (targetProvider) {
+            const loadState = await ensureModelLoaded(targetProvider, model);
+            if (loadState.error) return send(res, 502, { error: loadState.error });
+          }
+        }
+
         if (model) args.push("--model", model);
         if (provider) args.push("--provider", provider);
         if (Number.isFinite(minTags) && minTags > 0) args.push("--min-tags", String(minTags));

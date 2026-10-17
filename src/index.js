@@ -2,7 +2,7 @@
  * index.js — public entry point.
  */
 export { loadConfig, getConfig, nodeId } from "./config.js";
-export { loadSettings, saveSettings, allowRemote, settingsView } from "./core/settings.js";
+export { loadSettings, saveSettings, allowRemote, settingsView, getFlareSolverrSettings } from "./core/settings.js";
 export {
   localNodeId, isRemoteEnabled, remoteToken, getPeers, peerFor, routeSeeders,
   ping, forwardRun, forwardSchedule, pullStaged, pushStaged, runRemote,
@@ -17,6 +17,9 @@ export { listCache, pruneStaged, clearDiscovery, clearStaged } from "./core/data
 
 export * from "./core/seed.js";
 export * from "./engine/seeder-engine.js";
+export {
+  fetchViaFlareSolverr, resolveRedirect, ensureFlareSolverr, stopFlareSolverr, flareSolverrBaseUrl,
+} from "./core/cloudflare.js";
 
 export {
   createStorage, registerStorage, loadSchema, mapRow, CANONICAL_FIELDS,

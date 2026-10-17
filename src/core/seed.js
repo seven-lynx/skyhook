@@ -35,6 +35,7 @@ import { getConfig } from '../config.js';
 import { loadCategories, findSubcategory } from '../adapters/categories/index.js';
 import { logRun } from '../adapters/log/run-log.js';
 import { createStorage } from '../adapters/storage/index.js';
+import { fetchViaFlareSolverr, resolveRedirect } from './cloudflare.js';
 
 // ── Categories (editable) ────────────────────────────────────────────────────
 // CATEGORY / SUBCATEGORY / SUBCATEGORY_BY_CATEGORY are generated from the user's
@@ -73,7 +74,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * Re-throws on the final attempt. All other non-2xx responses are returned
  * as-is so the caller can inspect the status code.
  */
-export async function fetchWithRetry(url, options = {}, { retries = 3, base = 2000 } = {}) {
+export async function fetchWithRetry(url, options = {}, { retries = 3, base = 2000, bypassCloudflare = false } = {}) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, options);
@@ -81,6 +82,13 @@ export async function fetchWithRetry(url, options = {}, { retries = 3, base = 20
         const retryAfter = parseInt(res.headers.get('retry-after') ?? '0', 10);
         const wait = retryAfter > 0 ? retryAfter * 1000 : base * 2 ** attempt;
         if (attempt < retries) { await sleep(wait); continue; }
+      }
+      // Cloudflare / bot-block → retry through FlareSolverr when opted in.
+      if (bypassCloudflare && (res.status === 403 || res.status === 503)) {
+        try {
+          const bypassed = await fetchViaFlareSolverr(url);
+          if (bypassed && bypassed.ok) return bypassed;
+        } catch { /* fall through to the normal response */ }
       }
       return res;
     } catch (err) {
@@ -235,16 +243,19 @@ export async function fetchOgImage(url) {
  * Fetch og:image AND og:description from a page.
  * Returns { image: string|null, description: string|null }
  */
-export async function fetchOgMeta(url) {
+export async function fetchOgMeta(url, { bypassCloudflare = false } = {}) {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), OG_TIMEOUT_MS);
 
-    const res = await fetch(url, {
+    let res = await fetch(url, {
       signal: controller.signal,
       headers: { 'User-Agent': getConfig().userAgent },
       redirect: 'follow',
     });
+    if (bypassCloudflare && (res.status === 403 || res.status === 503)) {
+      try { res = await fetchViaFlareSolverr(url); } catch { /* keep original */ }
+    }
 
     if (!res.ok) { clearTimeout(timer); return { image: null, description: null }; }
     const contentLen = parseInt(res.headers.get('content-length') || '0');
@@ -361,12 +372,13 @@ const VALID_CATEGORY_IDS = new Set([...Object.values(CATEGORY), ...Object.values
  *   seeder_score  — float 0.0–1.0 (optional, defaults to 0.0 in DB)
  */
 export async function upsertUrls(rows, {
-  fetchOg       = true,
-  verbose       = true,
-  checkLive     = true,
-  requireTitle  = true,
-  maxPerDomain  = undefined,
-  checkpointId  = undefined,
+  fetchOg          = true,
+  verbose          = true,
+  checkLive        = true,
+  requireTitle     = true,
+  maxPerDomain     = undefined,
+  checkpointId     = undefined,
+  bypassCloudflare = false,
 } = {}) {
   const log = verbose ? console.log : () => {};
 
@@ -377,7 +389,7 @@ export async function upsertUrls(rows, {
   // LLM, and perform the single tagged-only Supabase write.
   const STAGE_ONLY = process.env.SKYHOOK_STAGE_ONLY === "1" || process.argv.includes("--stage-only");
   if (STAGE_ONLY) {
-    const staged = await stageUrls(rows, { fetchOg, verbose, checkLive, requireTitle, maxPerDomain, checkpointId });
+    const staged = await stageUrls(rows, { fetchOg, verbose, checkLive, requireTitle, maxPerDomain, checkpointId, bypassCloudflare });
     return { inserted: staged.staged, skipped: staged.skipped ?? 0, dead: staged.dead ?? 0, staged: true };
   }
 
@@ -494,8 +506,10 @@ export async function upsertUrls(rows, {
           redirect: 'follow',
         });
         clearTimeout(timer);
-        return res.status < 400 || res.status === 403 || res.status === 405 ? row : null;
-      } catch { return null; }
+        if (res.status < 400 || res.status === 403 || res.status === 405) return row;
+      } catch { /* fall through to bypass */ }
+      if (bypassCloudflare && await resolveRedirect(row.url)) return row;
+      return null;
     };
 
     // Process in concurrent batches
@@ -548,7 +562,7 @@ export async function upsertUrls(rows, {
     let ogDone = 0;
 
     const fetchOgMetaConcurrent = async (row) => {
-      const meta = await fetchOgMeta(row.url);
+      const meta = await fetchOgMeta(row.url, { bypassCloudflare });
       if (!row.og_image_url) row.og_image_url = meta.image;
       if (!row.description)  row.description  = meta.description;
       if (!row.language && meta.language) row.language = meta.language;
@@ -660,13 +674,14 @@ export async function upsertUrls(rows, {
  * @returns {Promise<{ staged: number, dead: number, skipped: number }>}
  */
 export async function stageUrls(rows, {
-  fetchOg       = true,
-  verbose       = true,
-  checkLive     = true,
-  requireTitle  = true,
-  maxPerDomain  = undefined,
-  checkpointId  = undefined,
-  stageDir      = undefined,
+  fetchOg          = true,
+  verbose          = true,
+  checkLive        = true,
+  requireTitle     = true,
+  maxPerDomain     = undefined,
+  checkpointId     = undefined,
+  stageDir         = undefined,
+  bypassCloudflare = false,
 } = {}) {
   const log = verbose ? console.log : () => {};
   const outDir = stageDir
@@ -719,8 +734,10 @@ export async function stageUrls(rows, {
             redirect: 'follow',
           });
           clearTimeout(timer);
-          return (res.status < 400 || res.status === 403 || res.status === 405) ? row : null;
-        } catch { return null; }
+          if (res.status < 400 || res.status === 403 || res.status === 405) return row;
+        } catch { /* fall through to bypass */ }
+        if (bypassCloudflare && await resolveRedirect(row.url)) return row;
+        return null;
       }));
       for (const r of results) {
         if (r) alive.push(r); else dead++;
@@ -737,7 +754,7 @@ export async function stageUrls(rows, {
     const needsOg = fresh.filter((r) => !r.og_image_url || !r.description);
     for (let i = 0; i < needsOg.length; i += OG_CONCURRENCY) {
       await Promise.all(needsOg.slice(i, i + OG_CONCURRENCY).map(async (row) => {
-        const meta = await fetchOgMeta(row.url);
+        const meta = await fetchOgMeta(row.url, { bypassCloudflare });
         if (!row.og_image_url) row.og_image_url = meta.image;
         if (!row.description)  row.description  = meta.description;
         if (!row.language && meta.language) row.language = meta.language;

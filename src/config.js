@@ -30,6 +30,13 @@ const DEFAULTS = {
   settingsFile: ".skyhook/settings.json",
   node: { id: "local", allowRemote: false },
   remote: { token: null, peers: [] },
+  flaresolverr: {
+    enabled: false,
+    exePath: null,   // absolute path to the FlareSolverr executable (spawned on demand)
+    url: null,       // optional override; default http://127.0.0.1:{port}
+    port: 8191,
+    maxTimeout: 60000,
+  },
   storage: {
     provider: "stage",
     schemaFile: "config/schema.json",
@@ -114,6 +121,12 @@ export function loadConfig(opts = {}) {
   if (merged.pipeline?.knownUrlsDb && !isAbsolute(merged.pipeline.knownUrlsDb)) {
     merged.pipeline.knownUrlsDb = resolve(cwd, merged.pipeline.knownUrlsDb);
   }
+
+  // FlareSolverr Cloudflare-bypass (optional). Runtime settings override config.
+  if (process.env.FLARESOLVERR_ENABLED === "1") merged.flaresolverr.enabled = true;
+  if (process.env.FLARESOLVERR_EXE) merged.flaresolverr.exePath = process.env.FLARESOLVERR_EXE;
+  if (process.env.FLARESOLVERR_URL) merged.flaresolverr.url = process.env.FLARESOLVERR_URL;
+  if (process.env.FLARESOLVERR_PORT) merged.flaresolverr.port = parseInt(process.env.FLARESOLVERR_PORT, 10) || 8191;
 
   // Allow env-based credentials to override config (never committed).
   merged.storage.url = merged.storage.url || process.env.SUPABASE_URL || null;

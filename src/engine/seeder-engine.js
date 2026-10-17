@@ -18,6 +18,7 @@ import Database from "better-sqlite3";
 import { CATEGORY, SUBCATEGORY, SUBCATEGORY_BY_CATEGORY } from "../core/seed.js";
 import { logCrash } from "../adapters/log/run-log.js";
 import { getConfig, nodeId } from "../config.js";
+import { ensureFlareSolverr, stopFlareSolverr } from "../core/cloudflare.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const cfg = getConfig();
@@ -489,6 +490,7 @@ export function runOne(seeder, opts = {}) {
     if (seeder.skipHeadless && !opts.withHeadless && !opts.aggressive && !opts.forceHeadless) {
       env.SKYHOOK_SKIP_HEADLESS = "1";
     }
+    if (opts.flareSolverrManaged) env.SKYHOOK_FLARESOLVERR_MANAGED = "1";
 
     mkdirSync(LOGS_DIR, { recursive: true });
     const logFile = join(LOGS_DIR, `${safe(seeder.source)}.log`);
@@ -583,12 +585,19 @@ export function runOne(seeder, opts = {}) {
 }
 
 /** Run a set of seeders with a concurrency cap, recording every attempt. */
-export function runPool(seeders, opts = {}) {
+export async function runPool(seeders, opts = {}) {
   const { concurrency = 2, verbose = true } = opts;
   const db = openState();
   const queue = [...seeders];
   const results = [];
   let running = 0;
+
+  // Ensure FlareSolverr is up for the whole batch (if enabled). Children get a
+  // "managed" flag so they reuse this instance rather than spawn/kill their own.
+  // A single-seeder run also goes through here, so "kill after the run-unit"
+  // (single seeder OR batch) falls out of stopping it below.
+  const flareSolverrReady = await ensureFlareSolverr();
+  const managed = { flareSolverrManaged: !!flareSolverrReady };
 
   const batch = {
     total: seeders.length,
@@ -610,7 +619,7 @@ export function runPool(seeders, opts = {}) {
         const seeder = queue.shift();
         running++;
         const startedAt = new Date().toISOString();
-        runOne(seeder, { ...opts, verbose }).then((result) => {
+        runOne(seeder, { ...opts, verbose, ...managed }).then((result) => {
           results.push(result);
           batch.completed++;
           batch.stagedTotal += result.result?.staged ?? 0;
@@ -638,6 +647,7 @@ export function runPool(seeders, opts = {}) {
     const i = batches.indexOf(batch);
     if (i >= 0) batches.splice(i, 1);
     db.close();
+    if (flareSolverrReady) stopFlareSolverr();
     return results;
   });
 }

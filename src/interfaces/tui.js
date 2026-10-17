@@ -233,15 +233,29 @@ async function screenStats() {
 
 async function screenSettings() {
   const v = settingsView();
+  const fr = v.flaresolverr ?? {};
   console.log(`\n  🛰 Settings\n`);
   console.log(`  node id      ${v.node.id}`);
   console.log(`  allowRemote  ${v.node.allowRemote ? "ON (worker)" : "OFF (standalone)"}`);
   console.log(`  token        ${v.remote.hasToken ? "set" : "(none — open API)"}`);
-  console.log(`  peers        ${v.remote.peers.length ? v.remote.peers.map((p) => `${p.id}→${p.url}`).join(", ") : "(none)"}\n`);
+  console.log(`  peers        ${v.remote.peers.length ? v.remote.peers.map((p) => `${p.id}→${p.url}`).join(", ") : "(none)"}`);
+  console.log(`  flaresolverr ${fr.enabled ? `ON (exe: ${fr.exePath || "external instance"})` : "OFF"}\n`);
   const toggle = await confirm({ message: `allowRemote is ${v.node.allowRemote ? "ON" : "OFF"} — toggle it?`, default: false });
   if (toggle) {
     saveSettings({ allowRemote: !v.node.allowRemote });
     console.log(`\n  ✓ allowRemote = ${!v.node.allowRemote ? "ON (worker)" : "OFF (standalone)"}`);
+  }
+  const frToggle = await confirm({ message: `FlareSolverr is ${fr.enabled ? "ON" : "OFF"} — toggle it?`, default: false });
+  if (frToggle) {
+    let exePath = fr.exePath ?? null;
+    if (!fr.enabled) {
+      const p = await input({ message: "FlareSolverr executable path (blank = already running):" });
+      exePath = (p && p.trim()) || null;
+    }
+    saveSettings({
+      flaresolverr: { enabled: !fr.enabled, exePath, url: fr.url ?? null, port: fr.port ?? 8191, maxTimeout: fr.maxTimeout ?? 60000 },
+    });
+    console.log(`\n  ✓ FlareSolverr ${!fr.enabled ? `ON (exe: ${exePath || "external instance"})` : "OFF"}`);
   }
   await input({ message: "\nPress Enter to continue" });
 }
