@@ -32,6 +32,11 @@ export const LOGS_DIR     = cfg.logDir;
 export const STAGED_DIR   = cfg.stagedDir;
 export const TIMER_FILE   = join(cfg.dataDir, "skyhook-seed.timer");
 
+// Seeder hang guards (tunable via env): kill a run that goes silent for too
+// long, and optionally cap total run duration (0 = disabled).
+export const STALL_TIMEOUT_MS = Number(process.env.SKYHOOK_STALL_TIMEOUT_MS ?? 30 * 60 * 1000);
+export const MAX_DURATION_MS  = Number(process.env.SKYHOOK_MAX_DURATION_MS ?? 0);
+
 export const CADENCE_MS = {
   hourly: 3600e3,
   "6h": 6 * 3600e3,
@@ -492,6 +497,9 @@ export function runOne(seeder, opts = {}) {
 
     const started = Date.now();
     let output = "";
+    let lastOutputAt = Date.now();
+    let finished = false;
+    let killReason = null;   // "stalled" | "max-duration" | null
     const child = spawn(process.execPath, cmdArgs, {
       cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
@@ -501,21 +509,51 @@ export function runOne(seeder, opts = {}) {
     const onData = (isErr) => (d) => {
       const s = d.toString();
       output = (output + s).slice(-64000); // bounded tail for parsing
+      lastOutputAt = Date.now();
       logStream.write(s);
       if (opts.verbose !== false) (isErr ? process.stderr : process.stdout).write(s);
     };
     child.stdout.on("data", onData(false));
     child.stderr.on("data", onData(true));
 
+    // Hang guard #1: stall watchdog — kill if the child stops emitting output.
+    const stallTimer = setInterval(() => {
+      if (finished || killReason) return;
+      if (Date.now() - lastOutputAt >= STALL_TIMEOUT_MS) {
+        killReason = "stalled";
+        logStream.write(`\n── stalled: no output for ${Math.round(STALL_TIMEOUT_MS / 60000)}m — killing ──\n`);
+        killTree(child);
+      }
+    }, 30_000);
+
+    // Hang guard #2: optional hard cap on total run duration (0 = disabled).
+    let maxDurTimer = null;
+    if (MAX_DURATION_MS > 0) {
+      maxDurTimer = setTimeout(() => {
+        if (finished || killReason) return;
+        killReason = "max-duration";
+        logStream.write(`\n── max duration ${Math.round(MAX_DURATION_MS / 60000)}m exceeded — killing ──\n`);
+        killTree(child);
+      }, MAX_DURATION_MS);
+    }
+
     child.on("close", async (code, signal) => {
+      finished = true;
+      clearInterval(stallTimer);
+      if (maxDurTimer) clearTimeout(maxDurTimer);
       logStream.end();
       const entry = activeRuns.get(seeder.source);
       activeRuns.delete(seeder.source);
       const durationMs = Date.now() - started;
       const result = parseSummary(output);
-      const stopped = (signal != null) || (entry && entry.stopped);
-      const status = code === 0 ? "ok" : (stopped ? "stopped" : `error(${code ?? "signal"})`);
-      const error = code === 0 ? null : (stopped ? "stopped" : (extractError(output) ?? `exit code ${code}`));
+      const stopped = (entry && entry.stopped) && !killReason;
+      const timedOut = killReason != null;
+      const status = code === 0 ? "ok" : (timedOut ? "timeout" : (stopped ? "stopped" : `error(${code ?? "signal"})`));
+      const error = code === 0 ? null : (timedOut
+        ? (killReason === "stalled"
+            ? `stalled (no output for ${Math.round(STALL_TIMEOUT_MS / 60000)}m)`
+            : `max duration exceeded (${Math.round(MAX_DURATION_MS / 60000)}m)`)
+        : (stopped ? "stopped" : (extractError(output) ?? `exit code ${code}`)));
 
       // Record failures in the central master log (seeding-runs.jsonl) so they
       // reach Supabase seeding_runs. Successes are self-logged by the seeders
@@ -534,6 +572,9 @@ export function runOne(seeder, opts = {}) {
       resolvePromise({ seeder, status, durationMs, result, error });
     });
     child.on("error", (err) => {
+      finished = true;
+      clearInterval(stallTimer);
+      if (maxDurTimer) clearTimeout(maxDurTimer);
       logStream.end();
       activeRuns.delete(seeder.source);
       resolvePromise({ seeder, status: "spawn-error", durationMs: Date.now() - started, result: null, error: err.message });

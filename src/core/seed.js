@@ -90,6 +90,26 @@ export async function fetchWithRetry(url, options = {}, { retries = 3, base = 20
   }
 }
 
+// ── ETA / duration formatting helpers ─────────────────────────────────────────
+function fmtDurMs(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+function fmtEta(remainingSec) {
+  if (!isFinite(remainingSec) || remainingSec <= 0) return "—";
+  const s = Math.round(remainingSec);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
 // ── createThrottle — AutoThrottle-style adaptive rate limiter ─────────────────
 /**
  * Returns a throttle function that adapts the inter-request delay based on
@@ -1645,7 +1665,6 @@ export async function seedWaybackCdx(config) {
         headers: { "User-Agent": UA },
         signal: controller.signal,
       });
-      clearTimeout(timer);
 
       if (!res.ok) return null;
       const contentLen = parseInt(res.headers.get("content-length") || "0");
@@ -1701,7 +1720,6 @@ export async function seedWaybackCdx(config) {
         headers: { "User-Agent": UA },
         signal: controller.signal,
       });
-      clearTimeout(timer);
 
       if (!res.ok) return null;
       const contentLen = parseInt(res.headers.get("content-length") || "0");
@@ -1855,7 +1873,10 @@ export async function seedWaybackCdx(config) {
     } else { skippedMeta++; }
 
     if ((i + 1) % 100 === 0 || i === discovered.length - 1) {
-      console.log(`  ${i + 1}/${discovered.length} (${ok} ok, ${skippedMeta} skipped)`);
+      const done = i + 1;
+      const elapsedMs = Date.now() - startTime;
+      const rate = done / Math.max(1, elapsedMs / 1000);
+      console.log(`  ${done}/${discovered.length} (${ok} ok, ${skippedMeta} skipped) — elapsed ${fmtDurMs(elapsedMs)} — ETA ${fmtEta((discovered.length - done) / rate)}`);
     }
   }
 
@@ -2438,9 +2459,9 @@ export async function seedRssWithFallbacks(config) {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 12000);
           const res = await fetchWithRetry(wbUrl, { headers: { "User-Agent": UA }, signal: controller.signal });
-          clearTimeout(timer);
           if (res.ok) {
             const html = await res.text();
+            clearTimeout(timer);
 
             let title = null;
             const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
@@ -2503,7 +2524,10 @@ export async function seedRssWithFallbacks(config) {
     } else { skippedMeta++; }
 
     if ((i + 1) % 50 === 0 || i === discovered.length - 1) {
-      console.log(`  ${i + 1}/${discovered.length} (${ok} ok, ${skippedMeta} skipped)`);
+      const done = i + 1;
+      const elapsedMs = Date.now() - startTime;
+      const rate = done / Math.max(1, elapsedMs / 1000);
+      console.log(`  ${done}/${discovered.length} (${ok} ok, ${skippedMeta} skipped) — elapsed ${fmtDurMs(elapsedMs)} — ETA ${fmtEta((discovered.length - done) / rate)}`);
     }
   }
 
