@@ -500,5 +500,14 @@ export function startServer(port = 4173) {
     console.log(`   GUI:  http://localhost:${port}/`);
     console.log(`   API:  http://localhost:${port}/api/health\n`);
   });
+
+  // This function opens the state DB, so it is also where the handle is
+  // released. Windows refuses to delete an open file, so a caller that closes
+  // the listener (a test, or a future in-process restart) would otherwise leave
+  // `.tmp-*` state behind it.
+  server.on("close", () => {
+    try { db.close(); } catch {} // already closed — nothing to release
+  });
+
   return server;
 }
