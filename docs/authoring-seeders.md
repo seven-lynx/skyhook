@@ -1,5 +1,8 @@
 # Authoring Seeders
 
+Status: **guide** — for a human writing a `seeders/seed-*.js`: the tiers, the filters and what
+happens to the rows.
+
 A **seeder** is a single `seeders/seed-<slug>.js` file. Skyhook discovers it
 automatically — no registry to edit, no rebuild.
 

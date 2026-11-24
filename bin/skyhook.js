@@ -47,7 +47,7 @@ const COMMANDS = [
   ["cache",      "Inspect / prune staged results and discovery cache (delete URLs)"],
   ["sync",       "Merge staged results with a peer (Pi ⇄ PC) with URL dedup"],
   ["push",       "Push the merged staged set into the configured storage"],
-  ["tag",        "Offline LLM tag worker (resumes; --mode retag-add|retag-replace for a second pass)"],
+  ["tag",        "Offline LLM tag worker (resumes; --mode retag-add|retag-replace, --retry-failed, --requeue-untagged)"],
   ["pull",       "Pull untagged (--force all, --index-only just the dedup index) URLs from storage"],
   ["upload",     "Upload staged URLs + local tags/attributes/quality to storage"],
   ["import-staged", "Import staged seeder JSONL into the offline DB (no Supabase round-trip)"],
@@ -653,6 +653,8 @@ async function cmdTag(a) {
     tier: parseInt(val(a, "--tier", "0"), 10) || 0,
     minTags: parseInt(val(a, "--min-tags", "0"), 10) || null,
     task: taskKey,
+    retryFailed: has(a, "--retry-failed"),
+    requeueUntagged: has(a, "--requeue-untagged"),
     logFile: join(c.logDir, "tagger.log"),
   };
 

@@ -1,5 +1,8 @@
 # Multi-node (PC ⇄ Pi)
 
+Status: **guide** — two machines, one controller. The shared token and `allowRemote` are the
+security story; read the auth note in `api.md` before exposing a node.
+
 Skyhook runs identically on a PC and a Raspberry Pi. Two nodes can be wired into
 a **controller + worker** pair: the PC owns the schedule and the canonical
 database; the Pi (when toggled into *worker* mode) runs assigned seeders and

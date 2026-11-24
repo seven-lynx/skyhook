@@ -10,6 +10,7 @@ import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
 import { getConfig } from "../../config.js";
 import { loadText } from "./index.js";
+import { enumTable, mapColumnValue } from "./enums.js";
 
 // Absolute path to the skyhook package root. Shipped task prompts live in
 // <package>/config/prompts/ and must resolve relative to the package, not the
@@ -136,14 +137,16 @@ export function buildTaskUserMessage(urls, task) {
   const instructions = {
     category: "Assign a category to each: TECHNOLOGY, SCIENCE, ARTS_AND_CULTURE, HISTORY_AND_IDEAS, GAMES_AND_HOBBIES, WEIRD_AND_WONDERFUL, PEOPLE_AND_PLACES, MIND_AND_BODY, or \"unknown\".\n\n",
     subcategory: "Choose the best subcategory from the vocabulary. Return \"unknown\" if none fits.\n\n",
-    tags: "Assign 2-5 relevant tags from the vocabulary.\n\n",
+    tags: "Assign 2-5 relevant tags from the vocabulary, and for each URL also return `attributes` and `quality` in the shape the system prompt describes.\n\n",
     contentType: "Classify content_type: article, research, tutorial, review, opinion, news, reference, gallery, interactive, or other.\n\n",
-    quality: "Assess url_type, quality_score (0-1), and boolean flags.\n\n",
-    attributes: "Determine audience_level, depth, tone, and is_news.\n\n",
+    quality: "Assess url_type, quality_score (0-10), and boolean flags.\n\n",
+    attributes: "Determine audience_level, content_type, depth, tone (an array), and is_news.\n\n",
   };
   let msg = (instructions[task.target] || "Analyze each URL.\n\n");
   urls.forEach((u, i) => {
-    msg += `[URL ${i}]\nTitle: ${u.title || ""}\nDescription: ${u.description || ""}\n\n`;
+    msg += `[URL ${i}]\nTitle: ${u.title || ""}\nDescription: ${u.description || ""}\n`;
+    if (u.url) msg += `URL: ${u.url}\n`;
+    msg += "\n";
   });
   return msg;
 }
@@ -157,7 +160,7 @@ function extractJson(text) {
   return body.slice(start, end + 1);
 }
 
-export function parseTaskResponse(raw, urlCount, task) {
+export function parseTaskResponse(raw, urlCount, task, table = enumTable()) {
   const parsed = JSON.parse(extractJson(raw));
   const urlResults = Array.isArray(parsed.results) ? parsed.results : (Array.isArray(parsed) ? parsed : []);
   const results = [];
@@ -179,6 +182,15 @@ export function parseTaskResponse(raw, urlCount, task) {
           typeof t === "string" ? { slug: t.toLowerCase().replace(/\s+/g, "-"), confidence: 0.7 } : t
         );
         out.tags = tags;
+        // Parity with the canonical pass: the model answered attributes and
+        // quality in the same response, so writing only the tags would throw
+        // work away and cost a second GPU pass for columns already in hand.
+        if (r.attributes && typeof r.attributes === "object") {
+          out.attributes = parseAttributes(r.attributes, table);
+        }
+        if (r.quality && typeof r.quality === "object") {
+          out.quality = parseQuality(r.quality, table);
+        }
         break;
       }
       case "contentType":
@@ -187,7 +199,7 @@ export function parseTaskResponse(raw, urlCount, task) {
         break;
       case "quality":
         out.url_type = String(r.url_type || "other").toLowerCase();
-        out.quality_score = typeof r.quality_score === "number" ? Math.max(0, Math.min(1, r.quality_score)) : 0.5;
+        out.quality_score = typeof r.quality_score === "number" ? Math.max(0, Math.min(10, Math.round(r.quality_score))) : 5;
         out.is_parked = !!r.is_parked; out.is_product = !!r.is_product;
         out.is_spam = !!r.is_spam; out.is_paywalled = !!r.is_paywalled;
         out.is_login_required = !!r.is_login_required; out.is_broken = !!r.is_broken;
@@ -195,17 +207,51 @@ export function parseTaskResponse(raw, urlCount, task) {
         out.is_english = r.is_english !== false;
         out.confidence = typeof r.confidence === "number" ? r.confidence : 0.5;
         break;
-      case "attributes":
-        out.audience_level = String(r.audience_level || "general").toLowerCase();
-        out.depth = String(r.depth || "medium").toLowerCase();
-        out.tone = String(r.tone || "neutral").toLowerCase();
-        out.is_news = !!r.is_news;
+      case "attributes": {
+        const a = parseAttributes(r, table);
+        out.audience_level = a.audience_level;
+        out.content_type = a.content_type;
+        out.depth = a.depth;
+        out.tone = a.tone;
+        out.is_news = a.is_news;
         out.confidence = typeof r.confidence === "number" ? r.confidence : 0.5;
         break;
+      }
     }
     results.push(out);
   }
   return results;
+}
+
+function enumValue(table, column, value) {
+  return mapColumnValue(column, value, table).value;
+}
+
+/** Attributes in the shape the canonical worker writes: `tone` is an array. */
+function parseAttributes(a, table) {
+  const tone = enumValue(table, "tone", a.tone);
+  return {
+    audience_level: enumValue(table, "audience_level", a.audience_level) ?? "general",
+    content_type: enumValue(table, "content_type", a.content_type) ?? "other",
+    depth: enumValue(table, "depth", a.depth) ?? "medium",
+    tone: Array.isArray(tone) && tone.length ? tone : ["neutral"],
+    is_news: enumValue(table, "is_news", a.is_news) ? 1 : 0,
+  };
+}
+
+/** Quality in the shape the canonical worker writes. */
+function parseQuality(q, table) {
+  return {
+    url_type: enumValue(table, "url_type", q.url_type) ?? "other",
+    quality_score: typeof q.quality_score === "number"
+      ? Math.max(0, Math.min(10, Math.round(q.quality_score)))
+      : 5,
+    is_parked: q.is_parked ? 1 : 0, is_product: q.is_product ? 1 : 0,
+    is_spam: q.is_spam ? 1 : 0, is_paywalled: q.is_paywalled ? 1 : 0,
+    is_login_required: q.is_login_required ? 1 : 0, is_broken: q.is_broken ? 1 : 0,
+    is_thin: q.is_thin ? 1 : 0, is_clickbait: q.is_clickbait ? 1 : 0,
+    is_english: q.is_english === false ? 0 : 1,
+  };
 }
 export function countMissingSync(dbPath) {
   if (!dbPath || !existsSync(dbPath)) return { offlineDb: false, missing: null, total: 0 };

@@ -1,5 +1,7 @@
 # Skyhook Quickstart
 
+Status: **guide** — from `npm install` to a scheduled seeder, in ten minutes, with no database.
+
 Self-hosted content seeding — discover URLs, enrich them, optionally tag them with
 an LLM, and push them into your own database.
 

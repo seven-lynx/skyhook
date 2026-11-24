@@ -1,5 +1,5 @@
 /**
- * offline-worker.js â€” offline LLM tagging worker over a local SQLite DB.
+ * offline-worker.js - offline LLM tagging worker over a local SQLite DB.
  *
  * Migrated from Roam's scripts/tagging-worker.mjs. It tags a local export of
  * URLs using a locally-loaded LLM (LM Studio / any OpenAI-compatible endpoint),
@@ -16,20 +16,23 @@ import { appendFileSync, existsSync, mkdirSync, statSync, unlinkSync, writeFileS
 import { dirname, join } from "path";
 import { loadText } from "./index.js";
 import { canonicalizeTagList } from "./canonicalize.js";
+import { enumTable, mapColumnValue } from "./enums.js";
 import { getTask, loadTaskPromptFile, buildTaskUserMessage, parseTaskResponse } from "./tasks.js";
 
-// â”€â”€ Validation enums (what the LLM is allowed to emit) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const VALID_URL_TYPES = new Set([
-  "article", "reference", "interactive", "gallery", "product-page",
-  "landing-page", "domain-parking", "login-wall", "error-page",
-  "spam", "thin-content", "other",
-]);
-const VALID_AUDIENCE = new Set(["beginner", "intermediate", "advanced", "general"]);
-const VALID_CONTENT_TYPE = new Set([
-  "article", "research", "tutorial", "review", "opinion", "news",
-  "reference", "gallery", "interactive", "other",
-]);
-const VALID_DEPTH = new Set(["quick-read", "medium", "deep-dive", "reference"]);
+// Validation enums (what the LLM is allowed to emit)
+// The vocabulary is NOT defined here: it comes from `tagging.enums`
+// (src/config.js DEFAULTS) through ./enums.js, the same table the upload mapper
+// and the task prompts read. A prompt therefore cannot drift from the writer
+// that validates it. See TAGT in the plan tree.
+function enumValue(table, column, value) {
+  return mapColumnValue(column, value, table).value;
+}
+
+/** `tone` is always an array locally, whatever shape the model produced. */
+function normalizeTone(value, table) {
+  const v = enumValue(table, "tone", value);
+  return Array.isArray(v) && v.length ? v : ["neutral"];
+}
 
 const TAG_LOCK_STALE_MS = 15 * 60 * 1000;
 
@@ -112,7 +115,11 @@ function buildUserMessage(urls) {
   urls.forEach((u, i) => {
     msg += `[URL ${i}]\n`;
     msg += `Title: ${u.title || ""}\n`;
-    msg += `Description: ${u.description || ""}\n\n`;
+    msg += `Description: ${u.description || ""}\n`;
+    // The domain is a strong classification signal ("arxiv.org", "github.com"),
+    // and the shipped template has always had a {url} placeholder for it.
+    if (u.url) msg += `URL: ${u.url}\n`;
+    msg += "\n";
   });
   return msg;
 }
@@ -142,7 +149,7 @@ async function callLLM({ provider, model, systemPrompt, userMessage }) {
       if (res.status === 400) {
         const errText = await res.text().catch(() => "");
         if (errText.includes("system") || errText.includes("Only user")) {
-          // Model refuses a system role â€” merge into a single user message.
+          // Model refuses a system role - merge into a single user message.
           res = await fetch(endpoint, {
             method: "POST", headers, body: JSON.stringify(makeBody(null, `${systemPrompt}\n\n---\n\n${userMessage}`)),
             signal: AbortSignal.timeout(900000),
@@ -177,7 +184,7 @@ function extractJson(text) {
   return body.slice(start, end + 1);
 }
 
-function parseResponse(raw, urlCount, validTags) {
+function parseResponse(raw, urlCount, validTags, table = enumTable()) {
   const parsed = JSON.parse(extractJson(raw));
   const results = [];
   const urlResults = Array.isArray(parsed.results) ? parsed.results : (Array.isArray(parsed) ? parsed : []);
@@ -187,18 +194,18 @@ function parseResponse(raw, urlCount, validTags) {
     if (idx === undefined || idx >= urlCount) continue;
 
     const tags = canonicalizeTagList(r.tags, validTags, (from, to) => {
-      console.warn(`  â†ª  tag "${from}" â†’ "${to}"`);
+      console.warn(`  ->  tag "${from}" -> "${to}"`);
     });
 
     const attrs = r.attributes || {};
-    const audience = VALID_AUDIENCE.has(attrs.audience_level) ? attrs.audience_level : "general";
-    const contentType = VALID_CONTENT_TYPE.has(attrs.content_type) ? attrs.content_type : "other";
-    const depth = VALID_DEPTH.has(attrs.depth) ? attrs.depth : "medium";
-    const tone = Array.isArray(attrs.tone) ? JSON.stringify(attrs.tone) : "[]";
-    const isNews = attrs.is_news ? 1 : 0;
+    const audience = enumValue(table, "audience_level", attrs.audience_level) ?? "general";
+    const contentType = enumValue(table, "content_type", attrs.content_type) ?? "other";
+    const depth = enumValue(table, "depth", attrs.depth) ?? "medium";
+    const tone = JSON.stringify(normalizeTone(attrs.tone, table));
+    const isNews = enumValue(table, "is_news", attrs.is_news) ? 1 : 0;
 
     const quality = r.quality || {};
-    const urlType = VALID_URL_TYPES.has(quality.url_type) ? quality.url_type : "other";
+    const urlType = enumValue(table, "url_type", quality.url_type) ?? "other";
     const qScore = typeof quality.quality_score === "number"
       ? Math.max(0, Math.min(10, Math.round(quality.quality_score)))
       : 5;
@@ -241,6 +248,7 @@ export async function runOfflineTagWorker(opts = {}) {
     dbPath, provider, model, prompt,
     validTags = null, modelSource = "llm", batchSize = 25, max = null,
     mode = "tag", tier = 0, task: taskKey = null, logFile = null, minTags = null,
+    retryFailed = false, requeueUntagged = false,
   } = opts;
 
   // Tee console output to a persistent log file so the GUI can show the
@@ -283,15 +291,42 @@ export async function runOfflineTagWorker(opts = {}) {
   const tagSlugs = (validTags && validTags.length)
     ? validTags
     : (() => { try { return db.prepare("SELECT slug FROM local_tags WHERE is_active = 1").all().map((r) => r.slug); } catch { return []; } })();
+  const valueTable = enumTable();
 
   const taskActive = task && taskKey;
   const resolvedPrompt = taskActive ? (loadTaskPromptFile(task) || prompt) : prompt;
   const resolvedModelSource = taskActive ? task.resumeSource : modelSource;
 
   const reprocess = mode === "retag-add" || mode === "retag-replace" || (taskActive && task.reprocess === true);
-  const taggedFilter = reprocess
-    ? ""
-    : `AND u.id NOT IN (SELECT url_id FROM local_url_tagged_by WHERE model_source IN ('${resolvedModelSource}', '${resolvedModelSource}:failed'))`;
+
+  // Row selection. Three mutually exclusive selects beyond the default queue:
+  //   --retry-failed      only the rows a failed batch marked `:failed`
+  //   --requeue-untagged  rows with zero tags, even though a marker exists
+  //                       (a partial model answer marked the whole batch, so the
+  //                       marker alone is not evidence of work)
+  // The marker rows are read, never deleted: resume history survives a requeue.
+  const failedSource = `${resolvedModelSource}:failed`;
+  const hasQuality = !!db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_url_quality'",
+  ).get();
+  let taggedFilter;
+  if (requeueUntagged) {
+    taggedFilter = "AND u.id NOT IN (SELECT url_id FROM local_url_tags)";
+  } else if (retryFailed) {
+    taggedFilter = `AND u.id IN (SELECT url_id FROM local_url_tagged_by WHERE model_source = '${failedSource}')`;
+  } else if (reprocess) {
+    taggedFilter = "";
+  } else {
+    taggedFilter = `AND u.id NOT IN (SELECT url_id FROM local_url_tagged_by WHERE model_source IN ('${resolvedModelSource}', '${failedSource}'))`;
+  }
+
+  // A requeue skips junk, because the consumer filters those pages out and a
+  // GPU hour spent on them is an hour not spent on the corpus.
+  const junkFilter = (requeueUntagged && hasQuality)
+    ? `AND u.id NOT IN (SELECT url_id FROM local_url_quality
+          WHERE is_parked = 1 OR is_spam = 1 OR is_broken = 1 OR is_thin = 1
+             OR is_clickbait = 1 OR quality_score <= 2)`
+    : "";
   const taskFilter = taskActive ? (task.filterClause || "") : "";
   const resolvedMinTags = minTags ?? (taskActive && task.minTags != null ? Number(task.minTags) : null);
   const minTagsFilter = (resolvedMinTags != null && resolvedMinTags > 0)
@@ -303,6 +338,7 @@ export async function runOfflineTagWorker(opts = {}) {
     WHERE u.approved = 1 AND u.inactive = 0
       AND u.title IS NOT NULL AND u.title != ''
       ${taggedFilter}
+      ${junkFilter}
       ${taskFilter}
       ${minTagsFilter}
     ORDER BY u.id
@@ -310,6 +346,7 @@ export async function runOfflineTagWorker(opts = {}) {
 
   const insertTag = db.prepare(`INSERT OR IGNORE INTO local_url_tags (url_id, tag_slug, confidence, source) VALUES (?, ?, ?, ?)`);
   const insertTaggedBy = db.prepare(`INSERT OR IGNORE INTO local_url_tagged_by (url_id, model_source) VALUES (?, ?)`);
+  const deleteTaggedBy = db.prepare(`DELETE FROM local_url_tagged_by WHERE url_id = ? AND model_source = ?`);
   const deleteTagsFor = db.prepare(`DELETE FROM local_url_tags WHERE url_id = ? AND source = ?`);
   const insertAttr = db.prepare(`INSERT OR REPLACE INTO local_url_attributes (url_id, audience_level, content_type, depth, tone, is_news, confidence) VALUES (?, ?, ?, ?, ?, ?, ?)`);
   // Targeted attribute writes so gap-fill tasks don't clobber each other's
@@ -359,19 +396,20 @@ export async function runOfflineTagWorker(opts = {}) {
   process.on("SIGINT", () => {
     if (shuttingDown) { cleanup(); process.exit(1); }
     shuttingDown = true;
-    console.log("\n\nðŸ›‘ SIGINT received. Finishing current batch...");
+    console.log("\n\n[stop] SIGINT received. Finishing current batch...");
   });
   process.on("exit", cleanup);
 
   let batchCount = 0;
   let consecutiveFailures = 0;
+  let consecutiveEmptyBatches = 0;
   while (true) {
     if (shuttingDown) break;
     if (max && totalProcessed >= max) break;
 
     const limit = max ? Math.min(batchSize, max - totalProcessed) : batchSize;
     const urls = db.prepare(`${URL_QUERY} LIMIT ${limit}`).all();
-    if (urls.length === 0) { console.log("\nâœ… No more URLs to process."); break; }
+    if (urls.length === 0) { console.log("\n[ok] No more URLs to process."); break; }
 
     const batchStart = Date.now();
     batchCount++;
@@ -381,13 +419,27 @@ export async function runOfflineTagWorker(opts = {}) {
         : buildUserMessage(urls);
       const rawResponse = await callLLM({ provider, model, systemPrompt: resolvedPrompt, userMessage });
       const parsed = taskActive
-        ? parseTaskResponse(rawResponse, urls.length, task)
-        : parseResponse(rawResponse, urls.length, tagSlugs);
+        ? parseTaskResponse(rawResponse, urls.length, task, valueTable)
+        : parseResponse(rawResponse, urls.length, tagSlugs, valueTable);
+
+      // Only the URLs the model actually answered are marked. Marking the whole
+      // batch is what makes a URL look tagged while holding zero tags - 21 % of
+      // one real corpus. Unanswered indexes stay unmarked and come back next pass.
+      const answered = new Set(parsed.map((r) => r.url_index));
+      for (const idx of answered) {
+        if (idx < 0 || idx >= urls.length) answered.delete(idx);
+      }
 
       db.transaction(() => {
-        for (const u of urls) {
-          if (mode === "retag-replace") deleteTagsFor.run(u.id, resolvedModelSource);
+        if (mode === "retag-replace") {
+          for (const idx of answered) deleteTagsFor.run(urls[idx].id, resolvedModelSource);
+        }
+        for (const idx of answered) {
+          const u = urls[idx];
           insertTaggedBy.run(u.id, resolvedModelSource);
+          // A successful retry must clear its failure marker, or the failure
+          // counts can only ever go up.
+          if (retryFailed) deleteTaggedBy.run(u.id, failedSource);
         }
         if (taskActive) {
           // Task-specific write logic.
@@ -401,11 +453,32 @@ export async function runOfflineTagWorker(opts = {}) {
               case "subcategory":
                 if (r.subcategory && r.subcategory !== "UNKNOWN") updateSubcategory.run(r.subcategory, url.id);
                 break;
-              case "tags":
-                for (const t of (r.tags || [])) {
-                  if (t.slug && t.slug !== "none") insertTag.run(url.id, t.slug, typeof t.confidence === "number" ? t.confidence : 0.7, resolvedModelSource);
+              case "tags": {
+                // Same canonicaliser as the main pass, so a task-mode slug the
+                // vocabulary does not hold is repaired or dropped here rather
+                // than silently skipped at upload.
+                const canonical = canonicalizeTagList(r.tags || [], tagSlugs);
+                for (const t of canonical) {
+                  insertTag.run(url.id, t.slug, typeof t.confidence === "number" ? t.confidence : 0.7, resolvedModelSource);
+                }
+                // Same response, same pass: the attributes and quality the model
+                // returned are written too, so one GPU hour fills three tables.
+                if (r.attributes) {
+                  const a = r.attributes;
+                  insertAttr.run(url.id, a.audience_level, a.content_type, a.depth,
+                    JSON.stringify(Array.isArray(a.tone) ? a.tone : [a.tone || "neutral"]),
+                    a.is_news ? 1 : 0, 1.0);
+                }
+                if (r.quality) {
+                  const q = r.quality;
+                  insertQuality.run(url.id, q.url_type, q.quality_score,
+                    q.is_parked ? 1 : 0, q.is_product ? 1 : 0, q.is_spam ? 1 : 0,
+                    q.is_paywalled ? 1 : 0, q.is_login_required ? 1 : 0,
+                    q.is_broken ? 1 : 0, q.is_thin ? 1 : 0, q.is_clickbait ? 1 : 0,
+                    q.is_english ? 1 : 0, 1.0);
                 }
                 break;
+              }
               case "contentType":
                 ensureAttr.run(url.id);
                 updateContentType.run(r.contentType, r.confidence ?? 0.5, url.id);
@@ -436,17 +509,35 @@ export async function runOfflineTagWorker(opts = {}) {
       })();
 
       consecutiveFailures = 0;
-      totalProcessed += urls.length;
-      done += urls.length;
+      // Count what the model actually answered, not what the batch asked for:
+      // an unanswered URL is not processed, it is still owed.
+      const missing = urls.length - answered.size;
+      if (missing > 0) {
+        console.log(`  batch ${batchCount}: missing: ${missing} of ${urls.length} (left unmarked)`);
+      }
+      totalProcessed += answered.size;
+      done += answered.size;
       const lastUrl = urls[urls.length - 1];
       const instantRate = urls.length / ((Date.now() - batchStart) / 3600000);
       ratePerHour = ratePerHour ? ratePerHour * 0.8 + instantRate * 0.2 : instantRate;
       const pct = totalEligible > 0 ? ((done / totalEligible) * 100).toFixed(2) : "?";
       console.log(`${done.toLocaleString()}/${totalEligible.toLocaleString()} (${pct}%) | ~${Math.round(ratePerHour).toLocaleString()}/hr | last: ${String(lastUrl.id).slice(0, 8)}`);
       updateProgress.run(tier, lastUrl.id, totalProcessed, totalFailed, totalSkipped, ratePerHour);
+
+      // A model that answers nothing would otherwise spin on the same batch
+      // forever, because nothing gets marked. Stop and say so.
+      if (answered.size === 0) {
+        consecutiveEmptyBatches++;
+        if (consecutiveEmptyBatches >= 3) {
+          console.error("\n[stop] Three batches in a row produced no answers. Stopping - check the prompt and the model.");
+          shuttingDown = true;
+        }
+      } else {
+        consecutiveEmptyBatches = 0;
+      }
     } catch (err) {
       consecutiveFailures++;
-      console.error(`\nâŒ Batch ${batchCount} failed (${consecutiveFailures} consecutive): ${err.message}`);
+      console.error(`\n[fail] Batch ${batchCount} failed (${consecutiveFailures} consecutive): ${err.message}`);
       db.transaction(() => {
         for (const u of urls) insertTaggedBy.run(u.id, `${resolvedModelSource}:failed`);
       })();
@@ -455,7 +546,7 @@ export async function runOfflineTagWorker(opts = {}) {
       totalProcessed += urls.length;
       updateProgress.run(tier, cp.last_url_id ?? null, totalProcessed, totalFailed, totalSkipped, ratePerHour);
       if (/Model unloaded/i.test(err.message) || consecutiveFailures >= 5) {
-        console.error(`\nâ¸ï¸  Pausing â€” model may have unloaded. Check LM Studio.`);
+        console.error(`\n[pause] model may have unloaded. Check LM Studio.`);
         shuttingDown = true;
       }
     }
@@ -464,7 +555,7 @@ export async function runOfflineTagWorker(opts = {}) {
   const finalStatus = shuttingDown ? "paused" : "done";
   db.prepare(`UPDATE local_tagging_progress SET status = ?, updated_at = datetime('now'), total_processed = ?, total_failed = ?, total_skipped = ? WHERE id = 1`)
     .run(finalStatus, totalProcessed, totalFailed, totalSkipped);
-  console.log(`\n${finalStatus === "done" ? "âœ… Complete" : "â¸ï¸  Paused"} â€” ${totalProcessed.toLocaleString()} processed, ${totalFailed.toLocaleString()} failed`);
+  console.log(`\n${finalStatus === "done" ? "[ok] Complete" : "[pause] Paused"} - ${totalProcessed.toLocaleString()} processed, ${totalFailed.toLocaleString()} failed`);
   cleanup();
   return { status: finalStatus, processed: totalProcessed, failed: totalFailed, skipped: totalSkipped };
 }

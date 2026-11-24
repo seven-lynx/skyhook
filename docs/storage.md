@@ -1,5 +1,8 @@
 # Storage Adapters
 
+Status: **contract** — an adapter and `config/schema.json` are what a user's database depends on.
+A new provider is a row here in the same commit.
+
 Skyhook writes discovered URLs through a pluggable **`StorageAdapter`**. Pick one
 in `skyhook.config.json` → `storage.provider`.
 

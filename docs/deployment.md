@@ -1,5 +1,8 @@
 # Deployment & Scheduling
 
+Status: **guide** — scaffolding with `init`, the systemd timer `emit-timer` regenerates, and the
+pointer to the multi-node setup.
+
 ## Scaffolding a project
 
 `skyhook init` creates a self-contained project in the current directory:

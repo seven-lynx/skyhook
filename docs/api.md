@@ -1,5 +1,8 @@
 # HTTP API
 
+Status: **contract** — the web GUI and remote peers code against it. Additive changes only, and a
+new route is a row here in the same commit.
+
 `skyhook serve` (default `http://localhost:4173`) exposes a JSON API over Node's
 built-in HTTP server — zero framework, CORS open. It's the same API the web GUI and
 remote peers use, so anything the GUI can do, `curl` can too.
@@ -59,6 +62,7 @@ API is fully open — fine for localhost, not for a LAN or the internet.
 |---|---|---|
 | GET | `/api/pipeline` | Offline pipeline status |
 | POST | `/api/pipeline/:kind` | Run a pipeline job (`tag`, `push`, or any `pipeline.jobs` key) |
+| GET | `/api/tagging/tasks` | The task list: `{ tasks: [{ key, label, gap?, reprocess?, minTags? }] }` |
 | GET | `/api/tagging/missing` | Counts of URLs missing category/subcategory/tags/content-type/quality/attributes |
 | GET | `/api/tagging/models` | `{ models, errors, configured, provider }` — probe the active platform for downloaded models |
 | POST | `/api/tagging/models/load` | `{ model, provider? }` — unload any loaded model, then load the target (LM Studio) |

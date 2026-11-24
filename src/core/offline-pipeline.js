@@ -10,6 +10,7 @@ import Database from "better-sqlite3";
 import { existsSync, readdirSync, readFileSync, mkdirSync, renameSync } from "fs";
 import { join, dirname, resolve } from "path";
 import { randomUUID } from "crypto";
+import { enumTable, mapRow, mergeStats } from "../adapters/tagging/enums.js";
 
 async function sbClient(config) {
   const { createClient } = await import("@supabase/supabase-js");
@@ -264,10 +265,19 @@ async function uploadStagedUrls(sb, db, { dryRun = false }) {
 
   const toInsert = [];
   let existing = 0, remapped = 0;
+  // One round trip per CHUNK, not per row: a 180k-row import otherwise spends
+  // 180k queries before it inserts anything.
+  const CHUNK = 100;
+  const idByUrl = new Map();
+  for (let i = 0; i < staged.length; i += CHUNK) {
+    const chunk = staged.slice(i, i + CHUNK).map((r) => r.url);
+    const { data, error } = await sb.from("urls").select("id, url").in("url", chunk);
+    if (error) throw new Error(`Existence check failed: ${error.message}`);
+    for (const r of data || []) idByUrl.set(r.url, r.id);
+  }
   for (const r of staged) {
-    const { data } = await sb.from("urls").select("id").eq("url", r.url).limit(1);
-    if (data && data.length) {
-      const realId = data[0].id;
+    const realId = idByUrl.get(r.url);
+    if (realId) {
       if (realId !== r.id) { if (!dryRun) remap(r.id, realId); remapped++; }
       existing++;
     } else {
@@ -298,67 +308,105 @@ async function uploadStagedUrls(sb, db, { dryRun = false }) {
 }
 
 // ── 5. Upload local tags/attributes/quality → storage ───────────────────────
-async function uploadTagRows(sb, db, { batchSize = 500 }) {
+//
+// Every loop pages by a `rowid` keyset, not by `limit`/`offset`. The loop marks
+// the rows it just sent, so those rows leave the `synced = 0` predicate; an
+// OFFSET cursor then steps over an equal number of still-unsynced rows, and one
+// pass uploads about half its backlog.
+function unsyncedPager(db, table, columns, batchSize) {
+  const sql = `SELECT rowid AS _rowid, ${columns} FROM ${table}
+               WHERE (synced = 0 OR synced IS NULL) AND rowid > ?
+               ORDER BY rowid LIMIT ?`;
+  const stmt = db.prepare(sql);
+  return (last) => stmt.all(last, batchSize);
+}
+
+export async function uploadTagRows(sb, db, { batchSize = 500, uploadSource = "llm" }) {
   const { data: tagRows, error: lookupErr } = await sb.from("tags").select("id, slug");
   if (lookupErr) throw new Error(`Failed to load tags: ${lookupErr.message}`);
   const idBySlug = new Map((tagRows || []).map((t) => [t.slug, t.id]));
 
-  let offset = 0, uploaded = 0, skipped = 0;
+  const page = unsyncedPager(db, "local_url_tags",
+    "url_id, tag_slug, confidence, source, created_at", batchSize);
+  const mark = db.prepare("UPDATE local_url_tags SET synced = 1 WHERE url_id = ? AND tag_slug = ?");
+
+  let lastRowid = 0, uploaded = 0, skipped = 0;
   while (true) {
-    const rows = db.prepare(`SELECT url_id, tag_slug, confidence, source, created_at FROM local_url_tags WHERE synced = 0 OR synced IS NULL LIMIT ? OFFSET ?`).all(batchSize, offset);
+    const rows = page(lastRowid);
     if (rows.length === 0) break;
     const resolved = [], markSynced = [];
     for (const r of rows) {
       const tagId = idBySlug.get(r.tag_slug);
       if (!tagId) { skipped++; continue; }
-      resolved.push({ url_id: r.url_id, tag_id: tagId, confidence: r.confidence, source: r.source || "llm", created_at: r.created_at });
+      resolved.push({
+        url_id: r.url_id, tag_id: tagId, confidence: r.confidence,
+        source: uploadSource, created_at: r.created_at,
+      });
       markSynced.push([r.url_id, r.tag_slug]);
     }
     if (resolved.length) {
       const { error } = await sb.from("url_tags").upsert(resolved, { onConflict: "url_id, tag_id" });
       if (error) throw error;
-      const mark = db.prepare("UPDATE local_url_tags SET synced = 1 WHERE url_id = ? AND tag_slug = ?");
       for (const [urlId, tagSlug] of markSynced) mark.run(urlId, tagSlug);
       uploaded += resolved.length;
     }
-    offset += batchSize;
+    lastRowid = rows[rows.length - 1]._rowid;
   }
   return { uploaded, skipped };
 }
 
-async function uploadAttrRows(sb, db, { batchSize = 500 }) {
-  let offset = 0, uploaded = 0;
+export async function uploadAttrRows(sb, db, { batchSize = 500, enums, dropped = {} }) {
+  const page = unsyncedPager(db, "local_url_attributes",
+    "url_id, audience_level, content_type, depth, tone, is_news, confidence, created_at", batchSize);
+  const mark = db.prepare("UPDATE local_url_attributes SET synced = 1 WHERE url_id = ?");
+
+  let lastRowid = 0, uploaded = 0;
   while (true) {
-    const rows = db.prepare(`SELECT url_id, audience_level, content_type, depth, tone, is_news, confidence, created_at FROM local_url_attributes WHERE synced = 0 OR synced IS NULL LIMIT ? OFFSET ?`).all(batchSize, offset);
+    const rows = page(lastRowid);
     if (rows.length === 0) break;
-    const { error } = await sb.from("url_attributes").upsert(rows.map((r) => ({
-      url_id: r.url_id, audience_level: r.audience_level, content_type: r.content_type,
-      depth: r.depth, tone: r.tone, is_news: r.is_news, confidence: r.confidence, created_at: r.created_at,
-    })), { onConflict: "url_id" });
+    const payload = rows.map((r) => {
+      const { row, reasons } = mapRow({
+        url_id: r.url_id, audience_level: r.audience_level, content_type: r.content_type,
+        depth: r.depth, tone: r.tone, is_news: r.is_news, confidence: r.confidence,
+        created_at: r.created_at,
+      }, enums);
+      mergeStats(dropped, reasons);
+      return row;
+    });
+    const { error } = await sb.from("url_attributes").upsert(payload, { onConflict: "url_id" });
     if (error) throw error;
-    for (const r of rows) db.prepare("UPDATE local_url_attributes SET synced = 1 WHERE url_id = ?").run(r.url_id);
+    for (const r of rows) mark.run(r.url_id);
     uploaded += rows.length;
-    offset += batchSize;
+    lastRowid = rows[rows.length - 1]._rowid;
   }
   return { uploaded };
 }
 
-async function uploadQualityRows(sb, db, { batchSize = 500 }) {
-  let offset = 0, uploaded = 0;
+export async function uploadQualityRows(sb, db, { batchSize = 500, enums, dropped = {} }) {
+  const page = unsyncedPager(db, "local_url_quality",
+    "url_id, url_type, quality_score, is_parked, is_product, is_spam, is_paywalled, is_login_required, is_broken, is_thin, is_clickbait, is_english, confidence, created_at", batchSize);
+  const mark = db.prepare("UPDATE local_url_quality SET synced = 1 WHERE url_id = ?");
+
+  let lastRowid = 0, uploaded = 0;
   while (true) {
-    const rows = db.prepare(`SELECT url_id, url_type, quality_score, is_parked, is_product, is_spam, is_paywalled, is_login_required, is_broken, is_thin, is_clickbait, is_english, confidence, created_at FROM local_url_quality WHERE synced = 0 OR synced IS NULL LIMIT ? OFFSET ?`).all(batchSize, offset);
+    const rows = page(lastRowid);
     if (rows.length === 0) break;
-    const { error } = await sb.from("url_quality").upsert(rows.map((r) => ({
-      url_id: r.url_id, url_type: r.url_type, quality_score: r.quality_score,
-      is_parked: r.is_parked, is_product: r.is_product, is_spam: r.is_spam,
-      is_paywalled: r.is_paywalled, is_login_required: r.is_login_required,
-      is_broken: r.is_broken, is_thin: r.is_thin, is_clickbait: r.is_clickbait,
-      is_english: r.is_english, confidence: r.confidence, created_at: r.created_at,
-    })), { onConflict: "url_id" });
+    const payload = rows.map((r) => {
+      const { row, reasons } = mapRow({
+        url_id: r.url_id, url_type: r.url_type, quality_score: r.quality_score,
+        is_parked: r.is_parked, is_product: r.is_product, is_spam: r.is_spam,
+        is_paywalled: r.is_paywalled, is_login_required: r.is_login_required,
+        is_broken: r.is_broken, is_thin: r.is_thin, is_clickbait: r.is_clickbait,
+        is_english: r.is_english, confidence: r.confidence, created_at: r.created_at,
+      }, enums);
+      mergeStats(dropped, reasons);
+      return row;
+    });
+    const { error } = await sb.from("url_quality").upsert(payload, { onConflict: "url_id" });
     if (error) throw error;
-    for (const r of rows) db.prepare("UPDATE local_url_quality SET synced = 1 WHERE url_id = ?").run(r.url_id);
+    for (const r of rows) mark.run(r.url_id);
     uploaded += rows.length;
-    offset += batchSize;
+    lastRowid = rows[rows.length - 1]._rowid;
   }
   return { uploaded };
 }
@@ -374,23 +422,32 @@ export async function uploadOffline({ config, dryRun = false, batchSize = 500 })
       if (!cols.includes("synced")) db.exec(`ALTER TABLE ${table} ADD COLUMN synced INTEGER DEFAULT 0`);
     }
 
+    const enums = enumTable(config);
+    const uploadSource = config.tagging?.uploadSource || "llm";
+    const dropped = {};
+
     console.log("Uploading staged URLs…");
     const urls = await uploadStagedUrls(sb, db, { dryRun });
     console.log(`  ${urls.staged.toLocaleString()} staged, ${urls.inserted.toLocaleString()} new, ${urls.existing.toLocaleString()} existing (${urls.remapped} remapped)`);
 
     console.log("Uploading tags…");
-    const tags = await uploadTagRows(sb, db, { batchSize });
-    console.log(`  ${tags.uploaded.toLocaleString()} tags uploaded${tags.skipped ? ` (${tags.skipped} skipped)` : ""}`);
+    const tags = await uploadTagRows(sb, db, { batchSize, uploadSource });
+    console.log(`  ${tags.uploaded.toLocaleString()} tags uploaded${tags.skipped ? ` (${tags.skipped} skipped: slug not in the target vocabulary)` : ""}`);
 
     console.log("Uploading attributes…");
-    const attrs = await uploadAttrRows(sb, db, { batchSize });
+    const attrs = await uploadAttrRows(sb, db, { batchSize, enums, dropped });
     console.log(`  ${attrs.uploaded.toLocaleString()} attributes uploaded`);
 
     console.log("Uploading quality…");
-    const quality = await uploadQualityRows(sb, db, { batchSize });
+    const quality = await uploadQualityRows(sb, db, { batchSize, enums, dropped });
     console.log(`  ${quality.uploaded.toLocaleString()} quality assessments uploaded`);
 
-    return { urls, tags, attrs, quality };
+    if (Object.keys(dropped).length) {
+      const summary = Object.entries(dropped).map(([c, n]) => `${c} ${n}`).join(", ");
+      console.log(`  mapped or dropped values: ${summary}`);
+    }
+
+    return { urls, tags, attrs, quality, mapped: dropped };
   } finally {
     db.close();
   }
