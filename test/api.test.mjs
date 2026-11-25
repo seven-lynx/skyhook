@@ -179,6 +179,36 @@ test("api: routes answer, unknown paths 404, a POST needs the shared token", asy
   }
 });
 
+// #17: the banner is printed from the `listen` callback, which is the first moment the bound
+// port is known. `skyhook app` binds port 0 by default, so a banner naming the *requested*
+// `:0` sends the reader to a dead URL. `console.log` is silenced at the top of this file, so
+// the banner is captured through a temporary collector and restored in `finally`.
+test("api: the banner names the bound port, not the requested one", async () => {
+  const { startServer } = await import("../src/interfaces/api-server.js");
+  mkdirSync(stateDir, { recursive: true }); // the first test removed the temp dir
+
+  const lines = [];
+  const silenced = console.log;
+  let server;
+  try {
+    console.log = (...args) => lines.push(args.join(" "));
+    server = startServer(0);
+    await new Promise((r) => server.once("listening", r));
+  } finally {
+    console.log = silenced;
+  }
+
+  try {
+    const bound = server.address().port;
+    assert.notEqual(bound, 0, "the kernel picked a real port");
+    const banner = lines.join("\n");
+    assert.match(banner, new RegExp(`127\\.0\\.0\\.1:${bound}`), "the banner names the port it bound");
+    assert.doesNotMatch(banner, /:0(?!\d)/, "no line points at :0");
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
 test("api: an open bind without a token is refused, and a loopback one is not", async () => {
   const { startServer, isLoopbackHost } = await import("../src/interfaces/api-server.js");
   assert.equal(isLoopbackHost("127.0.0.1"), true);
