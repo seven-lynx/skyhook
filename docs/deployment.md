@@ -49,6 +49,39 @@ The bundled `.service` runs `bin/skyhook.js run-due` once per timer tick with
 `SKYHOOK_STAGE_ONLY=1 SKYHOOK_SKIP_HEADLESS=1` (stage-only, no headless browser).
 Tune those for your setup.
 
+## Releasing to a consumer
+
+A consumer pins a **tag**, never a branch:
+
+```json
+"skyhook": "github:seven-lynx/skyhook#v0.4.2"
+```
+
+So the release is four steps in this order — a tag on a commit nobody can fetch is not a release:
+
+```bash
+git checkout main
+git merge --ff-only <branch that tips the release line>   # never a plain merge on the release path
+git push origin main
+git tag -a v0.4.2 -m "v0.4.2 — what the release changes"
+git push origin v0.4.2
+```
+
+The version lives in two places, and both must agree before the tag: `package.json` and the
+README **Status** line.
+
+Then prove the tag from outside the working copy, because the consumer installs the published
+tree and not this checkout:
+
+```bash
+npm i github:seven-lynx/skyhook#v0.4.2   # in a scratch directory
+npm ls skyhook --depth=0                 # prints the resolved version
+```
+
+A change to the upload or tagging path is documented in [pipeline.md](pipeline.md) and
+[tagging.md](tagging.md) before it is tagged. The README Status paragraph describes the release
+as a whole, so it is written at tag time rather than per commit.
+
 ## Multi-node
 
 The Pi runs the same timer in worker mode; the PC pulls its staged results. See
