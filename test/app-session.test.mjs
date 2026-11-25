@@ -43,6 +43,15 @@ writeFileSync(join(tmp, "skyhook.config.json"), JSON.stringify({
 
 loadConfig({ file: join(tmp, "skyhook.config.json"), reload: true });
 
+// The session's server banner is a `console.log` carrying an emoji, and Node 20's
+// runner reads a test child's non-ASCII stdout sitting next to a report frame as a
+// frame length: the file then fails with "Unable to deserialize cloned data" while
+// every subtest passed (nodejs/node#64061, #65934). Node 24 carries the fix and CI
+// runs Node 20, so the banner is kept off stdout here — the same silence
+// `test/parity.test.mjs:16-22` applies, and per-file because `node --test` gives
+// each file its own child process.
+console.log = () => {};
+
 after(() => rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
 test("app session: picks a port, answers health, and closes with no socket and no lock", async () => {

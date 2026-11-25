@@ -52,6 +52,15 @@ writeFileSync(configFile, JSON.stringify({
 
 loadConfig({ file: configFile, reload: true });
 
+// `startServer` announces itself with a `console.log` that carries an emoji, and
+// Node 20's runner reads a test child's non-ASCII stdout sitting next to a report
+// frame as a frame length: the file then fails with "Unable to deserialize cloned
+// data" while every subtest passed (nodejs/node#64061, #65934). Node 24 carries
+// the fix and CI runs Node 20, so the banner is kept off stdout here — the same
+// silence `test/parity.test.mjs:16-22` applies, and per-file because `node --test`
+// gives each file its own child process.
+console.log = () => {};
+
 test("api: routes answer, unknown paths 404, a POST needs the shared token", async () => {
   const { startServer } = await import("../src/interfaces/api-server.js");
   const server = startServer(0);
