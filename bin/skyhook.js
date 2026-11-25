@@ -709,7 +709,13 @@ async function cmdImportStaged(a) {
 async function cmdServe(a) {
   const port = parseInt(val(a, "--port", "4173"), 10) || 4173;
   const { startServer } = await import("../src/interfaces/api-server.js");
-  startServer(port); // blocks until Ctrl+C
+  try {
+    startServer(port); // blocks until Ctrl+C
+  } catch (err) {
+    // A refusal to bind (an open host with no token) is a message, not a stack.
+    console.error(`✘ ${err.message}`);
+    process.exitCode = 1; // nothing is listening, so the loop empties and exits 1
+  }
 }
 
 // ── main ────────────────────────────────────────────────────────────────────

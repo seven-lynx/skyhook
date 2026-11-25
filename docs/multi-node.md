@@ -130,5 +130,7 @@ Run the tag job via `POST /api/pipeline/tag` (or the GUI's Pipeline tab).
 
 ## Security note
 
-With no `remote.token`, the HTTP API is open (local development default). Set a
-token before exposing `skyhook serve` on a LAN or the internet.
+With no `remote.token`, the HTTP API has no authentication (local development
+default). The listener also binds `127.0.0.1` unless `serve --host` names another
+address, and `serve` refuses a non-loopback bind with no token — set one before
+exposing it on a LAN or the internet.

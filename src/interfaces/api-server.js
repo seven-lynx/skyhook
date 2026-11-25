@@ -113,7 +113,26 @@ function seederView(s, st) {
   };
 }
 
-export function startServer(port = 4173) {
+/** The addresses that can only be reached from this machine. */
+export function isLoopbackHost(host) {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+/**
+ * Listen on `host` — loopback unless the operator asks for more.
+ *
+ * A non-loopback bind is opt-in and needs the shared token: GETs are
+ * unauthenticated (`docs/api.md`, Auth), so without one the read API and every
+ * POST route answer anyone who can reach the port. This is a refusal rather
+ * than a warning, because a warning leaves the hole open.
+ */
+export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
+  if (!isLoopbackHost(host) && !remoteToken()) {
+    throw new Error(
+      `refusing to listen on ${host} with no API token — set SKYHOOK_REMOTE_TOKEN `
+      + "(or remote.token in skyhook.config.json), or bind 127.0.0.1",
+    );
+  }
   const db = openState();
   const server = createServer(async (req, res) => {
     if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return; }
@@ -495,10 +514,12 @@ export function startServer(port = 4173) {
     }
   });
 
-  server.listen(port, () => {
-    console.log(`\n🛰  Skyhook seeder API listening on http://localhost:${port}`);
-    console.log(`   GUI:  http://localhost:${port}/`);
-    console.log(`   API:  http://localhost:${port}/api/health\n`);
+  server.listen(port, host, () => {
+    const shown = host.includes(":") ? `[${host}]` : host;
+    const reach = isLoopbackHost(host) ? "loopback only" : "reachable on the network";
+    console.log(`\n🛰  Skyhook seeder API listening on http://${shown}:${port} (${reach})`);
+    console.log(`   GUI:  http://${shown}:${port}/`);
+    console.log(`   API:  http://${shown}:${port}/api/health\n`);
   });
 
   // This function opens the state DB, so it is also where the handle is

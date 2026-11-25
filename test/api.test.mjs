@@ -58,6 +58,8 @@ test("api: routes answer, unknown paths 404, a POST needs the shared token", asy
 
   try {
     await new Promise((r) => server.once("listening", r));
+    // A2: the default bind is loopback, not every interface.
+    assert.equal(server.address().address, "127.0.0.1");
     const base = `http://127.0.0.1:${server.address().port}`;
 
     const health = await fetch(`${base}/api/health`);
@@ -106,6 +108,57 @@ test("api: routes answer, unknown paths 404, a POST needs the shared token", asy
     assert.equal(existsSync(join(stateDir, "seeder-state.db")), true);
   } finally {
     await new Promise((r) => server.close(r));
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+test("api: an open bind without a token is refused, and a loopback one is not", async () => {
+  const { startServer, isLoopbackHost } = await import("../src/interfaces/api-server.js");
+  assert.equal(isLoopbackHost("127.0.0.1"), true);
+  assert.equal(isLoopbackHost("localhost"), true);
+  assert.equal(isLoopbackHost("::1"), true);
+  assert.equal(isLoopbackHost("0.0.0.0"), false);
+  assert.equal(isLoopbackHost("192.168.1.10"), false);
+
+  // The same fixture with one field changed: no shared secret. `remoteToken()`
+  // reads the config at call time (`src/core/remote.js:21-23`), so a reload is
+  // enough to reach the refusal — no second server and no open socket. Both
+  // configs are rewritten here because the first test deletes the temp dir.
+  mkdirSync(stateDir, { recursive: true });
+  const fixture = {
+    dataDir: stateDir,
+    seedersDir,
+    manifestFile: join(stateDir, "seeders-manifest.json"),
+    descriptionsFile: join(stateDir, "seeders-descriptions.json"),
+    stateDb: join(stateDir, "seeder-state.db"),
+    logDir: join(stateDir, "logs"),
+    stagedDir: join(stateDir, "staged"),
+    settingsFile: join(stateDir, "settings.json"),
+  };
+  const tokenFile = join(tmp, "skyhook.config.token.json");
+  const tokenless = join(tmp, "skyhook.config.no-token.json");
+  writeFileSync(tokenFile, JSON.stringify({ ...fixture, remote: { token: "test-token", peers: [] } }, null, 2) + "\n");
+  writeFileSync(tokenless, JSON.stringify({ ...fixture, remote: { token: null, peers: [] } }, null, 2) + "\n");
+  loadConfig({ file: tokenless, reload: true });
+
+  try {
+    assert.throws(
+      () => startServer(0, { host: "0.0.0.0" }),
+      /refusing to listen on 0\.0\.0\.0 with no API token/,
+    );
+
+    // With a token the open bind is allowed; start and close it on port 0 so
+    // the assertion is about the decision, not about the network.
+    loadConfig({ file: tokenFile, reload: true });
+    const open = startServer(0, { host: "0.0.0.0" });
+    try {
+      await new Promise((r) => open.once("listening", r));
+      assert.notEqual(open.address().address, "127.0.0.1");
+    } finally {
+      await new Promise((r) => open.close(r));
+    }
+  } finally {
+    loadConfig({ file: tokenFile, reload: true });
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

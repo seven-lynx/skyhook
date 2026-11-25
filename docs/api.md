@@ -3,15 +3,20 @@
 Status: **contract** — the web GUI and remote peers code against it. Additive changes only, and a
 new route is a row here in the same commit.
 
-`skyhook serve` (default `http://localhost:4173`) exposes a JSON API over Node's
+`skyhook serve` (default `http://127.0.0.1:4173`) exposes a JSON API over Node's
 built-in HTTP server — zero framework, CORS open. It's the same API the web GUI and
-remote peers use, so anything the GUI can do, `curl` can too.
+remote peers use, so anything the GUI can do, `curl` can too. The listener is
+loopback-only unless `--host` says otherwise.
 
 ## Auth
 
 When `remote.token` (or `SKYHOOK_REMOTE_TOKEN`) is set, every **POST** is rejected
-unless it carries `Authorization: Bearer <token>`. GETs stay open. With no token the
-API is fully open — fine for localhost, not for a LAN or the internet.
+unless it carries `Authorization: Bearer <token>`. GETs stay open, which is why the
+listener binds `127.0.0.1` unless `--host` names another address, and why a
+non-loopback bind with no token is refused at startup instead of warned about.
+
+With no token and the default bind, the API is reachable from this machine only —
+fine for a single-box install, not for a LAN or the internet.
 
 ## Endpoints
 
