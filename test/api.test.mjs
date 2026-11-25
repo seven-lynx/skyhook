@@ -113,6 +113,29 @@ test("api: routes answer, unknown paths 404, a POST needs the shared token", asy
     assert.equal(allowed.status, 200);
     assert.deepEqual(await allowed.json(), { ok: true, stopped: [] });
 
+    // D5: the desktop shell generates a token per launch and hands it to the
+    // sidecar as `SKYHOOK_REMOTE_TOKEN` (`src-tauri/src/main.rs:157`), so the gate
+    // has to accept it *alongside* the configured secret that is still set above —
+    // an install that also sets `remote.token` for its peers would otherwise
+    // answer its own window 403. This fails if the gate goes back to `remoteToken()`.
+    process.env.SKYHOOK_REMOTE_TOKEN = "launch-token";
+    const launched = await fetch(`${base}/api/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer launch-token" },
+      body: JSON.stringify({ source: "nope" }),
+    });
+    assert.equal(launched.status, 200);
+    assert.deepEqual(await launched.json(), { ok: true, stopped: [] });
+
+    // A second credential is not a wildcard: a wrong one is refused while both are set.
+    const wrong = await fetch(`${base}/api/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer not-a-token" },
+      body: JSON.stringify({ source: "nope" }),
+    });
+    assert.equal(wrong.status, 403);
+    delete process.env.SKYHOOK_REMOTE_TOKEN;
+
     // A4: the FlareSolverr executable path is config-only. A body that carries
     // it is refused before `saveSettings` runs, so the settings file does not
     // exist afterwards. This assertion fails if the route accepts `exePath`.
@@ -174,6 +197,7 @@ test("api: routes answer, unknown paths 404, a POST needs the shared token", asy
     // The state DB opened on the temp path, not on the repo's `.skyhook/`.
     assert.equal(existsSync(join(stateDir, "seeder-state.db")), true);
   } finally {
+    delete process.env.SKYHOOK_REMOTE_TOKEN;
     await new Promise((r) => server.close(r));
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }

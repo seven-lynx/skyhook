@@ -31,6 +31,59 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+/// The OS CSPRNG, declared by hand.
+///
+/// `windows` is in the lock file only as a tauri dependency, and reaching into it
+/// for one function would pin an API surface that is not ours. `bcrypt.lib` ships
+/// with the Windows SDK the MSVC build already needs, and a null algorithm handle
+/// plus this flag is the documented "use the system-preferred generator" form.
+#[cfg(windows)]
+#[link(name = "bcrypt")]
+extern "system" {
+    fn BCryptGenRandom(
+        algorithm: *mut std::ffi::c_void,
+        buffer: *mut u8,
+        length: u32,
+        flags: u32,
+    ) -> i32;
+}
+
+/// The token this launch shares with the sidecar and the window (DC7).
+///
+/// 32 bytes from the OS, hex-encoded once: the sidecar gets it as
+/// `SKYHOOK_REMOTE_TOKEN` and the window as `window.__SKYHOOK_DESKTOP__`. It is
+/// never written to disk — a per-launch secret has nothing to store.
+fn launch_token() -> String {
+    let mut bytes = [0u8; 32];
+
+    #[cfg(windows)]
+    {
+        const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x0000_0002;
+        // SAFETY: `bytes` is 32 writable bytes, the length matches, and a null
+        // algorithm handle is what the flag above is defined to accept.
+        let status = unsafe {
+            BCryptGenRandom(
+                std::ptr::null_mut(),
+                bytes.as_mut_ptr(),
+                bytes.len() as u32,
+                BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+            )
+        };
+        // No token is not a degraded mode — the window would be locked out of its
+        // own server — so this fails loudly rather than quietly.
+        assert_eq!(status, 0, "BCryptGenRandom failed with status {status:#x}");
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut source| source.read_exact(&mut bytes))
+            .expect("no OS entropy source at /dev/urandom");
+    }
+
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// The handshake `desktop/server.js` prints on its own line.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +99,7 @@ struct Session {
     child: Mutex<Option<CommandChild>>,
     base_url: Mutex<Option<String>>,
     root: Mutex<Option<PathBuf>>,
+    token: Mutex<Option<String>>,
 }
 
 impl Session {
@@ -55,6 +109,10 @@ impl Session {
 
     fn root(&self) -> Option<PathBuf> {
         self.root.lock().ok().and_then(|root| root.clone())
+    }
+
+    fn token(&self) -> Option<String> {
+        self.token.lock().ok().and_then(|token| token.clone())
     }
 }
 
@@ -76,8 +134,10 @@ fn sidecar_script(app: &AppHandle) -> PathBuf {
 /// beside the installed exe as an `externalBin`. `--root` is passed because the
 /// sidecar resolves every config path against its working directory
 /// (`src/config.js:134,149-151`) — without it an installed build would write
-/// `.skyhook/` next to its own exe instead of under `%APPDATA%`.
-async fn spawn_sidecar(app: &AppHandle) -> Result<(CommandChild, SidecarInfo), String> {
+/// `.skyhook/` next to its own exe instead of under `%APPDATA%`. `SKYHOOK_REMOTE_TOKEN`
+/// is set here, so the one credential the window holds is also the one this server
+/// accepts (`src/core/remote.js`, `acceptedTokens`).
+async fn spawn_sidecar(app: &AppHandle, token: &str) -> Result<(CommandChild, SidecarInfo), String> {
     let root = app
         .path()
         .app_data_dir()
@@ -94,6 +154,7 @@ async fn spawn_sidecar(app: &AppHandle) -> Result<(CommandChild, SidecarInfo), S
             root.to_string_lossy().into_owned(),
             "--watch-stdin".to_string(),
         ])
+        .env("SKYHOOK_REMOTE_TOKEN", token)
         .spawn()
         .map_err(|err| format!("cannot start {}: {err}", script.display()))?;
 
@@ -207,12 +268,22 @@ fn latest_log(root: &Path) -> Option<PathBuf> {
 }
 
 /// The dashboard: the sidecar's own origin, so every call is same-origin.
-fn open_dashboard(app: &AppHandle, base_url: &str) -> Result<(), String> {
+///
+/// The injected flag is the renderer half of the handshake (`src/gui/app.js`,
+/// `desktopToken`): `api()` adds `Authorization` only when it exists, so a browser
+/// session is untouched. It runs before any page script and again on reload, and
+/// `serde_json` escapes the token rather than pasting it raw.
+fn open_dashboard(app: &AppHandle, base_url: &str, token: &str) -> Result<(), String> {
     let url = Url::parse(base_url).map_err(|err| format!("bad sidecar URL {base_url}: {err}"))?;
+    let script = format!(
+        "window.__SKYHOOK_DESKTOP__ = {};",
+        json!({ "token": token })
+    );
     WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
         .title("Skyhook")
         .inner_size(1440.0, 900.0)
         .min_inner_size(720.0, 520.0)
+        .initialization_script(script.as_str())
         .build()
         .map_err(|err| err.to_string())?;
     Ok(())
@@ -287,7 +358,7 @@ fn on_menu(app: &AppHandle, id: &str) {
             None => eprintln!("open latest log: no log file yet"),
         },
         "run-due" => match session.base_url() {
-            Some(base) => match run_due(&base, None) {
+            Some(base) => match run_due(&base, session.token().as_deref()) {
                 Ok(0) => eprintln!("run due: nothing is due"),
                 Ok(count) => eprintln!("run due: started {count} seeder(s)"),
                 Err(err) => eprintln!("run due: {err}"),
@@ -349,8 +420,15 @@ fn main() {
         .setup(|app| {
             let handle = app.handle().clone();
             install_tray(&handle)?;
+            let token = launch_token();
+            {
+                let session = handle.state::<Session>();
+                if let Ok(mut slot) = session.token.lock() {
+                    *slot = Some(token.clone());
+                }
+            }
             tauri::async_runtime::spawn(async move {
-                match spawn_sidecar(&handle).await {
+                match spawn_sidecar(&handle, &token).await {
                     Ok((child, info)) => {
                         eprintln!("sidecar: {} (port {})", info.base_url, info.port);
                         {
@@ -365,7 +443,7 @@ fn main() {
                                 *root = Some(PathBuf::from(&info.root));
                             }
                         }
-                        if let Err(err) = open_dashboard(&handle, &info.base_url) {
+                        if let Err(err) = open_dashboard(&handle, &info.base_url, &token) {
                             eprintln!("window: {err}");
                         }
                     }

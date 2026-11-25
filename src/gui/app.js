@@ -53,13 +53,23 @@ const apiBase = () => {
 };
 
 const REQUEST_TIMEOUT_MS = 15000;
+
+/* The desktop shell injects a per-launch bearer token before any page script runs
+ * (`src-tauri/src/main.rs`, DC7). A browser has no such flag, so its requests are
+ * byte for byte what they were before the shell existed. */
+const desktopToken = () => window.__SKYHOOK_DESKTOP__?.token || null;
+
 async function api(method, path, body) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
+    const headers = {};
+    if (body) headers["Content-Type"] = "application/json";
+    const token = desktopToken();
+    if (token && method === "POST") headers.Authorization = `Bearer ${token}`;
     const res = await fetch(apiBase() + path, {
       method, signal: ctrl.signal,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers: Object.keys(headers).length ? headers : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();

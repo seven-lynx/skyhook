@@ -1,5 +1,5 @@
 /**
- * desktop-guard.test.mjs — the three ways a desktop build could stop being the
+ * desktop-guard.test.mjs — the four ways a desktop build could stop being the
  * build CI tested, checked instead of trusted.
  *
  * A desktop release is two processes written in two languages, and the failures
@@ -10,6 +10,11 @@
  * that ships. Each family is asserted against the real tree, and each rule is
  * also fed the input it exists to reject, because a guard that only ever sees
  * healthy files is indistinguishable from no guard at all.
+ *
+ * The fourth family has no runtime to observe: the token handshake spans Rust that
+ * is never compiled on this machine and a renderer that never runs in CI, so it is
+ * read as wiring in the two files that carry it — and both files are also fed a
+ * copy with one half removed. It is a wiring check, not a parser.
  *
  * The import scan reads module *specifiers*, not raw text: `desktop/server.js`
  * names `better-sqlite3` in its docblock precisely to say it never imports it.
@@ -25,6 +30,8 @@ const desktopDir = join(root, "desktop");
 const capabilitiesDir = join(root, "src-tauri", "capabilities");
 const sidecarManifest = join(desktopDir, "sidecar.json");
 const ciWorkflow = join(root, ".github", "workflows", "ci.yml");
+const shellMain = join(root, "src-tauri", "src", "main.rs");
+const guiApp = join(root, "src", "gui", "app.js");
 
 /** Every file under `dir` whose name ends with `ext`, as absolute paths. */
 function filesWith(dir, ext) {
@@ -120,6 +127,26 @@ function ciNodeMajors(yaml) {
   return majors;
 }
 
+/**
+ * The halves of the desktop token handshake, read from the two files that carry
+ * them: the shell hands its launch token to the sidecar (`.env`), injects the same
+ * value into the window (`initialization_script`), and the renderer sends it back
+ * as a bearer header.
+ *
+ * The shapes are matched rather than the names: the injected script's exact
+ * literal, and `headers.Authorization` in the one function that builds them, so a
+ * docblock that merely mentions a flag does not read as wiring.
+ */
+function tokenWiring(mainRs, appJs) {
+  return {
+    toSidecar: /\.env\(\s*"SKYHOOK_REMOTE_TOKEN"/.test(mainRs),
+    toWindow:
+      mainRs.includes(".initialization_script(")
+      && mainRs.includes("\"window.__SKYHOOK_DESKTOP__ = {};\""),
+    fromWindow: /headers\.Authorization/.test(appJs) && appJs.includes("__SKYHOOK_DESKTOP__"),
+  };
+}
+
 test("guard: no desktop module reaches a core, engine or adapter tier", () => {
   const files = filesWith(desktopDir, ".js");
   assert.ok(
@@ -212,5 +239,38 @@ test("guard: the pin rule reads a version and spots the drift", () => {
 
   // The "Done means" case: a sidecar pinned to 22 while CI stays on 20.
   assert.equal([20].includes(majorOf("22.0.0")), false);
+});
+
+test("guard: the shell's token reaches the sidecar and the window", () => {
+  const wiring = tokenWiring(readFileSync(shellMain, "utf8"), readFileSync(guiApp, "utf8"));
+  assert.deepEqual(
+    wiring,
+    { toSidecar: true, toWindow: true, fromWindow: true },
+    "the shell must set SKYHOOK_REMOTE_TOKEN on the child, inject it into the window, and the GUI send it back",
+  );
+});
+
+test("guard: the token rule refuses a handshake with a half removed", () => {
+  const mainRs = readFileSync(shellMain, "utf8");
+  const appJs = readFileSync(guiApp, "utf8");
+
+  // Drop each half from a copy and the wiring must go false — a rule that passes
+  // on the real files but cannot fail is not a rule.
+
+  // 1. The child never learns the token, so every POST its schedules make is 403.
+  const noEnv = mainRs.replace('.env("SKYHOOK_REMOTE_TOKEN", token)', "");
+  assert.notEqual(noEnv, mainRs, "main.rs still sets the env var");
+  assert.equal(tokenWiring(noEnv, appJs).toSidecar, false);
+
+  // 2. The window is never told, so its own POSTs carry no credential.
+  const noScript = mainRs.replace(".initialization_script(script.as_str())", "");
+  assert.notEqual(noScript, mainRs, "main.rs still injects the flag");
+  assert.equal(tokenWiring(noScript, appJs).toWindow, false);
+
+  // 3. The flag reaches the page but `api()` ignores it.
+  const header = 'if (token && method === "POST") headers.Authorization = `Bearer ${token}`;';
+  const noHeader = appJs.replace(header, "");
+  assert.notEqual(noHeader, appJs, "app.js still sets the bearer header");
+  assert.equal(tokenWiring(mainRs, noHeader).fromWindow, false);
 });
 
