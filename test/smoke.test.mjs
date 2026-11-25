@@ -122,11 +122,35 @@ test("pruneStaged soft-deletes matching rows and rewrites the source file", () =
   assert.equal(r.deleted, 1);
   assert.equal(r.kept, 1);
   assert.ok(r.archived);
+  // #5: the archive is written before the rewrite, and it holds the removed row.
+  assert.equal(existsSync(r.archived), true);
+  const archivedRows = readFileSync(r.archived, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(archivedRows.map((x) => x.url), ["https://a.com/old"]);
   const remaining = readStaged({ source: "s1" });
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0].url, "https://a.com/new");
+  // ...and the atomic write left no temp file behind.
+  assert.equal(existsSync(join(cfg.stagedDir, "s1.jsonl.tmp")), false);
   rmSync(cfg.stagedDir, { recursive: true, force: true });
   rmSync(cfg.dataDir, { recursive: true, force: true });
+});
+
+test("writeStagedSource leaves the original file intact when the write fails", () => {
+  const cfg = getConfig();
+  cfg.stagedDir = join(root, ".tmp-atomic-staged");
+  rmSync(cfg.stagedDir, { recursive: true, force: true });
+  writeStagedSource("s1", [{ url: "https://a.com/keep", title: "keep", source: "s1" }]);
+  const file = join(cfg.stagedDir, "s1.jsonl");
+  const before = readFileSync(file, "utf8");
+
+  // A directory where the temp file goes makes the write fail the way a full
+  // disk would. The target is only ever replaced by a successful rename, so the
+  // staged file must still hold exactly what it held before.
+  mkdirSync(`${file}.tmp`, { recursive: true });
+  assert.throws(() => writeStagedSource("s1", [{ url: "https://a.com/new", source: "s1" }]));
+  assert.equal(readFileSync(file, "utf8"), before);
+  assert.equal(readStaged({ source: "s1" }).length, 1);
+  rmSync(cfg.stagedDir, { recursive: true, force: true });
 });
 
 test("mergeRemoteRows merges peer rows with URL dedup", () => {

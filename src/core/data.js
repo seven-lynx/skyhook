@@ -51,17 +51,21 @@ export function pruneStaged(filter = {}, { soft = true } = {}) {
   const matchedUrls = new Set(matched.map((r) => r.url));
   const keep = rows.filter((r) => !matchedUrls.has(r.url));
 
+  // Archive before rewriting. `writeStagedSource` is atomic, so this order means
+  // the trash copy exists before any row leaves the staged set — a crash in
+  // between loses nothing, where the old order (rewrite, then archive) could
+  // lose both the curated rows and the deleted ones.
+  let archived = null;
+  if (soft) {
+    archived = trashFile();
+    writeFileSync(archived, matched.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+  }
+
   // Rewrite every source's staged file, including sources that lost all rows,
   // so their file is deleted rather than left behind with stale content.
   const keepBySource = groupBySource(keep);
   for (const src of groupBySource(rows).keys()) {
     writeStagedSource(src, keepBySource.get(src) || []);
-  }
-
-  let archived = null;
-  if (soft) {
-    archived = trashFile();
-    writeFileSync(archived, matched.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
   }
   return { deleted: matched.length, kept: keep.length, archived };
 }

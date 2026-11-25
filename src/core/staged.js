@@ -7,7 +7,7 @@
  * synchronous and path-driven so it works identically on the Pi and the PC.
  */
 import {
-  readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync, unlinkSync,
+  readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync, unlinkSync, renameSync,
 } from "fs";
 import { join } from "path";
 import { getConfig } from "../config.js";
@@ -67,16 +67,26 @@ export function readStaged({ source = null } = {}) {
   return rows;
 }
 
-/** Rewrite one source's staged file (creates or deletes when empty). */
+/**
+ * Rewrite one source's staged file (creates or deletes when empty).
+ *
+ * Write to `<file>.tmp` and rename over the target: `rename` is atomic on the
+ * same volume, so a crash, a full disk or a killed process leaves either the
+ * old file or the new one — never a half-written one. That matters because
+ * `readStaged` skips malformed lines and a truncated file would lose rows with
+ * no error anywhere.
+ */
 export function writeStagedSource(source, rows) {
   const dir = stagedDir();
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `${safe(source)}.jsonl`);
-  if (rows.length) {
-    writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
-  } else if (existsSync(file)) {
-    unlinkSync(file);
+  if (!rows.length) {
+    if (existsSync(file)) unlinkSync(file);
+    return 0;
   }
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, rows.map((r) => JSON.stringify(r)).join("\n") + "\n", "utf8");
+  renameSync(tmp, file);
   return rows.length;
 }
 

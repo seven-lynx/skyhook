@@ -99,7 +99,10 @@ skyhook cache clear nyt --discovery                  # force re-fetch on next ru
 ```
 
 Deletions are **soft by default** (archived to `.skyhook/trash/`), so they can be
-restored. API: `GET /api/cache`, `POST /api/cache/prune`, `POST /api/cache/clear`.
+restored. The archive is written *before* the staged file is rewritten, and the
+rewrite is atomic (temp file + rename), so an interrupted prune never leaves a
+truncated staged file or loses both copies.
+API: `GET /api/cache`, `POST /api/cache/prune`, `POST /api/cache/clear`.
 
 ## Analytics
 
