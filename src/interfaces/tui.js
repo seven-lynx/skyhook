@@ -9,7 +9,7 @@ import { select, checkbox, confirm, input, Separator } from "@inquirer/prompts";
 import { spawn, spawnSync } from "child_process";
 import {
   buildIndex, openState, getState, listRuns, runPool, editManifest,
-  emitTimer, writeTimer, resolveSeeder, CADENCES, ROOT, LOGS_DIR, SCRIPTS_DIR,
+  emitTimer, writeTimer, resolveSeeder, CADENCES, rootDir, scriptsDir,
 } from "../engine/seeder-engine.js";
 import { settingsView, saveSettings } from "../core/settings.js";
 import { statsFromStaged } from "../core/analytics.js";
@@ -134,7 +134,7 @@ async function screenRun() {
 function tmuxAvailable() { return spawnSync("tmux", ["-V"]).status === 0; }
 
 function tmuxLaunch(seeder) {
-  const cmd = `cd ${ROOT} && SKYHOOK_STAGE_ONLY=1${seeder.skipHeadless ? " SKYHOOK_SKIP_HEADLESS=1" : ""} node ${SCRIPTS_DIR}/${seeder.script} --stage-only${seeder.maxAgeDays != null ? ` --max-age-days ${seeder.maxAgeDays}` : ""}`;
+  const cmd = `cd ${rootDir()} && SKYHOOK_STAGE_ONLY=1${seeder.skipHeadless ? " SKYHOOK_SKIP_HEADLESS=1" : ""} node ${scriptsDir()}/${seeder.script} --stage-only${seeder.maxAgeDays != null ? ` --max-age-days ${seeder.maxAgeDays}` : ""}`;
   const hasSession = spawnSync("tmux", ["has-session", "-t", "skyhook"]).status === 0;
   const args = hasSession
     ? ["new-window", "-t", "skyhook", "-n", seeder.source, cmd]

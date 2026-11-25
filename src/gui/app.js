@@ -873,7 +873,7 @@ async function renderSettings() {
       '<label class="toggle">' +
         '<input id="live" type="checkbox" />' +
         '<span class="toggle-track"></span>' +
-        '<span class="muted">Refresh the dashboard every 10 seconds</span>' +
+        '<span class="muted">Refresh the dashboard: 10 s while a run is active, 30 s when idle</span>' +
       '</label>';
     // Wire remote-toggle button (once per render — delegation here is fine since
     // the button is inside the body and we rebind each time).
@@ -904,26 +904,71 @@ async function renderSettings() {
   }
 }
 
+// ── poll budget ─────────────────────────────────────────────────────────────
+// The dashboard used to re-read every staged row on one fixed 10 s tick, hidden
+// or visible, idle or running — and that read is linear in the staged set. The
+// tick is now a self-scheduling timeout that picks its interval from what is
+// happening (10 s while a run is active, 30 s idle), stops while the tab is
+// hidden, and refreshes exactly once when it comes back.
+const POLL_RUNNING_MS = 10000;
+const POLL_IDLE_MS = 30000;
+
+function pollIntervalMs() {
+  return (state.running && state.running.length) ? POLL_RUNNING_MS : POLL_IDLE_MS;
+}
+
+/** Queue exactly one refresh; the next tick is scheduled after it settles. */
+function schedulePoll(delay = pollIntervalMs()) {
+  if (!state.live) return;
+  clearTimeout(state.pollTimer);
+  state.pollTimer = setTimeout(async () => {
+    state.pollTimer = null;
+    if (!state.live) return;
+    if (document.hidden) return schedulePoll(); // a hidden tab resumes on show
+    try { await refreshAll(); } catch { /* a failed poll must not stop the next */ }
+    schedulePoll();
+  }, delay);
+}
+
+function startLive() {
+  state.live = true;
+  localStorage.setItem("skyhook.live", "1");
+  schedulePoll(0); // the toggle means "follow it now", so refresh immediately
+}
+
+function stopLive() {
+  state.live = null;
+  clearTimeout(state.pollTimer);
+  state.pollTimer = null;
+  localStorage.setItem("skyhook.live", "0");
+}
+
 function wireLiveToggle() {
   const liveInput = $("#live");
   if (!liveInput) return;
   liveInput.checked = !!state.live;
   // Restore from localStorage if not already running.
   if (!state.live && localStorage.getItem("skyhook.live") === "1") {
-    state.live = setInterval(refreshAll, 10000);
+    state.live = true;
     liveInput.checked = true;
+    schedulePoll();
   }
   if (state._liveWired) return;
   state._liveWired = true;
   liveInput.addEventListener("change", () => {
-    if (liveInput.checked) {
-      state.live = setInterval(refreshAll, 10000);
-      localStorage.setItem("skyhook.live", "1");
-    } else if (state.live) {
-      clearInterval(state.live);
-      state.live = null;
-      localStorage.setItem("skyhook.live", "0");
+    if (liveInput.checked) startLive();
+    else stopLive();
+  });
+  // A hidden tab does no polling; showing it again refreshes once and resumes.
+  document.addEventListener("visibilitychange", () => {
+    if (!state.live) return;
+    if (document.hidden) {
+      clearTimeout(state.pollTimer);
+      state.pollTimer = null;
+      return;
     }
+    refreshAll().catch(() => {});
+    schedulePoll();
   });
 }
 
@@ -1017,9 +1062,25 @@ async function renderLogBody() {
   body.scrollTop = logPageState.followLog ? body.scrollHeight : prevScroll;
 }
 
+// The log page refreshes the visible tab only: `renderLogBody` fetches one
+// source, so the cost of an open log is `loadRunning` + that one tail every
+// tick. 2 s is fast enough for a human reading it, and a hidden tab does
+// nothing at all — showing it again refreshes once.
+const LOG_POLL_MS = 2000;
+
 function startLogPagePolling() {
+  if (!logPageState._visWired) {
+    logPageState._visWired = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden || !logPageState.pollTimer) return;
+      renderLogPageHead();
+      renderLogTabs();
+      renderLogBody(); // one immediate refresh on return
+    });
+  }
   if (logPageState.pollTimer) return;
   logPageState.pollTimer = setInterval(async () => {
+    if (document.hidden) return;
     await loadRunning();
     const runningSources = state.running.map((r) => r.source);
     const newSources = runningSources.filter((s) => logPageState.sources.indexOf(s) === -1);
@@ -1027,7 +1088,7 @@ function startLogPagePolling() {
     renderLogPageHead();
     renderLogTabs();
     await renderLogBody();
-  }, 1000);
+  }, LOG_POLL_MS);
 }
 
 async function runSources(sources, opts) {
@@ -1505,12 +1566,11 @@ async function writeTimer() {
 async function init() {
   $("#apiLabel").textContent = "api: " + apiBase();
   bind();
-  // Restore auto-refresh from localStorage if it was on.
-  if (localStorage.getItem("skyhook.live") === "1" && !state.live) {
-    state.live = setInterval(refreshAll, 10000);
-  }
   await loadCategories();
   await refreshAll();
+  // "Follow the fleet" is restored from localStorage by wireLiveToggle; the
+  // refresh above is what tells the scheduler whether a run is active.
+  if (state.live) schedulePoll();
   handleRouteChange();
 }
 

@@ -58,7 +58,7 @@ node bin/skyhook.js init --provider sqlite
 
 > **Not on npm.** Skyhook is distributed as a GitHub dependency — the `skyhook`
 > name on npm belongs to an unrelated project. Install via clone, or add
-> `github:seven-lynx/skyhook#v0.3.7` as a dependency.
+> `github:seven-lynx/skyhook#v0.4.2` as a dependency.
 
 ## Requirements
 
@@ -119,12 +119,12 @@ Env fallbacks: `FLARESOLVERR_ENABLED=1`, `FLARESOLVERR_EXE`, `FLARESOLVERR_URL`,
 | `cache` | Inspect / prune staged results and the discovery cache |
 | `sync pull <peer>` | Merge a peer's staged results (Pi ⇄ PC, URL dedup) |
 | `push` | Push staged results into storage |
-| `tag` | Offline LLM tag worker (resumable; `--mode retag-add\|retag-replace`) |
+| `tag` | Offline LLM tag worker (resumable; `--mode retag-add\|retag-replace`, `--retry-failed`, `--requeue-untagged`) |
 | `pull` / `upload` | Pull URLs into the offline DB / upload tags & attributes back |
 | `settings` | View or toggle node settings (`allow-remote`) |
 | `init` | Scaffold `skyhook.config.json`, `config/`, `seeders/`, `.skyhook/` |
 | `tui` | Interactive terminal menu |
-| `serve` | HTTP JSON API + web GUI (`--port`, default 4173) |
+| `serve` | HTTP JSON API + web GUI (`--port` 4173, `--host` 127.0.0.1) |
 
 Run `node bin/skyhook.js help <command>` for a command's flags.
 
@@ -141,6 +141,7 @@ See [storage](docs/storage.md) for the `schema.json` column mapping.
 
 ## Documentation
 
+- [Documentation index](docs/README.md) — every doc, with the status that says who it binds
 - [Quickstart](docs/quickstart.md) — install, connect a database, schedule
 - [Authoring seeders](docs/authoring-seeders.md) — write your own `seed-*.js`
 - [Storage](docs/storage.md) — storage adapters + `schema.json` mapping
@@ -178,6 +179,15 @@ test/                   # smoke tests (node --test)
 ```
 
 ## Status
+
+**v0.4.2** — the upload path is lossless and idempotent: every emitted value is
+mapped through `tagging.enums` (booleans included), all three upload loops page by
+`rowid` keyset instead of `LIMIT/OFFSET` (an offset over a predicate the loop itself
+clears used to upload about half the backlog), `url_tags.source` is one configured
+value, the staged-row existence check is batched, and `tag --retry-failed` /
+`tag --requeue-untagged` plus two GUI buttons make stranded rows reachable without
+deleting resume markers. One canonical pass now fills tags, attributes and quality
+from a single model response, and the task prompts quote the same vocabulary.
 
 **v0.3.7** — the pipeline reports distinct tagged URLs (not the raw tag-row
 count); the dashboard shows the LLM worker once with a task label

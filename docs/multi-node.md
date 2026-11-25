@@ -1,5 +1,8 @@
 # Multi-node (PC ⇄ Pi)
 
+Status: **guide** — two machines, one controller. The shared token and `allowRemote` are the
+security story; read the auth note in `api.md` before exposing a node.
+
 Skyhook runs identically on a PC and a Raspberry Pi. Two nodes can be wired into
 a **controller + worker** pair: the PC owns the schedule and the canonical
 database; the Pi (when toggled into *worker* mode) runs assigned seeders and
@@ -96,7 +99,10 @@ skyhook cache clear nyt --discovery                  # force re-fetch on next ru
 ```
 
 Deletions are **soft by default** (archived to `.skyhook/trash/`), so they can be
-restored. API: `GET /api/cache`, `POST /api/cache/prune`, `POST /api/cache/clear`.
+restored. The archive is written *before* the staged file is rewritten, and the
+rewrite is atomic (temp file + rename), so an interrupted prune never leaves a
+truncated staged file or loses both copies.
+API: `GET /api/cache`, `POST /api/cache/prune`, `POST /api/cache/clear`.
 
 ## Analytics
 
@@ -127,5 +133,7 @@ Run the tag job via `POST /api/pipeline/tag` (or the GUI's Pipeline tab).
 
 ## Security note
 
-With no `remote.token`, the HTTP API is open (local development default). Set a
-token before exposing `skyhook serve` on a LAN or the internet.
+With no `remote.token`, the HTTP API has no authentication (local development
+default). The listener also binds `127.0.0.1` unless `serve --host` names another
+address, and `serve` refuses a non-loopback bind with no token — set one before
+exposing it on a LAN or the internet.

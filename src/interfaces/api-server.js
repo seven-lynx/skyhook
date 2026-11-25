@@ -6,30 +6,9 @@
  * Zero framework — Node's built-in http server. CORS is open so the GUI (any
  * origin) can call it.
  *
- * Endpoints:
- *   GET  /api/health            { ok, seeders, scheduled, due, errors }
- *   GET  /api/status            summary + due list
- *   GET  /api/seeders           all seeders (?filter=, ?tier=, ?scheduled=1)
- *   GET  /api/seeders/:source   one seeder
- *   GET  /api/due               seeders due now
- *   GET  /api/history/:source   recent runs
- *   POST /api/run               { sources: [], parallel? }
- *   POST /api/schedule          { source, cadence?, isNews?, maxAgeDays? }
- *   POST /api/enable            { source, cadence? }
- *   POST /api/disable           { source }
- *   GET  /api/timer             current timer plan
- *   POST /api/timer             regenerate .skyhook/skyhook-seed.timer
- *   GET  /api/running           { running: [...], batch: { total, completed, remaining, etaMs } }
- *   GET  /api/logs/:source      tail a seeder's live log (?tail=N)
- *   POST /api/stop              { source? } stop one or all active runs
- *   GET  /api/pipeline          offline tagging pipeline status
- *   POST /api/pipeline/tag      run sync → import → LLM tag
- *   POST /api/pipeline/push     upload tagged URLs + tags to Supabase
- *   POST /api/pipeline/export   incremental offline-DB refresh
- *   POST /api/pipeline/export-full  full rebuild (wipes local tag progress)
- *   GET  /api/tagging/missing   counts of URLs missing category/subcategory/
- *                               tags/content-type/quality/attributes
- *   POST /api/tagging/run       { task } launch a targeted LLM gap-filling pass
+ * The route table is `docs/api.md` (the contract) and the `if (method === ...)`
+ * chain below (what serves it). This header used to list a subset of the routes
+ * and drifted from both; do not restate them here.
  */
 import { createServer } from "http";
 import { readFileSync, existsSync, statSync } from "fs";
@@ -78,11 +57,37 @@ function send(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
+/** A body the handler must not see; the request listener answers it. */
+class BodyError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/**
+ * Read and parse a JSON request body.
+ *
+ * A body past the limit is drained and rejected, never `req.destroy()`ed:
+ * destroying the socket means `end` never fires, so the promise never settles
+ * and the handler waits forever with nothing in the log. Rejecting with a
+ * `BodyError` lets the one catch in the request listener answer 413/400.
+ */
 function readBody(req) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let body = "";
-    req.on("data", (d) => { body += d; if (body.length > 1e6) req.destroy(); });
-    req.on("end", () => { try { resolve(body ? JSON.parse(body) : {}); } catch { resolve({}); } });
+    let over = false;
+    req.on("data", (d) => {
+      if (over) return; // keep draining so the client is not left hanging
+      body += d;
+      if (body.length > 1e6) { over = true; body = ""; }
+    });
+    req.on("end", () => {
+      if (over) return reject(new BodyError(413, "request body too large"));
+      if (!body.trim()) return resolve({});
+      try { resolve(JSON.parse(body)); } catch { reject(new BodyError(400, "request body is not valid JSON")); }
+    });
+    req.on("error", () => reject(new BodyError(400, "request body could not be read")));
   });
 }
 
@@ -113,7 +118,26 @@ function seederView(s, st) {
   };
 }
 
-export function startServer(port = 4173) {
+/** The addresses that can only be reached from this machine. */
+export function isLoopbackHost(host) {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+/**
+ * Listen on `host` — loopback unless the operator asks for more.
+ *
+ * A non-loopback bind is opt-in and needs the shared token: GETs are
+ * unauthenticated (`docs/api.md`, Auth), so without one the read API and every
+ * POST route answer anyone who can reach the port. This is a refusal rather
+ * than a warning, because a warning leaves the hole open.
+ */
+export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
+  if (!isLoopbackHost(host) && !remoteToken()) {
+    throw new Error(
+      `refusing to listen on ${host} with no API token — set SKYHOOK_REMOTE_TOKEN `
+      + "(or remote.token in skyhook.config.json), or bind 127.0.0.1",
+    );
+  }
   const db = openState();
   const server = createServer(async (req, res) => {
     if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return; }
@@ -332,14 +356,22 @@ export function startServer(port = 4173) {
 
       if (method === "POST" && path === "/api/settings") {
         const body = await readBody(req);
+        // The executable path and the base URL decide what `spawn` runs
+        // (`src/core/cloudflare.js`), so they are static-config only: a
+        // settings toggle must never become a process-launch primitive.
+        for (const key of ["exePath", "url"]) {
+          if (body.flaresolverr && body.flaresolverr[key] !== undefined) {
+            return send(res, 400, {
+              error: `flaresolverr.${key} is set in skyhook.config.json, not over the API`,
+            });
+          }
+        }
         const patch = {};
         if (typeof body.allowRemote === "boolean") patch.allowRemote = body.allowRemote;
         if (typeof body.taggingPlatform === "string") patch.taggingPlatform = body.taggingPlatform;
         if (body.flaresolverr && typeof body.flaresolverr === "object") {
           patch.flaresolverr = {
             enabled: typeof body.flaresolverr.enabled === "boolean" ? body.flaresolverr.enabled : undefined,
-            exePath: typeof body.flaresolverr.exePath === "string" ? body.flaresolverr.exePath : undefined,
-            url: typeof body.flaresolverr.url === "string" ? body.flaresolverr.url : undefined,
             port: body.flaresolverr.port != null ? parseInt(body.flaresolverr.port, 10) || 8191 : undefined,
             maxTimeout: body.flaresolverr.maxTimeout != null ? parseInt(body.flaresolverr.maxTimeout, 10) || 60000 : undefined,
           };
@@ -491,14 +523,26 @@ export function startServer(port = 4173) {
 
       return send(res, 404, { error: "not found" });
     } catch (err) {
+      if (err instanceof BodyError) return send(res, err.status, { error: err.message });
       return send(res, 500, { error: err.message });
     }
   });
 
-  server.listen(port, () => {
-    console.log(`\n🛰  Skyhook seeder API listening on http://localhost:${port}`);
-    console.log(`   GUI:  http://localhost:${port}/`);
-    console.log(`   API:  http://localhost:${port}/api/health\n`);
+  server.listen(port, host, () => {
+    const shown = host.includes(":") ? `[${host}]` : host;
+    const reach = isLoopbackHost(host) ? "loopback only" : "reachable on the network";
+    console.log(`\n🛰  Skyhook seeder API listening on http://${shown}:${port} (${reach})`);
+    console.log(`   GUI:  http://${shown}:${port}/`);
+    console.log(`   API:  http://${shown}:${port}/api/health\n`);
   });
+
+  // This function opens the state DB, so it is also where the handle is
+  // released. Windows refuses to delete an open file, so a caller that closes
+  // the listener (a test, or a future in-process restart) would otherwise leave
+  // `.tmp-*` state behind it.
+  server.on("close", () => {
+    try { db.close(); } catch {} // already closed — nothing to release
+  });
+
   return server;
 }

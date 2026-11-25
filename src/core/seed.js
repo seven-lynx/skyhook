@@ -371,6 +371,38 @@ const VALID_CATEGORY_IDS = new Set([...Object.values(CATEGORY), ...Object.values
  *   published_at  — ISO 8601 string or Date (optional, null = unknown)
  *   seeder_score  — float 0.0–1.0 (optional, defaults to 0.0 in DB)
  */
+/**
+ * What a liveness probe's status says about one URL.
+ *
+ * `alive` — the site answered. `unknown` — it refused or was overloaded
+ * (403/405/429 and every 5xx): that says nothing about whether the page exists,
+ * so the row is kept. `dead` — 404/410 and the rest of the 4xx family are an
+ * answer, and only an answer may drop a row. Both probes (upsert and stage) go
+ * through this one function so neither can drift into discarding a 503, a loss
+ * nothing downstream reports.
+ */
+export function livenessVerdict(status) {
+  if (status < 400) return "alive";
+  if (status === 403 || status === 405 || status === 429 || status >= 500) return "unknown";
+  return "dead";
+}
+
+/**
+ * Is this run in offline staging mode?
+ *
+ * `SKYHOOK_STAGE_ONLY=1` always wins: that is what the engine sets on a child
+ * (`seeder-engine.js` runOne) and what `docs/` tells a stage-only host to use.
+ * `--stage-only` is the *seeder's own* flag, so it counts only when the process
+ * was started on a `seed-*.js` entry point — a host process (`skyhook serve`, a
+ * test, a desktop shell) has its own argv, and a `--stage-only` there must not
+ * silently redirect this pipeline into staging.
+ */
+export function resolveStageOnly(argv = process.argv, env = process.env) {
+  if (env.SKYHOOK_STAGE_ONLY === "1") return true;
+  const entry = String(argv[1] || "").replace(/\\/g, "/");
+  return /\/seed[^/]*\.(js|mjs|cjs)$/.test(entry) && argv.slice(2).includes("--stage-only");
+}
+
 export async function upsertUrls(rows, {
   fetchOg          = true,
   verbose          = true,
@@ -379,16 +411,17 @@ export async function upsertUrls(rows, {
   maxPerDomain     = undefined,
   checkpointId     = undefined,
   bypassCloudflare = false,
+  stageOnly        = resolveStageOnly(),
 } = {}) {
   const log = verbose ? console.log : () => {};
 
-  // Offline staging mode: when SKYHOOK_STAGE_ONLY=1 (or --stage-only is passed),
-  // redirect the whole pipeline to write JSONL to .skyhook/staged/ instead
-  // of touching Supabase. This lets the Raspberry Pi harvest + enrich URLs with
-  // no DB access, so the PC can pull them over the LAN, tag them with the local
-  // LLM, and perform the single tagged-only Supabase write.
-  const STAGE_ONLY = process.env.SKYHOOK_STAGE_ONLY === "1" || process.argv.includes("--stage-only");
-  if (STAGE_ONLY) {
+  // Offline staging mode: redirect the whole pipeline to write JSONL to
+  // .skyhook/staged/ instead of touching Supabase. This lets the Raspberry Pi
+  // harvest + enrich URLs with no DB access, so the PC can pull them over the
+  // LAN, tag them with the local LLM, and perform the single tagged-only
+  // Supabase write. The caller may force it; otherwise it comes from
+  // `resolveStageOnly()` (env, or the seeder's own `--stage-only`).
+  if (stageOnly) {
     const staged = await stageUrls(rows, { fetchOg, verbose, checkLive, requireTitle, maxPerDomain, checkpointId, bypassCloudflare });
     return { inserted: staged.staged, skipped: staged.skipped ?? 0, dead: staged.dead ?? 0, staged: true };
   }
@@ -506,7 +539,7 @@ export async function upsertUrls(rows, {
           redirect: 'follow',
         });
         clearTimeout(timer);
-        if (res.status < 400 || res.status === 403 || res.status === 405) return row;
+        if (livenessVerdict(res.status) !== "dead") return row;
       } catch { /* fall through to bypass */ }
       if (bypassCloudflare && await resolveRedirect(row.url)) return row;
       return null;
@@ -734,7 +767,7 @@ export async function stageUrls(rows, {
             redirect: 'follow',
           });
           clearTimeout(timer);
-          if (res.status < 400 || res.status === 403 || res.status === 405) return row;
+          if (livenessVerdict(res.status) !== "dead") return row;
         } catch { /* fall through to bypass */ }
         if (bypassCloudflare && await resolveRedirect(row.url)) return row;
         return null;
@@ -1285,7 +1318,13 @@ async function _discoverHeadless({ siteDomain, articlePathRegex, skipPaths, site
     await crawler.run([homepage]);
     await crawler.teardown();
   } catch (err) {
+    // `playwright` is an optionalDependency (it ships a browser download), so a
+    // machine that skipped or failed it is expected, not broken. Say what to run.
+    const missing = /Cannot find (?:package|module) ['"]?(playwright|playwright-core)/.test(err.message);
     console.warn(`  [Headless] Error: ${err.message}`);
+    if (missing) {
+      console.warn("  [Headless] this tier needs the optional playwright package: npm i playwright && npx playwright install chromium");
+    }
     // If browser isn't available at all, fail gracefully
     return [];
   }

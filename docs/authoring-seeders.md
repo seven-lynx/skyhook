@@ -1,5 +1,8 @@
 # Authoring Seeders
 
+Status: **guide** — for a human writing a `seeders/seed-*.js`: the tiers, the filters and what
+happens to the rows.
+
 A **seeder** is a single `seeders/seed-<slug>.js` file. Skyhook discovers it
 automatically — no registry to edit, no rebuild.
 
@@ -67,12 +70,25 @@ CLI flags accepted by any seeder: `--no-cache`, `--aggressive`, `--with-headless
 `--stage-only`. (`--max-age-days N` is an engine/schedule flag — set it via
 `skyhook schedule … --max-age-days N`, not on the seeder itself.)
 
+`--stage-only` belongs to the seeder's own invocation: it counts only when the
+process was started on a `seed-*.js` entry point. A host that imports a seeder
+(`skyhook serve`, a test, a desktop shell) sets `SKYHOOK_STAGE_ONLY=1` instead —
+its own `--stage-only` must not redirect the pipeline.
+
 Environment variables:
 
 | Variable | Effect |
 |---|---|
 | `SKYHOOK_STAGE_ONLY=1` | Stage URLs locally instead of writing to storage (same as `--stage-only`) |
 | `SKYHOOK_SKIP_HEADLESS=1` | Skip the headless tier entirely (handy for CI without Playwright) |
+
+## Liveness and metadata
+
+After discovery, each URL is probed with a `HEAD` request. Only an *answer* drops
+a row: 404/410 and the rest of the 4xx family mean the page is gone. A 403, 405,
+429 or any 5xx means the site refused or was overloaded, so the row is kept — a
+transient block is not a dead link, and a URL dropped at this stage is reported
+nowhere.
 
 ## Categories
 

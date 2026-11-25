@@ -3,7 +3,7 @@ You are a URL quality auditor for Roam. For each URL, assess all of:
 
 - url_type: article, reference, interactive, gallery, product-page, landing-page,
   domain-parking, login-wall, error-page, spam, thin-content, or other
-- quality_score: 0.0 (spam/garbage) to 1.0 (exceptional content)
+- quality_score: an integer 0 to 10 (0 = spam/garbage, 5 = ordinary, 10 = exceptional)
 - Boolean flags (true/false):
   is_parked — parked domain, no real content
   is_product — selling a product/service
@@ -20,7 +20,7 @@ Return JSON:
   "results": [{
     "url_index": 0,
     "url_type": "article",
-    "quality_score": 0.85,
+    "quality_score": 8,
     "is_parked": false,
     "is_product": false,
     "is_spam": false,

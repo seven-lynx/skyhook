@@ -1,5 +1,8 @@
 # LLM Tagging
 
+Status: **reference** — providers, the prompt and vocabulary files, and the gap-filling tasks. The
+defaults it quotes come from `src/config.js`.
+
 Optional classification stage: run each discovered item through a local or remote
 model to assign a **category / subcategory** and **controlled tags**.
 
@@ -69,6 +72,51 @@ substituted before each call: `{title}`, `{description}`, `{url}`, `{categories}
 
 `config/tags.json` is the controlled tag list (optionally map tags → categories).
 Seeded from `categories.json` by default.
+
+## One pass, three tables
+
+The canonical `skyhook tag` pass asks for **tags, attributes and quality in a single
+response**, and writes all three from it:
+
+| Table | What the canonical pass writes |
+|---|---|
+| `local_url_tags` | the topic tags, canonicalised against the vocabulary |
+| `local_url_attributes` | audience_level, content_type, depth, tone, is_news |
+| `local_url_quality` | url_type, quality_score, the nine boolean flags |
+
+A task pass is narrower by design, but `fill-tags` writes the attributes and quality the
+model returned in the same response when it returned them - so a tags pass does not cost
+a second GPU hour for columns already in hand. `fill-attributes` and `fill-quality` exist
+for the corpus that was tagged before that was true.
+
+Practical consequence: to move a corpus forward, run the canonical pass over the rows you
+want redone. Reach for a task only when you want **one** column re-read on URLs that
+already have the others.
+
+## The value contract: `tagging.enums`
+
+Every value the model may emit is declared once, in `tagging.enums`
+(`src/config.js` `DEFAULTS`; narrow it in `skyhook.config.json`):
+
+```jsonc
+"enums": {
+  "values":    { "audience_level": […], "content_type": […], "depth": […], "tone": […], "url_type": […] },
+  "aliases":   { "tone": { "formal": "serious" } },   // applied only when the raw value is not accepted
+  "fallbacks": { "tone": ["neutral"], "content_type": "other" },
+  "arrays":    ["tone"],                              // stored as a JSON array, always
+  "booleans":  ["is_news", "is_parked", …]            // sent as true/false, never 0/1
+}
+```
+
+Three things read it, which is the point:
+
+1. the worker, when it validates a response before writing it;
+2. `skyhook upload`, which maps every value through `src/adapters/tagging/enums.js` and
+   **drops + counts** anything unmapped instead of letting the database reject the batch;
+3. the task prompts, which quote the same words (a test fails if they drift).
+
+`tone` is always an array locally - `["neutral"]` - whether the model produced a string
+or an array, and whether the writer was the canonical pass or a task.
 
 ## Editing (GUI)
 

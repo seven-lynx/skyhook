@@ -6,6 +6,7 @@
  * Outputs: src/gui/icons/icon-192.png
  *          src/gui/icons/icon-512.png
  *          src/gui/icons/maskable-512.png  (PWA splash — logo with safe-area padding)
+ *          src/gui/icons/logo-96.png       (the header logo — a 32 px slot, no need for 3.2 MB)
  *          docs/skyhook-logo-512.png       (copy of the 512 variant for the README)
  *
  * The source PNG has a baked-in white background. We composite each icon onto
@@ -68,6 +69,15 @@ await makeIcon(512, 36, "icon-512.png");
 // Maskable: 20% safe-area on each side so OS-driven circle/squircle crops
 // never clip the satellite. (Logo is centered in the inner 60% of the canvas.)
 await makeIcon(512, 102, "maskable-512.png");
+
+// Header derivative: `.brand-logo` is a 32 px box, so 96 px covers a 3× display
+// at a fraction of the master's weight. The GUI references this file, not the
+// master — 3.2 MB for a 32 px slot is on the first-paint path for every launch.
+await sharp(SRC)
+  .resize(96, 96, { fit: "contain" })
+  .png({ compressionLevel: 9 })
+  .toFile(join(ICON_DIR, "logo-96.png"));
+console.log("✓ logo-96.png (96×96 header logo)");
 
 // Also keep a copy at the repo root for the README / docs.
 copyFileSync(join(ICON_DIR, "icon-512.png"), join(ROOT, "docs", "skyhook-logo-512.png"));

@@ -1,14 +1,28 @@
 # HTTP API
 
-`skyhook serve` (default `http://localhost:4173`) exposes a JSON API over Node's
+Status: **contract** — the web GUI and remote peers code against it. Additive changes only, and a
+new route is a row here in the same commit.
+
+`skyhook serve` (default `http://127.0.0.1:4173`) exposes a JSON API over Node's
 built-in HTTP server — zero framework, CORS open. It's the same API the web GUI and
-remote peers use, so anything the GUI can do, `curl` can too.
+remote peers use, so anything the GUI can do, `curl` can too. The listener is
+loopback-only unless `--host` says otherwise.
 
 ## Auth
 
 When `remote.token` (or `SKYHOOK_REMOTE_TOKEN`) is set, every **POST** is rejected
-unless it carries `Authorization: Bearer <token>`. GETs stay open. With no token the
-API is fully open — fine for localhost, not for a LAN or the internet.
+unless it carries `Authorization: Bearer <token>`. GETs stay open, which is why the
+listener binds `127.0.0.1` unless `--host` names another address, and why a
+non-loopback bind with no token is refused at startup instead of warned about.
+
+With no token and the default bind, the API is reachable from this machine only —
+fine for a single-box install, not for a LAN or the internet.
+
+## Request bodies
+
+`POST` bodies are JSON. A body over 1 MB answers `413 { error: "request body too
+large" }` and unparseable JSON answers `400 { error: "request body is not valid
+JSON" }` — neither hangs the request, and the listener keeps serving.
 
 ## Endpoints
 
@@ -59,6 +73,7 @@ API is fully open — fine for localhost, not for a LAN or the internet.
 |---|---|---|
 | GET | `/api/pipeline` | Offline pipeline status |
 | POST | `/api/pipeline/:kind` | Run a pipeline job (`tag`, `push`, or any `pipeline.jobs` key) |
+| GET | `/api/tagging/tasks` | The task list: `{ tasks: [{ key, label, gap?, reprocess?, minTags? }] }` |
 | GET | `/api/tagging/missing` | Counts of URLs missing category/subcategory/tags/content-type/quality/attributes |
 | GET | `/api/tagging/models` | `{ models, errors, configured, provider }` — probe the active platform for downloaded models |
 | POST | `/api/tagging/models/load` | `{ model, provider? }` — unload any loaded model, then load the target (LM Studio) |
@@ -69,4 +84,4 @@ API is fully open — fine for localhost, not for a LAN or the internet.
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/settings` | Node settings (id, allowRemote, peers, tagging platform) |
-| POST | `/api/settings` | `{ allowRemote?, taggingPlatform? }` — toggle node mode or select the active LLM platform |
+| POST | `/api/settings` | `{ allowRemote?, taggingPlatform?, flaresolverr? }` — toggle node mode or select the active LLM platform. `flaresolverr.exePath` and `.url` are config-only: a body carrying either answers 400 |

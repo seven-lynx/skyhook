@@ -1,5 +1,8 @@
 # Storage Adapters
 
+Status: **contract** — an adapter and `config/schema.json` are what a user's database depends on.
+A new provider is a row here in the same commit.
+
 Skyhook writes discovered URLs through a pluggable **`StorageAdapter`**. Pick one
 in `skyhook.config.json` → `storage.provider`.
 
@@ -40,6 +43,10 @@ Each adapter maps Skyhook's **canonical fields** onto your table/columns:
 - `conflictKey` — unique column used for upsert dedup.
 - `columns` — canonical field → **your** column name. Unmapped fields are dropped.
 - `extra` — fixed values merged into every row (e.g. `approved: true`).
+
+A file that does not parse stops a `push` with `schema <path> is not valid JSON:
+<message> (check config/schema.json)` — the path is the one being read, so a
+trailing comma in a hand-edited file names itself.
 
 ## Supabase
 

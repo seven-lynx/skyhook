@@ -15,10 +15,22 @@ export const CANONICAL_FIELDS = [
   "seeder_score", "tags",
 ];
 
-/** Load a schema.json mapping file, or return null when absent. */
+/**
+ * Load a schema.json mapping file, or return null when absent.
+ *
+ * `config/schema.json` is hand-edited, so a trailing comma is a real
+ * possibility. A bare `JSON.parse` surfaces as `Unexpected token } in JSON at
+ * position N` with no file name, after staging already succeeded — the user
+ * concludes the pipeline is broken rather than their config. Name the file.
+ */
 export function loadSchema(file) {
   if (!file || !existsSync(file)) return null;
-  return JSON.parse(readFileSync(file, "utf8"));
+  const raw = readFileSync(file, "utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`schema ${file} is not valid JSON: ${err.message} (check config/schema.json)`);
+  }
 }
 
 /** Map a canonical row onto the user's schema (columns + extra defaults). */

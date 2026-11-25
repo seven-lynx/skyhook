@@ -16,7 +16,7 @@
 import {
   buildIndex, openState, getState, listRuns, isDue, runPool, dueSeeders,
   editManifest, enableSeeder, disableSeeder, resolveSeeder, emitTimer, writeTimer,
-  CADENCES, CADENCE_MS, LOGS_DIR, SCRIPTS_DIR,
+  CADENCES, CADENCE_MS, scriptsDir,
 } from "../src/engine/seeder-engine.js";
 import { nodeId, getConfig } from "../src/config.js";
 import { routeSeeders, peerFor, runRemote, getPeers, pullStaged } from "../src/core/remote.js";
@@ -47,7 +47,7 @@ const COMMANDS = [
   ["cache",      "Inspect / prune staged results and discovery cache (delete URLs)"],
   ["sync",       "Merge staged results with a peer (Pi ⇄ PC) with URL dedup"],
   ["push",       "Push the merged staged set into the configured storage"],
-  ["tag",        "Offline LLM tag worker (resumes; --mode retag-add|retag-replace for a second pass)"],
+  ["tag",        "Offline LLM tag worker (resumes; --mode retag-add|retag-replace, --retry-failed, --requeue-untagged)"],
   ["pull",       "Pull untagged (--force all, --index-only just the dedup index) URLs from storage"],
   ["upload",     "Upload staged URLs + local tags/attributes/quality to storage"],
   ["import-staged", "Import staged seeder JSONL into the offline DB (no Supabase round-trip)"],
@@ -91,7 +91,7 @@ function helpFor(cmd) {
     settings:   "settings                       (view)  |  settings allow-remote on|off",
     init:       "init [--provider stage|sqlite|supabase|postgres]",
     tui: "tui",
-    serve:     "serve [--port N]  (default 4173)",
+    serve:     "serve [--port N] [--host ADDR]  (default 127.0.0.1:4173)",
     help:      "help [<command>]",
   };
   console.log(`Usage: skyhook ${details[name] ?? name}`);
@@ -302,7 +302,7 @@ async function cmdRunDue(a) {
 
   if (dryRun) {
     console.log(`\n[dry-run] Would run ${due.length} seeder(s) (tier=${tier}${source ? `, source=${source}` : ""}${force ? ", forced" : ""}):\n`);
-    for (const s of due) console.log(`  node ${SCRIPTS_DIR}/${s.script} --stage-only${s.maxAgeDays != null ? ` --max-age-days ${s.maxAgeDays}` : ""}`);
+    for (const s of due) console.log(`  node ${scriptsDir()}/${s.script} --stage-only${s.maxAgeDays != null ? ` --max-age-days ${s.maxAgeDays}` : ""}`);
     console.log("");
     db.close();
     return;
@@ -422,7 +422,7 @@ function cmdHistory(a) {
 // ── validate ────────────────────────────────────────────────────────────────
 function cmdValidate(a) {
   console.log("Running validate-seeders.mjs (needs Supabase creds — PC only)...\n");
-  const res = spawnSync(process.execPath, [join(SCRIPTS_DIR, "validate-seeders.mjs"), ...a], { stdio: "inherit" });
+  const res = spawnSync(process.execPath, [join(scriptsDir(), "validate-seeders.mjs"), ...a], { stdio: "inherit" });
   process.exit(res.status ?? 1);
 }
 
@@ -653,6 +653,8 @@ async function cmdTag(a) {
     tier: parseInt(val(a, "--tier", "0"), 10) || 0,
     minTags: parseInt(val(a, "--min-tags", "0"), 10) || null,
     task: taskKey,
+    retryFailed: has(a, "--retry-failed"),
+    requeueUntagged: has(a, "--requeue-untagged"),
     logFile: join(c.logDir, "tagger.log"),
   };
 
@@ -706,8 +708,17 @@ async function cmdImportStaged(a) {
 // ── serve ───────────────────────────────────────────────────────────────────
 async function cmdServe(a) {
   const port = parseInt(val(a, "--port", "4173"), 10) || 4173;
+  // Loopback unless asked otherwise; a non-loopback host needs the shared token
+  // and the server refuses before it listens (`src/interfaces/api-server.js`).
+  const host = val(a, "--host", "127.0.0.1");
   const { startServer } = await import("../src/interfaces/api-server.js");
-  startServer(port); // blocks until Ctrl+C
+  try {
+    startServer(port, { host }); // blocks until Ctrl+C
+  } catch (err) {
+    // A refusal to bind (an open host with no token) is a message, not a stack.
+    console.error(`✘ ${err.message}`);
+    process.exitCode = 1; // nothing is listening, so the loop empties and exits 1
+  }
 }
 
 // ── main ────────────────────────────────────────────────────────────────────

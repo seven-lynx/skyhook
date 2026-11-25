@@ -52,9 +52,56 @@ const DEFAULTS = {
     promptFile: "config/tagging-prompt.txt",
     vocabFile: "config/tags.json",
     temperature: 0,
+    uploadSource: "llm", // what `url_tags.source` receives; per-model provenance stays local
     worker: {
       batchSize: 25,
       modelSource: "llm",
+    },
+    // The one table of values the tagger may emit. `upload` maps every value
+    // through it (src/adapters/tagging/enums.js) and the task prompts quote it,
+    // so a column's vocabulary is defined once. A narrower target database is a
+    // narrower list here — nothing else has to change.
+    enums: {
+      values: {
+        audience_level: ["beginner", "intermediate", "advanced", "expert", "general"],
+        content_type: [
+          "explainer", "research", "opinion", "how-to", "narrative", "news", "review",
+          "interview", "longform", "tutorial", "infographic", "podcast", "video",
+          "interactive", "faq", "data-journalism", "article", "reference", "gallery", "other",
+        ],
+        depth: ["quick-read", "medium", "deep-dive", "reference"],
+        tone: [
+          "academic", "playful", "serious", "technical", "accessible", "inspirational",
+          "critical", "neutral", "journalistic", "humorous", "conversational", "sensational",
+        ],
+        url_type: [
+          "article", "reference", "interactive", "gallery", "product-page", "landing-page",
+          "domain-parking", "login-wall", "error-page", "spam", "thin-content", "other",
+        ],
+      },
+      // Applied only when the raw value is not already accepted, so a target that
+      // accepts both `advanced` and `expert` never rewrites anything.
+      aliases: {
+        audience_level: { advanced: "expert", expert: "advanced" },
+        content_type: { howto: "how-to", guide: "tutorial", "how-to-guide": "tutorial", "long-read": "longform", "long-form": "longform" },
+        depth: { short: "quick-read", long: "deep-dive" },
+        tone: {
+          formal: "serious", persuasive: "critical", funny: "humorous",
+          newsy: "journalistic", factual: "neutral", informative: "neutral",
+        },
+      },
+      fallbacks: {
+        audience_level: "general",
+        content_type: "other",
+        depth: "medium",
+        tone: ["neutral"],
+        url_type: "other",
+      },
+      arrays: ["tone"],
+      booleans: [
+        "is_news", "is_parked", "is_product", "is_spam", "is_paywalled",
+        "is_login_required", "is_broken", "is_thin", "is_clickbait", "is_english",
+      ],
     },
   },
   pipeline: {

@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { loadCategories } from "../src/adapters/categories/index.js";
-import { createStorage } from "../src/adapters/storage/index.js";
+import { createStorage, loadSchema } from "../src/adapters/storage/index.js";
 import { buildPrompt, tag } from "../src/adapters/tagging/index.js";
 import { getConfig } from "../src/config.js";
 import { aggregateRows } from "../src/core/analytics.js";
 import { mergeRows, filterRows, readStaged, writeStagedSource } from "../src/core/staged.js";
 import { pruneStaged, clearDiscovery } from "../src/core/data.js";
+import { livenessVerdict, resolveStageOnly } from "../src/core/seed.js";
 import { mergeRemoteRows } from "../src/core/sync.js";
 
 const root = process.cwd();
@@ -38,6 +39,24 @@ test("stage storage adapter dedupes by URL", async () => {
   assert.deepEqual(first, { inserted: 2, skipped: 0 });
   assert.deepEqual(second, { inserted: 1, skipped: 0 });
   rmSync(cfg.stagedDir, { recursive: true, force: true });
+});
+
+test("loadSchema names the file and the fix when the mapping is not valid JSON", () => {
+  const dir = join(root, ".tmp-schema");
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "schema.json");
+  // A trailing comma is the classic hand-edited break.
+  writeFileSync(file, '{ "columns": { "url": "link", }, }\n');
+  assert.throws(
+    () => loadSchema(file),
+    (err) => err.message.includes(`schema ${file} is not valid JSON:`)
+      && err.message.includes("(check config/schema.json)"),
+  );
+  // An absent file is not an error — the adapters map the row as-is.
+  assert.equal(loadSchema(join(dir, "absent.json")), null);
+  assert.equal(loadSchema(null), null);
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("tagging prompt placeholders are substituted", () => {
@@ -122,11 +141,55 @@ test("pruneStaged soft-deletes matching rows and rewrites the source file", () =
   assert.equal(r.deleted, 1);
   assert.equal(r.kept, 1);
   assert.ok(r.archived);
+  // #5: the archive is written before the rewrite, and it holds the removed row.
+  assert.equal(existsSync(r.archived), true);
+  const archivedRows = readFileSync(r.archived, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(archivedRows.map((x) => x.url), ["https://a.com/old"]);
   const remaining = readStaged({ source: "s1" });
   assert.equal(remaining.length, 1);
   assert.equal(remaining[0].url, "https://a.com/new");
+  // ...and the atomic write left no temp file behind.
+  assert.equal(existsSync(join(cfg.stagedDir, "s1.jsonl.tmp")), false);
   rmSync(cfg.stagedDir, { recursive: true, force: true });
   rmSync(cfg.dataDir, { recursive: true, force: true });
+});
+
+test("writeStagedSource leaves the original file intact when the write fails", () => {
+  const cfg = getConfig();
+  cfg.stagedDir = join(root, ".tmp-atomic-staged");
+  rmSync(cfg.stagedDir, { recursive: true, force: true });
+  writeStagedSource("s1", [{ url: "https://a.com/keep", title: "keep", source: "s1" }]);
+  const file = join(cfg.stagedDir, "s1.jsonl");
+  const before = readFileSync(file, "utf8");
+
+  // A directory where the temp file goes makes the write fail the way a full
+  // disk would. The target is only ever replaced by a successful rename, so the
+  // staged file must still hold exactly what it held before.
+  mkdirSync(`${file}.tmp`, { recursive: true });
+  assert.throws(() => writeStagedSource("s1", [{ url: "https://a.com/new", source: "s1" }]));
+  assert.equal(readFileSync(file, "utf8"), before);
+  assert.equal(readStaged({ source: "s1" }).length, 1);
+  rmSync(cfg.stagedDir, { recursive: true, force: true });
+});
+
+test("livenessVerdict drops a row only on an answer, never on a refusal", () => {
+  for (const s of [200, 204, 304]) assert.equal(livenessVerdict(s), "alive", `${s} answered`);
+  // 403/405 refused, 429/5xx overloaded: the row must survive all of them.
+  for (const s of [403, 405, 429, 500, 502, 503, 504]) {
+    assert.equal(livenessVerdict(s), "unknown", `${s} says nothing about the page`);
+  }
+  for (const s of [400, 401, 404, 410, 418, 451]) assert.equal(livenessVerdict(s), "dead", `${s} is an answer`);
+});
+
+test("resolveStageOnly honours the seeder's own flag and never a host's", () => {
+  // `node seeders/seed-x.js --stage-only` is the documented manual invocation.
+  assert.equal(resolveStageOnly(["node", "seeders/seed-art.js", "--stage-only"], {}), true);
+  assert.equal(resolveStageOnly(["node", "seeders/seed-art.js"], {}), false);
+  // A host process has its own argv: its flag must not redirect staging.
+  assert.equal(resolveStageOnly(["node", "bin/skyhook.js", "run", "--stage-only"], {}), false);
+  assert.equal(resolveStageOnly(["node", "--test", "--stage-only"], {}), false);
+  // The env var is the contract the engine sets and the docs describe.
+  assert.equal(resolveStageOnly(["node", "bin/skyhook.js"], { SKYHOOK_STAGE_ONLY: "1" }), true);
 });
 
 test("mergeRemoteRows merges peer rows with URL dedup", () => {

@@ -1,5 +1,8 @@
 # Deployment & Scheduling
 
+Status: **guide** — scaffolding with `init`, the systemd timer `emit-timer` regenerates, and the
+pointer to the multi-node setup.
+
 ## Scaffolding a project
 
 `skyhook init` creates a self-contained project in the current directory:
@@ -50,3 +53,7 @@ Tune those for your setup.
 
 The Pi runs the same timer in worker mode; the PC pulls its staged results. See
 [multi-node.md](multi-node.md) for the controller/worker setup.
+
+`skyhook serve` exposes the API on this machine only: it binds `127.0.0.1` unless
+`--host` names another address, and a non-loopback bind with no `remote.token` is
+refused at startup ([api.md](api.md#auth)).
