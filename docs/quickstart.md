@@ -29,8 +29,12 @@ node bin/skyhook.js tui            # interactive terminal menu
 node bin/skyhook.js serve          # web GUI + JSON API at http://localhost:4173
 ```
 
-The headless-browser discovery tier is optional and off by default. If you want
-it, install its browser once: `npx playwright install chromium`.
+The headless-browser discovery tier is optional and off by default. Its driver,
+`playwright`, is an **optional dependency** — `npm ci` installs it when it can and
+does not fail the install when it cannot — so this tier is the only thing that
+needs it. To use it: `npm i playwright && npx playwright install chromium`. On a
+host that never enables the tier, `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` skips the
+browser download.
 
 ## 3. Connect your database
 

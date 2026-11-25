@@ -35,12 +35,12 @@
     "better-sqlite3": "12.11.1",
     "crawlee": "^3.17.0",
     "dotenv": "^17.4.2",
-    "node-fetch": "^3.3.2",
-    "playwright": "^1.61.1"
+    "node-fetch": "^3.3.2"
   },
   "optionalDependencies": {
     "@supabase/supabase-js": "^2.104.1",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "playwright": "^1.61.1"
   },
   "devDependencies": {
     "sharp": "^0.34.0"

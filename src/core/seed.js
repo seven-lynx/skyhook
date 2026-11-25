@@ -1318,7 +1318,13 @@ async function _discoverHeadless({ siteDomain, articlePathRegex, skipPaths, site
     await crawler.run([homepage]);
     await crawler.teardown();
   } catch (err) {
+    // `playwright` is an optionalDependency (it ships a browser download), so a
+    // machine that skipped or failed it is expected, not broken. Say what to run.
+    const missing = /Cannot find (?:package|module) ['"]?(playwright|playwright-core)/.test(err.message);
     console.warn(`  [Headless] Error: ${err.message}`);
+    if (missing) {
+      console.warn("  [Headless] this tier needs the optional playwright package: npm i playwright && npx playwright install chromium");
+    }
     // If browser isn't available at all, fail gracefully
     return [];
   }
