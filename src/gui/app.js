@@ -1577,7 +1577,7 @@ async function init() {
 init().catch((err) => {
   console.error("init failed:", err);
   document.body.innerHTML =
-    '<div style="padding:32px;color:#ff5c5c;font-family:monospace;">' +
+    '<div style="padding:24px;color:var(--err);font-family:var(--font-mono);">' +
       '<h1>Skyhook GUI failed to start</h1>' +
       '<pre>' + esc(err.message) + '\n' + esc(err.stack || "") + '</pre>' +
       '<p>Check the browser dev tools console for details.</p>' +

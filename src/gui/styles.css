@@ -424,6 +424,16 @@ code, kbd {
 }
 .field > .hint { font-size: var(--text-xs); color: var(--text-subtle); }
 
+/* Two idioms for one control: `.field` wraps its label, and a bare `<div>` in a two-column
+ * grid does not (app.js:1185-1190). Style the label itself so both read as one system. */
+label[for] {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
 /* A control's outline is a boundary, not decoration: --field-border clears 3:1 where
  * the hairline does not. */
 input[type="text"], input[type="number"], input[type="search"], input[type="date"], input[type="url"], select, textarea {
@@ -446,6 +456,7 @@ input::placeholder, textarea::placeholder { color: var(--text-subtle); }
 
 select {
   appearance: none;
+  /* A data URI cannot read a custom property: this mirrors --text-subtle (#767f8a). */
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23767f8a' stroke-width='2.5'><polyline points='6 9 12 15 18 9'/></svg>");
   background-repeat: no-repeat;
   background-position: right var(--space-2) center;
@@ -856,21 +867,27 @@ td .row-link:hover { color: var(--brand); }
   flex: 1;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  gap: 2px;
+  gap: 3px;
   background: transparent; border: 0;
-  color: var(--text-muted);
-  font-size: 10px; font-weight: 500;
-  padding: var(--space-2) var(--space-1);
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: 9px; font-weight: 500;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: var(--space-1) 2px;
   cursor: pointer;
   text-decoration: none;
   transition: color var(--dur) var(--ease);
   min-height: var(--bottomnav-h);
 }
-.bn-item .ic { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.6; }
+.bn-item .ic { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.7; }
 .bn-item .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .bn-item:hover { color: var(--text); text-decoration: none; }
 .bn-item.active { color: var(--brand); }
-.bn-item .dot-active { display: none; width: 4px; height: 4px; background: var(--brand); border-radius: 50%; margin-top: 2px; }
+.bn-item .dot-active {
+  display: none; width: 12px; height: 2px;
+  background: var(--brand); border-radius: 0;
+}
 .bn-item.active .dot-active { display: block; }
 
 /* ── 14. Seeders (toolbar, table, cards, detail page) ───────────────────── */
@@ -904,6 +921,7 @@ td .row-link:hover { color: var(--brand); }
 .toolbar .filter {
   flex: 1 1 220px; min-width: 160px;
   height: var(--row-h);
+  /* Data-URI glyph, so the stroke colour mirrors --text-subtle (#767f8a). */
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23767f8a' stroke-width='2'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
   background-repeat: no-repeat;
   background-position: var(--space-2) center;
@@ -1308,7 +1326,7 @@ td .row-link:hover { color: var(--brand); }
 
 .modal-foot {
   display: flex; gap: var(--space-2);
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border);
   justify-content: flex-end;
 }
@@ -1366,8 +1384,18 @@ img, svg { display: block; max-width: 100%; }
 :focus { outline: none; }
 :focus-visible {
   outline: 2px solid var(--brand);
-  outline-offset: 2px;
+  outline-offset: 1px;
   border-radius: var(--radius-sm);
+}
+
+/* Animation is decoration here: a pulsing LED says nothing a static one does not. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  .dot.live, .spin-pulse, .job-status.running, .skeleton { animation: none !important; }
 }
 
 
