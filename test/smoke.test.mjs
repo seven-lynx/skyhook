@@ -9,6 +9,7 @@ import { getConfig } from "../src/config.js";
 import { aggregateRows } from "../src/core/analytics.js";
 import { mergeRows, filterRows, readStaged, writeStagedSource } from "../src/core/staged.js";
 import { pruneStaged, clearDiscovery } from "../src/core/data.js";
+import { livenessVerdict } from "../src/core/seed.js";
 import { mergeRemoteRows } from "../src/core/sync.js";
 
 const root = process.cwd();
@@ -151,6 +152,15 @@ test("writeStagedSource leaves the original file intact when the write fails", (
   assert.equal(readFileSync(file, "utf8"), before);
   assert.equal(readStaged({ source: "s1" }).length, 1);
   rmSync(cfg.stagedDir, { recursive: true, force: true });
+});
+
+test("livenessVerdict drops a row only on an answer, never on a refusal", () => {
+  for (const s of [200, 204, 304]) assert.equal(livenessVerdict(s), "alive", `${s} answered`);
+  // 403/405 refused, 429/5xx overloaded: the row must survive all of them.
+  for (const s of [403, 405, 429, 500, 502, 503, 504]) {
+    assert.equal(livenessVerdict(s), "unknown", `${s} says nothing about the page`);
+  }
+  for (const s of [400, 401, 404, 410, 418, 451]) assert.equal(livenessVerdict(s), "dead", `${s} is an answer`);
 });
 
 test("mergeRemoteRows merges peer rows with URL dedup", () => {

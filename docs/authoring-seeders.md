@@ -77,6 +77,14 @@ Environment variables:
 | `SKYHOOK_STAGE_ONLY=1` | Stage URLs locally instead of writing to storage (same as `--stage-only`) |
 | `SKYHOOK_SKIP_HEADLESS=1` | Skip the headless tier entirely (handy for CI without Playwright) |
 
+## Liveness and metadata
+
+After discovery, each URL is probed with a `HEAD` request. Only an *answer* drops
+a row: 404/410 and the rest of the 4xx family mean the page is gone. A 403, 405,
+429 or any 5xx means the site refused or was overloaded, so the row is kept — a
+transient block is not a dead link, and a URL dropped at this stage is reported
+nowhere.
+
 ## Categories
 
 The taxonomy lives in `config/categories.json` (8 pillars / 98 subcategories by

@@ -371,6 +371,22 @@ const VALID_CATEGORY_IDS = new Set([...Object.values(CATEGORY), ...Object.values
  *   published_at  — ISO 8601 string or Date (optional, null = unknown)
  *   seeder_score  — float 0.0–1.0 (optional, defaults to 0.0 in DB)
  */
+/**
+ * What a liveness probe's status says about one URL.
+ *
+ * `alive` — the site answered. `unknown` — it refused or was overloaded
+ * (403/405/429 and every 5xx): that says nothing about whether the page exists,
+ * so the row is kept. `dead` — 404/410 and the rest of the 4xx family are an
+ * answer, and only an answer may drop a row. Both probes (upsert and stage) go
+ * through this one function so neither can drift into discarding a 503, a loss
+ * nothing downstream reports.
+ */
+export function livenessVerdict(status) {
+  if (status < 400) return "alive";
+  if (status === 403 || status === 405 || status === 429 || status >= 500) return "unknown";
+  return "dead";
+}
+
 export async function upsertUrls(rows, {
   fetchOg          = true,
   verbose          = true,
@@ -506,7 +522,7 @@ export async function upsertUrls(rows, {
           redirect: 'follow',
         });
         clearTimeout(timer);
-        if (res.status < 400 || res.status === 403 || res.status === 405) return row;
+        if (livenessVerdict(res.status) !== "dead") return row;
       } catch { /* fall through to bypass */ }
       if (bypassCloudflare && await resolveRedirect(row.url)) return row;
       return null;
@@ -734,7 +750,7 @@ export async function stageUrls(rows, {
             redirect: 'follow',
           });
           clearTimeout(timer);
-          if (res.status < 400 || res.status === 403 || res.status === 405) return row;
+          if (livenessVerdict(res.status) !== "dead") return row;
         } catch { /* fall through to bypass */ }
         if (bypassCloudflare && await resolveRedirect(row.url)) return row;
         return null;
