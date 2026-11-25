@@ -155,6 +155,13 @@ test("api: routes answer, unknown paths 404, a POST needs the shared token", asy
     const alive = await fetch(`${base}/api/health`);
     assert.equal(alive.status, 200);
 
+    // G3: the header references a 96 px derivative, and the static handler
+    // serves it — the 3.2 MB master must not be on the first-paint path.
+    const logo = await fetch(`${base}/icons/logo-96.png`);
+    assert.equal(logo.status, 200);
+    const logoBytes = Buffer.from(await logo.arrayBuffer());
+    assert.ok(logoBytes.length < 15000, `logo-96.png is ${logoBytes.length} bytes`);
+
     // The state DB opened on the temp path, not on the repo's `.skyhook/`.
     assert.equal(existsSync(join(stateDir, "seeder-state.db")), true);
   } finally {
