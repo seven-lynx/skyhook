@@ -5,7 +5,7 @@ Status: **index** — the map of `docs/`. If a file is not listed here, it shoul
 Pairs with: `README.md` (the front door), `src/config.js` (`DEFAULTS`, the real defaults), and
 `src/interfaces/api-server.js` (the real route table).
 
-Eight documents, one job each. Start at the row that matches what you are doing; do not read the
+One document per job. Start at the row that matches what you are doing; do not read the
 whole directory.
 
 ---
