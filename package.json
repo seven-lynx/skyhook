@@ -18,7 +18,9 @@
   },
   "scripts": {
     "test": "node --test",
-    "build:icons": "node scripts/build-icons.js"
+    "build:icons": "node scripts/build-icons.js",
+    "build:desktop-icons": "node scripts/build-desktop-icons.js",
+    "desktop": "tauri dev"
   },
   "keywords": [
     "seeder",

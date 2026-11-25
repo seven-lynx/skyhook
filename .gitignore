@@ -14,3 +14,10 @@ config/skyhook.config.json
 *.db
 *.db-wal
 *.db-shm
+
+# Desktop shell build output and the fetched sidecar binary — never tracked.
+# `src-tauri/target/` appears on the first `tauri dev`; the installer lands in
+# dist/desktop/ and the pinned node.exe is fetched, not committed.
+src-tauri/target/
+dist/desktop/
+src-tauri/binaries/*.exe

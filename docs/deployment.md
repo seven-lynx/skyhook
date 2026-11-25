@@ -1,7 +1,7 @@
 # Deployment & Scheduling
 
-Status: **guide** — scaffolding with `init`, the systemd timer `emit-timer` regenerates, and the
-pointer to the multi-node setup.
+Status: **guide** — scaffolding with `init`, the systemd timer `emit-timer` regenerates, the
+development path for the optional desktop shell, and the pointer to the multi-node setup.
 
 ## Scaffolding a project
 
@@ -48,6 +48,29 @@ sudo systemctl enable --now skyhook-seed.timer
 The bundled `.service` runs `bin/skyhook.js run-due` once per timer tick with
 `SKYHOOK_STAGE_ONLY=1 SKYHOOK_SKIP_HEADLESS=1` (stage-only, no headless browser).
 Tune those for your setup.
+
+## Desktop shell (development)
+
+The optional Tauri shell hosts the same server in a WebView2 window: it starts
+`desktop/server.js` as a child process, reads the URL that child prints, and kills
+it on exit. The renderer is `src/gui/` unchanged, and `better-sqlite3` keeps
+loading under plain Node, so nothing native links into the window.
+
+```powershell
+rustup default stable          # Rust toolchain
+# plus the MSVC Build Tools ("Desktop development with C++") and WebView2
+cargo install tauri-cli        # provides `tauri`, which `npm run desktop` calls
+npm run desktop                # tauri dev: window on the sidecar's URL
+npm run build:desktop-icons    # regenerate src-tauri/icons/ from src/gui/icons/
+```
+
+None of this is needed for `npm ci`, `npm test`, or any `skyhook` command — the
+shell is an optional layer. At this stage it is a development build only: there is
+no installer yet, and the sidecar runs the `node` on your `PATH`.
+
+State lives in the app data directory the shell passes to the sidecar
+(`--root`), which is `%APPDATA%\com.sevenlynx.skyhook` on Windows — not the
+directory the shell was launched from.
 
 ## Releasing to a consumer
 
