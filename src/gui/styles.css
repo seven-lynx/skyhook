@@ -72,12 +72,30 @@
   --shadow-lg:     none;
   --ease:          cubic-bezier(.2, .8, .2, 1);
   --dur:           120ms;
-  --topbar-h:      44px;
-  --sidenav-w:     196px;
+  --bar-h:         38px;
+  --rail-w:        48px;
+  --nav-w:         220px;
+  --insp-w:        300px;
+  --dock-h:        220px;
+  --dock-collapsed-h: 26px;
+  --head-h:        26px;
+  --status-h:      24px;
   --bottomnav-h:   56px;
   --row-h:         28px;
   --btn-h:         26px;
   --field-h:       30px;
+  /* Shell surfaces. Structure stays achromatic; --live is the only warm colour on screen and it
+   * means "running right now" — never decoration, never a hover, never a count. */
+  --pane:          var(--bg);
+  --pane-head:     var(--bg-elevated);
+  --well:          #07080a;
+  --seam:          var(--border);
+  --seam-strong:   var(--border-strong);
+  --seam-light:    rgba(255, 255, 255, .045);
+  --backlight:     var(--brand);
+  --live:          #ff7a29;
+  --live-bg:       #3a1c0c;
+  --live-border:   rgba(255, 122, 41, .35);
 }
 
 
@@ -170,44 +188,35 @@ code, kbd {
 
 /* ── 4. Layout ──────────────────────────────────────────────────────────── */
 
-.app {
+.workbench {
   display: grid;
-  grid-template-columns: var(--sidenav-w) 1fr;
-  grid-template-rows: var(--topbar-h) 1fr;
+  grid-template-columns: var(--rail-w) var(--nav-w) minmax(0, 1fr) var(--insp-w);
+  grid-template-rows: var(--bar-h) minmax(0, 1fr) var(--dock-h) var(--status-h);
   grid-template-areas:
-    "topbar topbar"
-    "side   main";
-  min-height: 100vh;
-  min-height: 100dvh;
+    "bar    bar    bar    bar"
+    "rail   nav    work   insp"
+    "rail   dock   dock   dock"
+    "status status status status";
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
-@media (max-width: 720px) {
-  .app {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--bottomnav-h);
-    grid-template-areas:
-      "topbar"
-      "main"
-      "bottomnav";
-    height: 100dvh;
-  }
-  main { overflow-y: auto; }
-}
+/* A collapsed dock is a tab strip, not a hole: the row shrinks to its own head. */
+.workbench[data-dock="collapsed"] { --dock-h: var(--dock-collapsed-h); }
 
-/* ── topbar ─────────────────────────────────────────────────────────────── */
+/* ── command bar ────────────────────────────────────────────────────────── */
 
-.topbar {
-  grid-area: topbar;
+.bar {
+  grid-area: bar;
   min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: 0 var(--space-4);
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  padding: 0 var(--space-3);
+  background: var(--pane-head);
+  border-bottom: 1px solid var(--seam-strong);
+  box-shadow: inset 0 1px 0 var(--seam-light);
 }
 
 .brand { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
@@ -242,24 +251,9 @@ code, kbd {
 }
 .brand-sub.offline { color: var(--err); }
 
-.topbar-right {
+.bar-right {
   display: flex; align-items: center; gap: var(--space-1);
   margin-left: auto;
-}
-
-/* Live state as a mono label between two rules, not a pill. */
-.topbar-status {
-  display: inline-flex; align-items: center; gap: var(--space-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  height: 18px;
-  padding: 0 var(--space-3);
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
 }
 
 .dot {
@@ -277,79 +271,163 @@ code, kbd {
   50%      { opacity: .35; }
 }
 
-/* ── side nav (desktop) ─────────────────────────────────────────────────── */
+/* ── rail (desktop sections) ────────────────────────────────────────────── */
 
-.sidenav {
-  grid-area: side;
-  border-right: 1px solid var(--border);
-  background: var(--bg);
+.rail {
+  grid-area: rail;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
   padding: var(--space-2) 0;
+  background: var(--pane-head);
+  border-right: 1px solid var(--seam-strong);
   overflow-y: auto;
-  position: sticky;
-  top: var(--topbar-h);
-  height: calc(100vh - var(--topbar-h));
-  height: calc(100dvh - var(--topbar-h));
 }
 
-.sidenav-group { margin-bottom: var(--space-2); }
-.sidenav-group + .sidenav-group {
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-2);
+.rail-item {
+  position: relative;
+  width: 36px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: var(--radius);
+  color: var(--text-subtle);
+  text-decoration: none;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.rail-item .ic { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+.rail-item:hover { background: var(--bg-hover); color: var(--text); text-decoration: none; }
+.rail-item.active { background: var(--bg-overlay); color: var(--backlight); }
+/* The backlight edge: the only "lit" thing in the chrome, and it marks where you are. */
+.rail-item.active::before {
+  content: ""; position: absolute; left: -6px; top: 6px; bottom: 6px;
+  width: 2px; background: var(--backlight);
 }
 
-.sidenav-label {
+.rail-spacer { flex: 1; }
+.rail-sep { width: 24px; height: 1px; background: var(--seam-strong); margin: var(--space-2) 0; }
+
+
+/* ── panes ──────────────────────────────────────────────────────────────── */
+
+.pane {
+  min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  background: var(--pane);
+}
+
+.pane-head {
+  height: var(--head-h); flex: 0 0 auto;
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 0 var(--space-2);
+  background: var(--pane-head);
+  border-bottom: 1px solid var(--seam-strong);
+  box-shadow: inset 0 1px 0 var(--seam-light);
+}
+
+/* A mono caps label is what makes a 26 px strip read as a pane head and not a toolbar. */
+.pane-title {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: .12em;
   text-transform: uppercase;
-  color: var(--text-subtle);
-  padding: 0 var(--space-3);
-  margin-bottom: var(--space-1);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.pane-meta {
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-subtle);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pane-body { flex: 1; min-height: 0; overflow: auto; }
+.pane-note { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-subtle); }
+.pane-empty {
+  font-family: var(--font-mono); font-size: var(--text-sm);
+  color: var(--text-muted); margin: var(--space-3) 0 var(--space-1);
 }
 
-.sidenav-item {
-  display: flex; align-items: center; gap: var(--space-2);
-  height: 26px;
-  margin: 0 var(--space-2);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius);
+/* ── navigator ──────────────────────────────────────────────────────────── */
+
+.navigator { grid-area: nav; border-right: 1px solid var(--seam-strong); }
+
+.navlist { display: flex; flex-direction: column; padding: var(--space-2) 0; }
+.navlist-item {
+  height: var(--row-h);
+  display: flex; align-items: center;
+  padding: 0 var(--space-3);
+  border-left: 2px solid transparent;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   letter-spacing: .04em;
-  text-transform: uppercase;
-  cursor: pointer;
-  border: 0; background: transparent;
-  width: calc(100% - var(--space-4));
-  text-align: left;
-  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
   text-decoration: none;
-  position: relative;
+}
+.navlist-item:hover { background: var(--bg-hover); color: var(--text); text-decoration: none; }
+.navlist-item.active {
+  background: var(--bg-overlay); color: var(--text); border-left-color: var(--backlight);
 }
 
-.sidenav-item:hover { background: var(--bg-hover); color: var(--text); text-decoration: none; }
-.sidenav-item.active { background: var(--bg-overlay); color: var(--text); }
-.sidenav-item.active::before {
-  content: ""; position: absolute; left: 0; top: 0;
-  width: 2px; height: 100%; background: var(--brand);
-}
+/* ── inspector ──────────────────────────────────────────────────────────── */
 
-.sidenav-item .ic { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.5; flex-shrink: 0; }
-/* The count is a number, not a notification: right-aligned mono, no chip. */
-.sidenav-item .badge {
-  margin-left: auto;
-  background: transparent;
-  color: var(--text-subtle);
-  border-color: transparent;
-  border-radius: 0;
+.inspector { grid-area: insp; border-left: 1px solid var(--seam-strong); }
+.inspector .pane-body { padding: 0 var(--space-3) var(--space-3); }
+
+/* ── work surface ───────────────────────────────────────────────────────── */
+
+.work { grid-area: work; }
+
+/* ── log dock ───────────────────────────────────────────────────────────── */
+
+.dock { grid-area: dock; border-top: 1px solid var(--seam-strong); }
+.dock-head {
+  height: var(--head-h); flex: 0 0 auto;
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 0 var(--space-2);
+  background: var(--pane-head);
+  box-shadow: inset 0 1px 0 var(--seam-light);
+}
+.dock-tabs { display: flex; align-items: center; min-width: 0; }
+
+/* ── status bar ─────────────────────────────────────────────────────────── */
+
+.status {
+  grid-area: status;
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 0 var(--space-3);
+  background: var(--pane-head);
+  border-top: 1px solid var(--seam-strong);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  padding: 0;
-  min-width: 0;
-  text-align: right;
-  line-height: 1;
-  font-weight: 500;
+  color: var(--text-subtle);
+  white-space: nowrap; overflow: hidden;
+}
+.status b { font-weight: 600; color: var(--text-muted); }
+.status-sep { width: 1px; height: 10px; background: var(--seam-strong); flex-shrink: 0; }
+.status-right { margin-left: auto; display: flex; align-items: center; gap: var(--space-2); }
+.status code {
+  background: transparent; border: 0; padding: 0; color: var(--text-muted); font-size: inherit;
+}
+
+/* ── breakpoints ────────────────────────────────────────────────────────── */
+
+/* Under 1180 px the table needs the width more than the inspector does; W7 brings the
+ * inspector back as a sheet over the work surface. */
+@media (max-width: 1180px) {
+  .workbench { grid-template-columns: var(--rail-w) var(--nav-w) minmax(0, 1fr) 0; }
+  .workbench > .inspector { display: none; }
+}
+
+/* The phone has no panes: one scrolling surface and the bottom nav, as before. These rules
+ * sit after the pane and rail ones on purpose — `display: none` has to win the cascade
+ * against `.pane { display: flex }`, or the hidden regions get auto-placed into the
+ * one-column grid and shove the work surface off screen. */
+@media (max-width: 720px) {
+  .workbench {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--bar-h) minmax(0, 1fr) var(--bottomnav-h);
+    grid-template-areas:
+      "bar"
+      "work"
+      "bottomnav";
+  }
+  .rail, .navigator, .inspector, .dock, .status { display: none; }
 }
 
 
@@ -1072,12 +1150,13 @@ td .row-link:hover { color: var(--brand); }
 
 .log-page {
   display: flex; flex-direction: column;
-  height: calc(100vh - var(--topbar-h) - var(--space-6));
-  height: calc(100dvh - var(--topbar-h) - var(--space-6));
+  /* The work pane's height, minus the chrome above and below it: bar, status, dock strip and
+   * its own pane head. The dock replaces this page once W5 lands. */
+  height: calc(100dvh - var(--bar-h) - var(--status-h) - var(--dock-collapsed-h) - var(--head-h));
   margin: calc(-1 * var(--space-4));
 }
 @media (max-width: 720px) {
-  .log-page { height: calc(100dvh - var(--topbar-h) - var(--bottomnav-h)); margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-3)); }
+  .log-page { height: calc(100dvh - var(--bar-h) - var(--bottomnav-h)); margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-3)); }
 }
 
 .log-page-head {
@@ -1284,8 +1363,7 @@ td .row-link:hover { color: var(--brand); }
 
 @media (max-width: 480px) {
   .brand-name { font-size: var(--text-base); }
-  .topbar { padding: 0 var(--space-3); gap: var(--space-2); }
-  .topbar-status { display: none; }
+  .bar { padding: 0 var(--space-2); gap: var(--space-2); }
   .btn { height: 40px; }
   .btn-sm { height: 32px; }
   .stat-num { font-size: var(--text-xl); }
@@ -1356,25 +1434,15 @@ td .row-link:hover { color: var(--brand); }
 .toggle input:checked + .toggle-track { background: var(--brand); border-color: var(--brand); }
 .toggle input:checked + .toggle-track::after { transform: translateX(14px); background: var(--text-inverse); }
 
-.sidenav-item.active .badge { background: transparent; color: var(--brand); border-color: transparent; }
+/* ── surfaces ───────────────────────────────────────────────────────────── */
 
-@media (max-width: 720px) { .sidenav { display: none; } }
-
-/* ── main ───────────────────────────────────────────────────────────────── */
-
-main {
-  grid-area: main;
-  padding: var(--space-4);
-  max-width: 1500px;
-  width: 100%;
-}
+/* One section is on screen at a time; the shell around it never changes. */
+.surface { display: none; padding: var(--space-4); }
+.surface.active { display: block; }
 
 @media (max-width: 720px) {
-  main { padding: var(--space-4) var(--space-3) calc(var(--space-7) + env(safe-area-inset-bottom, 0px)); }
+  .surface { padding: var(--space-4) var(--space-3) calc(var(--space-7) + env(safe-area-inset-bottom, 0px)); }
 }
-
-.panel { display: none; }
-.panel.active { display: block; }
 
 
 img, svg { display: block; max-width: 100%; }

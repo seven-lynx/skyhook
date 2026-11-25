@@ -236,6 +236,12 @@ function navigate(hash) {
   else window.location.hash = hash;
 }
 function isPiNode() { return /pi/i.test(state.nodeId || ""); }
+
+// The pane head is the section's title bar, so one map is the whole naming rule.
+const ROUTE_TITLES = {
+  dashboard: "Dashboard", seeders: "Seeders", pipeline: "Pipeline",
+  stats: "Stats", curation: "Curation", timer: "Timer", settings: "Settings",
+};
 function applyNodeVisibility() {
   const show = isPiNode();
   $$("[data-pi-only]").forEach((el) => { el.style.display = show ? "" : "none"; });
@@ -244,8 +250,13 @@ function applyNodeVisibility() {
 function handleRouteChange() {
   const r = parseRoute();
   state.route = r;
-  $$(".panel").forEach((p) => p.classList.toggle("active", p.dataset.route === r.name));
-  $$(".sidenav-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === r.name));
+  $$(".surface").forEach((p) => p.classList.toggle("active", p.dataset.route === r.name));
+  $$(".rail-item, .navlist-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === r.name));
+  // The pane head names the section; a log route names its source instead.
+  const workTitle = $("#workTitle");
+  if (workTitle) workTitle.textContent = r.name === "log" ? (r.params.source || "log") : ROUTE_TITLES[r.name] || r.name;
+  const statusRoute = $("#statusRoute");
+  if (statusRoute) statusRoute.textContent = r.name;
   if (r.name === "timer" && !isPiNode()) { navigate("#/"); return; }
   if (r.name === "dashboard") renderDashboard();
   if (r.name === "seeders") renderSeeders();
