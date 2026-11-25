@@ -21,22 +21,43 @@ import { getConfig, nodeId } from "../config.js";
 import { ensureFlareSolverr, stopFlareSolverr } from "../core/cloudflare.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const cfg = getConfig();
+/**
+ * Paths, resolved per call rather than at import.
+ *
+ * Two reasons: importing this module must not read config (the rest of `src/`
+ * does not, and `src/config.js:16-19` is the only sanctioned exception), and a
+ * host process — a desktop "open folder", a test, a second project — can
+ * repoint `getConfig()` without restarting.
+ */
+const paths = () => {
+  const c = getConfig();
+  return {
+    scriptsDir: c.seedersDir,
+    manifestFile: c.manifestFile,
+    descriptionsFile: c.descriptionsFile,
+    cacheDir: c.dataDir,
+    stateDb: c.stateDb,
+    logsDir: c.logDir,
+    stagedDir: c.stagedDir,
+    timerFile: join(c.dataDir, "skyhook-seed.timer"),
+  };
+};
 
-export const SCRIPTS_DIR  = cfg.seedersDir;     // where seed-*.js live
-export const ROOT         = process.cwd();     // spawn cwd
-export const MANIFEST_FILE = cfg.manifestFile;
-export const DESCRIPTIONS_FILE = cfg.descriptionsFile;
-export const CACHE_DIR    = cfg.dataDir;
-export const STATE_DB     = cfg.stateDb;
-export const LOGS_DIR     = cfg.logDir;
-export const STAGED_DIR   = cfg.stagedDir;
-export const TIMER_FILE   = join(cfg.dataDir, "skyhook-seed.timer");
+export const scriptsDir = () => paths().scriptsDir;   // where seed-*.js live
+/** Spawn cwd for a seeder, read at call time (a host may `chdir()`). */
+export function rootDir() { return process.cwd(); }
+export const manifestFile = () => paths().manifestFile;
+export const descriptionsFile = () => paths().descriptionsFile;
+export const cacheDir = () => paths().cacheDir;
+export const stateDb = () => paths().stateDb;
+export const logsDir = () => paths().logsDir;
+export const stagedDir = () => paths().stagedDir;
+export const timerFile = () => paths().timerFile;
 
-// Seeder hang guards (tunable via env): kill a run that goes silent for too
-// long, and optionally cap total run duration (0 = disabled).
-export const STALL_TIMEOUT_MS = Number(process.env.SKYHOOK_STALL_TIMEOUT_MS ?? 30 * 60 * 1000);
-export const MAX_DURATION_MS  = Number(process.env.SKYHOOK_MAX_DURATION_MS ?? 0);
+// Seeder hang guards, read per run: the systemd unit, a script and a host all
+// set these, and none of them should have to be known at import time.
+export const stallTimeoutMs = () => Number(process.env.SKYHOOK_STALL_TIMEOUT_MS ?? 30 * 60 * 1000);
+export const maxDurationMs = () => Number(process.env.SKYHOOK_MAX_DURATION_MS ?? 0);
 
 export const CADENCE_MS = {
   hourly: 3600e3,
@@ -105,30 +126,33 @@ function parseHeader(text) {
 
 /** Discover every `seed-*.js|mjs|cjs` file in the configured seeders dir. */
 export function discoverSeeders() {
-  if (!existsSync(SCRIPTS_DIR)) return [];
-  return readdirSync(SCRIPTS_DIR)
+  const dir = paths().scriptsDir;
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
     .filter((f) => /^seed-.+\.(js|mjs|cjs)$/.test(f))
     .sort()
     .map((script) => {
       const source = script.replace(/^seed-/, "").replace(/\.(js|mjs|cjs)$/, "");
-      const header = readFileSync(join(SCRIPTS_DIR, script), "utf8").slice(0, 2000);
+      const header = readFileSync(join(dir, script), "utf8").slice(0, 2000);
       return { script, source, ...parseHeader(header) };
     });
 }
 
 export function loadManifest() {
-  if (!existsSync(MANIFEST_FILE)) return { seeders: [], defaults: {} };
-  try { return JSON.parse(readFileSync(MANIFEST_FILE, "utf8")); } catch { return { seeders: [], defaults: {} }; }
+  const file = paths().manifestFile;
+  if (!existsSync(file)) return { seeders: [], defaults: {} };
+  try { return JSON.parse(readFileSync(file, "utf8")); } catch { return { seeders: [], defaults: {} }; }
 }
 
 function saveManifest(manifest) {
-  writeFileSync(MANIFEST_FILE, JSON.stringify(manifest, null, 2) + "\n");
+  writeFileSync(paths().manifestFile, JSON.stringify(manifest, null, 2) + "\n");
 }
 
 /** Load generated seeder descriptions (seeders-descriptions.json), if present. */
 export function loadDescriptions() {
-  if (!existsSync(DESCRIPTIONS_FILE)) return {};
-  try { return JSON.parse(readFileSync(DESCRIPTIONS_FILE, "utf8")); } catch { return {}; }
+  const file = paths().descriptionsFile;
+  if (!existsSync(file)) return {};
+  try { return JSON.parse(readFileSync(file, "utf8")); } catch { return {}; }
 }
 
 /**
@@ -182,8 +206,9 @@ export function resolveSeeder(query, index = buildIndex()) {
 // ── State (SQLite) ──────────────────────────────────────────────────────────
 
 export function openState() {
-  mkdirSync(CACHE_DIR, { recursive: true });
-  const db = new Database(STATE_DB);
+  const p = paths();
+  mkdirSync(p.cacheDir, { recursive: true });
+  const db = new Database(p.stateDb);
   db.pragma("journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS seeders (
@@ -304,7 +329,7 @@ function safe(s) { return String(s).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 8
 
 /** Absolute path to a seeder's log file (used by the live-log API). */
 export function logPath(source) {
-  return join(LOGS_DIR, `${safe(source)}.log`);
+  return join(paths().logsDir, `${safe(source)}.log`);
 }
 
 /** Pull the "Staged: X, Dead: Y" (or Inserted/Skipped) summary from output. */
@@ -432,14 +457,14 @@ function killTree(child) {
  */
 export function runJob({ key, scriptPath, args = [], env = {} }) {
   return new Promise((resolvePromise) => {
-    mkdirSync(LOGS_DIR, { recursive: true });
+    mkdirSync(paths().logsDir, { recursive: true });
     const logFile = logPath(key);
     const logStream = createWriteStream(logFile, { flags: "a" });
     logStream.write(`\n── job ${key} ${new Date().toISOString()} ──\n`);
 
     let output = "";
     const child = spawn(process.execPath, [scriptPath, ...args], {
-      cwd: ROOT,
+      cwd: rootDir(),
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
@@ -473,7 +498,10 @@ export function runJob({ key, scriptPath, args = [], env = {} }) {
 
 export function runOne(seeder, opts = {}) {
   return new Promise((resolvePromise) => {
-    const scriptPath = join(SCRIPTS_DIR, seeder.script);
+    const dirs = paths();
+    const stallMs = stallTimeoutMs(); // read per run: a host may set these
+    const maxMs = maxDurationMs();
+    const scriptPath = join(dirs.scriptsDir, seeder.script);
     if (!existsSync(scriptPath)) {
       resolvePromise({ seeder, status: "missing", durationMs: 0, result: null, error: "script not found" });
       return;
@@ -492,8 +520,8 @@ export function runOne(seeder, opts = {}) {
     }
     if (opts.flareSolverrManaged) env.SKYHOOK_FLARESOLVERR_MANAGED = "1";
 
-    mkdirSync(LOGS_DIR, { recursive: true });
-    const logFile = join(LOGS_DIR, `${safe(seeder.source)}.log`);
+    mkdirSync(dirs.logsDir, { recursive: true });
+    const logFile = join(dirs.logsDir, `${safe(seeder.source)}.log`);
     const logStream = createWriteStream(logFile, { flags: "a" });
     logStream.write(`\n── run ${new Date().toISOString()} ──\n`);
 
@@ -503,7 +531,7 @@ export function runOne(seeder, opts = {}) {
     let finished = false;
     let killReason = null;   // "stalled" | "max-duration" | null
     const child = spawn(process.execPath, cmdArgs, {
-      cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: rootDir(), env, stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
     activeRuns.set(seeder.source, { child, startedAt: new Date().toISOString(), logFile, script: seeder.script });
@@ -521,22 +549,22 @@ export function runOne(seeder, opts = {}) {
     // Hang guard #1: stall watchdog — kill if the child stops emitting output.
     const stallTimer = setInterval(() => {
       if (finished || killReason) return;
-      if (Date.now() - lastOutputAt >= STALL_TIMEOUT_MS) {
+      if (Date.now() - lastOutputAt >= stallMs) {
         killReason = "stalled";
-        logStream.write(`\n── stalled: no output for ${Math.round(STALL_TIMEOUT_MS / 60000)}m — killing ──\n`);
+        logStream.write(`\n── stalled: no output for ${Math.round(stallMs / 60000)}m — killing ──\n`);
         killTree(child);
       }
     }, 30_000);
 
     // Hang guard #2: optional hard cap on total run duration (0 = disabled).
     let maxDurTimer = null;
-    if (MAX_DURATION_MS > 0) {
+    if (maxMs > 0) {
       maxDurTimer = setTimeout(() => {
         if (finished || killReason) return;
         killReason = "max-duration";
-        logStream.write(`\n── max duration ${Math.round(MAX_DURATION_MS / 60000)}m exceeded — killing ──\n`);
+        logStream.write(`\n── max duration ${Math.round(maxMs / 60000)}m exceeded — killing ──\n`);
         killTree(child);
-      }, MAX_DURATION_MS);
+      }, maxMs);
     }
 
     child.on("close", async (code, signal) => {
@@ -553,8 +581,8 @@ export function runOne(seeder, opts = {}) {
       const status = code === 0 ? "ok" : (timedOut ? "timeout" : (stopped ? "stopped" : `error(${code ?? "signal"})`));
       const error = code === 0 ? null : (timedOut
         ? (killReason === "stalled"
-            ? `stalled (no output for ${Math.round(STALL_TIMEOUT_MS / 60000)}m)`
-            : `max duration exceeded (${Math.round(MAX_DURATION_MS / 60000)}m)`)
+            ? `stalled (no output for ${Math.round(stallMs / 60000)}m)`
+            : `max duration exceeded (${Math.round(maxMs / 60000)}m)`)
         : (stopped ? "stopped" : (extractError(output) ?? `exit code ${code}`)));
 
       // Record failures in the central master log (seeding-runs.jsonl) so they
@@ -709,8 +737,9 @@ WantedBy=timers.target
 
 export function writeTimer(seeders = buildIndex()) {
   const { unit } = emitTimer(seeders);
-  mkdirSync(dirname(TIMER_FILE), { recursive: true });
-  writeFileSync(TIMER_FILE, unit);
+  const file = paths().timerFile;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, unit);
   return unit;
 }
 
@@ -846,7 +875,7 @@ export function createSeeder({ url, displayName, source, category, subcategory, 
   const name = String(displayName || "").trim() || host;
   const cleanDesc = String(description || "").replace(/[\r\n]+/g, " ").trim();
 
-  writeFileSync(join(SCRIPTS_DIR, script), buildSeederFile({
+  writeFileSync(join(paths().scriptsDir, script), buildSeederFile({
     slug,
     displayName: name,
     siteDomain: host,
@@ -873,7 +902,7 @@ export function deleteSeeder(query) {
   manifest.seeders = manifest.seeders.filter((e) => e.script !== seeder.script);
   if (manifest.seeders.length !== before) saveManifest(manifest);
 
-  try { unlinkSync(join(SCRIPTS_DIR, seeder.script)); } catch {}
+  try { unlinkSync(join(paths().scriptsDir, seeder.script)); } catch {}
 
   const db = openState();
   try {

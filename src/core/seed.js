@@ -387,6 +387,22 @@ export function livenessVerdict(status) {
   return "dead";
 }
 
+/**
+ * Is this run in offline staging mode?
+ *
+ * `SKYHOOK_STAGE_ONLY=1` always wins: that is what the engine sets on a child
+ * (`seeder-engine.js` runOne) and what `docs/` tells a stage-only host to use.
+ * `--stage-only` is the *seeder's own* flag, so it counts only when the process
+ * was started on a `seed-*.js` entry point — a host process (`skyhook serve`, a
+ * test, a desktop shell) has its own argv, and a `--stage-only` there must not
+ * silently redirect this pipeline into staging.
+ */
+export function resolveStageOnly(argv = process.argv, env = process.env) {
+  if (env.SKYHOOK_STAGE_ONLY === "1") return true;
+  const entry = String(argv[1] || "").replace(/\\/g, "/");
+  return /\/seed[^/]*\.(js|mjs|cjs)$/.test(entry) && argv.slice(2).includes("--stage-only");
+}
+
 export async function upsertUrls(rows, {
   fetchOg          = true,
   verbose          = true,
@@ -395,16 +411,17 @@ export async function upsertUrls(rows, {
   maxPerDomain     = undefined,
   checkpointId     = undefined,
   bypassCloudflare = false,
+  stageOnly        = resolveStageOnly(),
 } = {}) {
   const log = verbose ? console.log : () => {};
 
-  // Offline staging mode: when SKYHOOK_STAGE_ONLY=1 (or --stage-only is passed),
-  // redirect the whole pipeline to write JSONL to .skyhook/staged/ instead
-  // of touching Supabase. This lets the Raspberry Pi harvest + enrich URLs with
-  // no DB access, so the PC can pull them over the LAN, tag them with the local
-  // LLM, and perform the single tagged-only Supabase write.
-  const STAGE_ONLY = process.env.SKYHOOK_STAGE_ONLY === "1" || process.argv.includes("--stage-only");
-  if (STAGE_ONLY) {
+  // Offline staging mode: redirect the whole pipeline to write JSONL to
+  // .skyhook/staged/ instead of touching Supabase. This lets the Raspberry Pi
+  // harvest + enrich URLs with no DB access, so the PC can pull them over the
+  // LAN, tag them with the local LLM, and perform the single tagged-only
+  // Supabase write. The caller may force it; otherwise it comes from
+  // `resolveStageOnly()` (env, or the seeder's own `--stage-only`).
+  if (stageOnly) {
     const staged = await stageUrls(rows, { fetchOg, verbose, checkLive, requireTitle, maxPerDomain, checkpointId, bypassCloudflare });
     return { inserted: staged.staged, skipped: staged.skipped ?? 0, dead: staged.dead ?? 0, staged: true };
   }

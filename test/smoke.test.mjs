@@ -9,7 +9,7 @@ import { getConfig } from "../src/config.js";
 import { aggregateRows } from "../src/core/analytics.js";
 import { mergeRows, filterRows, readStaged, writeStagedSource } from "../src/core/staged.js";
 import { pruneStaged, clearDiscovery } from "../src/core/data.js";
-import { livenessVerdict } from "../src/core/seed.js";
+import { livenessVerdict, resolveStageOnly } from "../src/core/seed.js";
 import { mergeRemoteRows } from "../src/core/sync.js";
 
 const root = process.cwd();
@@ -179,6 +179,17 @@ test("livenessVerdict drops a row only on an answer, never on a refusal", () => 
     assert.equal(livenessVerdict(s), "unknown", `${s} says nothing about the page`);
   }
   for (const s of [400, 401, 404, 410, 418, 451]) assert.equal(livenessVerdict(s), "dead", `${s} is an answer`);
+});
+
+test("resolveStageOnly honours the seeder's own flag and never a host's", () => {
+  // `node seeders/seed-x.js --stage-only` is the documented manual invocation.
+  assert.equal(resolveStageOnly(["node", "seeders/seed-art.js", "--stage-only"], {}), true);
+  assert.equal(resolveStageOnly(["node", "seeders/seed-art.js"], {}), false);
+  // A host process has its own argv: its flag must not redirect staging.
+  assert.equal(resolveStageOnly(["node", "bin/skyhook.js", "run", "--stage-only"], {}), false);
+  assert.equal(resolveStageOnly(["node", "--test", "--stage-only"], {}), false);
+  // The env var is the contract the engine sets and the docs describe.
+  assert.equal(resolveStageOnly(["node", "bin/skyhook.js"], { SKYHOOK_STAGE_ONLY: "1" }), true);
 });
 
 test("mergeRemoteRows merges peer rows with URL dedup", () => {

@@ -16,7 +16,7 @@
 import {
   buildIndex, openState, getState, listRuns, isDue, runPool, dueSeeders,
   editManifest, enableSeeder, disableSeeder, resolveSeeder, emitTimer, writeTimer,
-  CADENCES, CADENCE_MS, LOGS_DIR, SCRIPTS_DIR,
+  CADENCES, CADENCE_MS, scriptsDir,
 } from "../src/engine/seeder-engine.js";
 import { nodeId, getConfig } from "../src/config.js";
 import { routeSeeders, peerFor, runRemote, getPeers, pullStaged } from "../src/core/remote.js";
@@ -302,7 +302,7 @@ async function cmdRunDue(a) {
 
   if (dryRun) {
     console.log(`\n[dry-run] Would run ${due.length} seeder(s) (tier=${tier}${source ? `, source=${source}` : ""}${force ? ", forced" : ""}):\n`);
-    for (const s of due) console.log(`  node ${SCRIPTS_DIR}/${s.script} --stage-only${s.maxAgeDays != null ? ` --max-age-days ${s.maxAgeDays}` : ""}`);
+    for (const s of due) console.log(`  node ${scriptsDir()}/${s.script} --stage-only${s.maxAgeDays != null ? ` --max-age-days ${s.maxAgeDays}` : ""}`);
     console.log("");
     db.close();
     return;
@@ -422,7 +422,7 @@ function cmdHistory(a) {
 // ── validate ────────────────────────────────────────────────────────────────
 function cmdValidate(a) {
   console.log("Running validate-seeders.mjs (needs Supabase creds — PC only)...\n");
-  const res = spawnSync(process.execPath, [join(SCRIPTS_DIR, "validate-seeders.mjs"), ...a], { stdio: "inherit" });
+  const res = spawnSync(process.execPath, [join(scriptsDir(), "validate-seeders.mjs"), ...a], { stdio: "inherit" });
   process.exit(res.status ?? 1);
 }
 

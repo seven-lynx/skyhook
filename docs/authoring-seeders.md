@@ -70,6 +70,11 @@ CLI flags accepted by any seeder: `--no-cache`, `--aggressive`, `--with-headless
 `--stage-only`. (`--max-age-days N` is an engine/schedule flag — set it via
 `skyhook schedule … --max-age-days N`, not on the seeder itself.)
 
+`--stage-only` belongs to the seeder's own invocation: it counts only when the
+process was started on a `seed-*.js` entry point. A host that imports a seeder
+(`skyhook serve`, a test, a desktop shell) sets `SKYHOOK_STAGE_ONLY=1` instead —
+its own `--stage-only` must not redirect the pipeline.
+
 Environment variables:
 
 | Variable | Effect |
