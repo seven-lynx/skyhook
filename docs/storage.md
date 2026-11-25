@@ -44,6 +44,10 @@ Each adapter maps Skyhook's **canonical fields** onto your table/columns:
 - `columns` — canonical field → **your** column name. Unmapped fields are dropped.
 - `extra` — fixed values merged into every row (e.g. `approved: true`).
 
+A file that does not parse stops a `push` with `schema <path> is not valid JSON:
+<message> (check config/schema.json)` — the path is the one being read, so a
+trailing comma in a hand-edited file names itself.
+
 ## Supabase
 
 ```json

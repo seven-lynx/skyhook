@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { loadCategories } from "../src/adapters/categories/index.js";
-import { createStorage } from "../src/adapters/storage/index.js";
+import { createStorage, loadSchema } from "../src/adapters/storage/index.js";
 import { buildPrompt, tag } from "../src/adapters/tagging/index.js";
 import { getConfig } from "../src/config.js";
 import { aggregateRows } from "../src/core/analytics.js";
@@ -39,6 +39,24 @@ test("stage storage adapter dedupes by URL", async () => {
   assert.deepEqual(first, { inserted: 2, skipped: 0 });
   assert.deepEqual(second, { inserted: 1, skipped: 0 });
   rmSync(cfg.stagedDir, { recursive: true, force: true });
+});
+
+test("loadSchema names the file and the fix when the mapping is not valid JSON", () => {
+  const dir = join(root, ".tmp-schema");
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "schema.json");
+  // A trailing comma is the classic hand-edited break.
+  writeFileSync(file, '{ "columns": { "url": "link", }, }\n');
+  assert.throws(
+    () => loadSchema(file),
+    (err) => err.message.includes(`schema ${file} is not valid JSON:`)
+      && err.message.includes("(check config/schema.json)"),
+  );
+  // An absent file is not an error — the adapters map the row as-is.
+  assert.equal(loadSchema(join(dir, "absent.json")), null);
+  assert.equal(loadSchema(null), null);
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("tagging prompt placeholders are substituted", () => {
