@@ -14,7 +14,7 @@ export function loadSettings() {
   const file = getConfig().settingsFile;
   if (!file || !existsSync(file)) return {};
   try {
-    const raw = JSON.parse(readFileSync(file, "utf8"));
+    const raw = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
     return raw && typeof raw === "object" ? raw : {};
   } catch {
     return {};
