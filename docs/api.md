@@ -18,6 +18,12 @@ non-loopback bind with no token is refused at startup instead of warned about.
 With no token and the default bind, the API is reachable from this machine only —
 fine for a single-box install, not for a LAN or the internet.
 
+## Request bodies
+
+`POST` bodies are JSON. A body over 1 MB answers `413 { error: "request body too
+large" }` and unparseable JSON answers `400 { error: "request body is not valid
+JSON" }` — neither hangs the request, and the listener keeps serving.
+
 ## Endpoints
 
 ### Seeders & scheduling

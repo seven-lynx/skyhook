@@ -132,6 +132,29 @@ test("api: routes answer, unknown paths 404, a POST needs the shared token", asy
     assert.equal(toggled.status, 200);
     assert.equal((await toggled.json()).settings.flaresolverr.enabled, true);
 
+    // A5: a body past 1 MB is answered with 413 instead of hanging the handler
+    // (`readBody` used to destroy the socket, so `end` never fired), and
+    // unparseable JSON answers 400 rather than being read as `{}`.
+    const huge = await fetch(`${base}/api/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
+      body: JSON.stringify({ sources: [], pad: "x".repeat(2_000_000) }),
+    });
+    assert.equal(huge.status, 413);
+    assert.equal((await huge.json()).error, "request body too large");
+
+    const garbage = await fetch(`${base}/api/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
+      body: "{oops",
+    });
+    assert.equal(garbage.status, 400);
+    assert.equal((await garbage.json()).error, "request body is not valid JSON");
+
+    // ...and the same listener still answers afterwards.
+    const alive = await fetch(`${base}/api/health`);
+    assert.equal(alive.status, 200);
+
     // The state DB opened on the temp path, not on the repo's `.skyhook/`.
     assert.equal(existsSync(join(stateDir, "seeder-state.db")), true);
   } finally {

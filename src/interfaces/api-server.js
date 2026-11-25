@@ -78,11 +78,37 @@ function send(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
+/** A body the handler must not see; the request listener answers it. */
+class BodyError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/**
+ * Read and parse a JSON request body.
+ *
+ * A body past the limit is drained and rejected, never `req.destroy()`ed:
+ * destroying the socket means `end` never fires, so the promise never settles
+ * and the handler waits forever with nothing in the log. Rejecting with a
+ * `BodyError` lets the one catch in the request listener answer 413/400.
+ */
 function readBody(req) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let body = "";
-    req.on("data", (d) => { body += d; if (body.length > 1e6) req.destroy(); });
-    req.on("end", () => { try { resolve(body ? JSON.parse(body) : {}); } catch { resolve({}); } });
+    let over = false;
+    req.on("data", (d) => {
+      if (over) return; // keep draining so the client is not left hanging
+      body += d;
+      if (body.length > 1e6) { over = true; body = ""; }
+    });
+    req.on("end", () => {
+      if (over) return reject(new BodyError(413, "request body too large"));
+      if (!body.trim()) return resolve({});
+      try { resolve(JSON.parse(body)); } catch { reject(new BodyError(400, "request body is not valid JSON")); }
+    });
+    req.on("error", () => reject(new BodyError(400, "request body could not be read")));
   });
 }
 
@@ -518,6 +544,7 @@ export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
 
       return send(res, 404, { error: "not found" });
     } catch (err) {
+      if (err instanceof BodyError) return send(res, err.status, { error: err.message });
       return send(res, 500, { error: err.message });
     }
   });
