@@ -78,4 +78,4 @@ fine for a single-box install, not for a LAN or the internet.
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/settings` | Node settings (id, allowRemote, peers, tagging platform) |
-| POST | `/api/settings` | `{ allowRemote?, taggingPlatform? }` — toggle node mode or select the active LLM platform |
+| POST | `/api/settings` | `{ allowRemote?, taggingPlatform?, flaresolverr? }` — toggle node mode or select the active LLM platform. `flaresolverr.exePath` and `.url` are config-only: a body carrying either answers 400 |

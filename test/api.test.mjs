@@ -13,7 +13,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { loadConfig } from "../src/config.js";
@@ -103,6 +103,34 @@ test("api: routes answer, unknown paths 404, a POST needs the shared token", asy
     });
     assert.equal(allowed.status, 200);
     assert.deepEqual(await allowed.json(), { ok: true, stopped: [] });
+
+    // A4: the FlareSolverr executable path is config-only. A body that carries
+    // it is refused before `saveSettings` runs, so the settings file does not
+    // exist afterwards. This assertion fails if the route accepts `exePath`.
+    const settingsFile = join(stateDir, "settings.json");
+    const before = existsSync(settingsFile) ? readFileSync(settingsFile, "utf8") : null;
+    const spawnAttempt = await fetch(`${base}/api/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
+      body: JSON.stringify({ flaresolverr: { enabled: true, exePath: "C:\\Windows\\System32\\cmd.exe" } }),
+    });
+    assert.equal(spawnAttempt.status, 400);
+    assert.match(
+      (await spawnAttempt.json()).error,
+      /flaresolverr\.exePath is set in skyhook\.config\.json, not over the API/,
+    );
+    const after = existsSync(settingsFile) ? readFileSync(settingsFile, "utf8") : null;
+    assert.equal(after, before);
+
+    // ...and the same toggle without the path is still accepted, so the route
+    // is narrowed rather than closed.
+    const toggled = await fetch(`${base}/api/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer test-token" },
+      body: JSON.stringify({ flaresolverr: { enabled: true, port: 8191 } }),
+    });
+    assert.equal(toggled.status, 200);
+    assert.equal((await toggled.json()).settings.flaresolverr.enabled, true);
 
     // The state DB opened on the temp path, not on the repo's `.skyhook/`.
     assert.equal(existsSync(join(stateDir, "seeder-state.db")), true);

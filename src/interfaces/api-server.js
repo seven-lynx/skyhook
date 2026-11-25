@@ -351,14 +351,22 @@ export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
 
       if (method === "POST" && path === "/api/settings") {
         const body = await readBody(req);
+        // The executable path and the base URL decide what `spawn` runs
+        // (`src/core/cloudflare.js`), so they are static-config only: a
+        // settings toggle must never become a process-launch primitive.
+        for (const key of ["exePath", "url"]) {
+          if (body.flaresolverr && body.flaresolverr[key] !== undefined) {
+            return send(res, 400, {
+              error: `flaresolverr.${key} is set in skyhook.config.json, not over the API`,
+            });
+          }
+        }
         const patch = {};
         if (typeof body.allowRemote === "boolean") patch.allowRemote = body.allowRemote;
         if (typeof body.taggingPlatform === "string") patch.taggingPlatform = body.taggingPlatform;
         if (body.flaresolverr && typeof body.flaresolverr === "object") {
           patch.flaresolverr = {
             enabled: typeof body.flaresolverr.enabled === "boolean" ? body.flaresolverr.enabled : undefined,
-            exePath: typeof body.flaresolverr.exePath === "string" ? body.flaresolverr.exePath : undefined,
-            url: typeof body.flaresolverr.url === "string" ? body.flaresolverr.url : undefined,
             port: body.flaresolverr.port != null ? parseInt(body.flaresolverr.port, 10) || 8191 : undefined,
             maxTimeout: body.flaresolverr.maxTimeout != null ? parseInt(body.flaresolverr.maxTimeout, 10) || 60000 : undefined,
           };
