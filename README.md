@@ -124,7 +124,7 @@ Env fallbacks: `FLARESOLVERR_ENABLED=1`, `FLARESOLVERR_EXE`, `FLARESOLVERR_URL`,
 | `settings` | View or toggle node settings (`allow-remote`) |
 | `init` | Scaffold `skyhook.config.json`, `config/`, `seeders/`, `.skyhook/` |
 | `tui` | Interactive terminal menu |
-| `serve` | HTTP JSON API + web GUI (`--port`, default 4173) |
+| `serve` | HTTP JSON API + web GUI (`--port` 4173, `--host` 127.0.0.1) |
 
 Run `node bin/skyhook.js help <command>` for a command's flags.
 

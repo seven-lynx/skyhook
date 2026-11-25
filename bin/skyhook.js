@@ -91,7 +91,7 @@ function helpFor(cmd) {
     settings:   "settings                       (view)  |  settings allow-remote on|off",
     init:       "init [--provider stage|sqlite|supabase|postgres]",
     tui: "tui",
-    serve:     "serve [--port N]  (default 4173)",
+    serve:     "serve [--port N] [--host ADDR]  (default 127.0.0.1:4173)",
     help:      "help [<command>]",
   };
   console.log(`Usage: skyhook ${details[name] ?? name}`);
@@ -708,9 +708,12 @@ async function cmdImportStaged(a) {
 // ── serve ───────────────────────────────────────────────────────────────────
 async function cmdServe(a) {
   const port = parseInt(val(a, "--port", "4173"), 10) || 4173;
+  // Loopback unless asked otherwise; a non-loopback host needs the shared token
+  // and the server refuses before it listens (`src/interfaces/api-server.js`).
+  const host = val(a, "--host", "127.0.0.1");
   const { startServer } = await import("../src/interfaces/api-server.js");
   try {
-    startServer(port); // blocks until Ctrl+C
+    startServer(port, { host }); // blocks until Ctrl+C
   } catch (err) {
     // A refusal to bind (an open host with no token) is a message, not a stack.
     console.error(`✘ ${err.message}`);
