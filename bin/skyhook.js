@@ -55,6 +55,7 @@ const COMMANDS = [
   ["init",       "Scaffold a new Skyhook setup (config, config/, seeders/, .skyhook/)"],
   ["tui",        "Interactive menu (terminal control center)"],
   ["serve",      "Start the HTTP JSON API (for the GUI / remote control)"],
+  ["app",        "Open the GUI in a chromeless app window (browser app mode)"],
   ["help",       "Show help (help <cmd> for one command)"],
 ];
 
@@ -92,6 +93,7 @@ function helpFor(cmd) {
     init:       "init [--provider stage|sqlite|supabase|postgres]",
     tui: "tui",
     serve:     "serve [--port N] [--host ADDR]  (default 127.0.0.1:4173)",
+    app:       "app [--port N]  (default: a free port on 127.0.0.1)",
     help:      "help [<command>]",
   };
   console.log(`Usage: skyhook ${details[name] ?? name}`);
@@ -721,6 +723,37 @@ async function cmdServe(a) {
   }
 }
 
+// ── app ─────────────────────────────────────────────────────────────────────
+/**
+ * `skyhook app` — the GUI in a chromeless window, served by a session this
+ * process owns. The port defaults to 0 (a free one) so two projects on one
+ * machine never fight over 4173; Ctrl+C is the documented stop, and it closes the
+ * session rather than leaving the lock file behind.
+ */
+async function cmdApp(a) {
+  const requested = parseInt(val(a, "--port", "0"), 10);
+  const port = Number.isInteger(requested) && requested > 0 ? requested : 0;
+  // Both are imported here, not at module scope: `list` and `run` must not pay
+  // for a listener or a browser lookup they never use.
+  const { startAppSession } = await import("../src/interfaces/app-session.js");
+  const { openAppWindow } = await import("../src/interfaces/app-launcher.js");
+  try {
+    const session = await startAppSession({ port });
+    const opened = openAppWindow(session.baseUrl);
+    const where = opened.mode === "app" ? "App window" : "Browser";
+    console.log(`${where} → ${session.baseUrl}`);
+    console.log("Ctrl+C stops the server and releases the session lock.");
+    process.once("SIGINT", async () => {
+      await session.close();
+      process.exit(0);
+    });
+    // The listener holds the loop open; there is nothing to poll here.
+  } catch (err) {
+    console.error(`✘ ${err.message}`);
+    process.exitCode = 1;
+  }
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
 async function main() {
   const argv = process.argv.slice(2);
@@ -751,6 +784,7 @@ async function main() {
     case "init": cmdInit(args); break;
     case "tui": await cmdTui(); break;
     case "serve": await cmdServe(args); break;
+    case "app": await cmdApp(args); break;
     default:
       console.error(`Unknown command: ${cmd}\n`);
       usage();
