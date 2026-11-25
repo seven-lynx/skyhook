@@ -23,7 +23,7 @@ import {
 import { pipelineStatus, startPipelineJob, isLlmKind } from "./pipeline.js";
 import { nodeId, getConfig } from "../config.js";
 import {
-  routeSeeders, peerFor, runRemote, forwardSchedule, remoteToken,
+  routeSeeders, peerFor, runRemote, forwardSchedule, remoteToken, acceptedTokens,
 } from "../core/remote.js";
 import { loadSettings, saveSettings, settingsView, allowRemote, getActiveTaggingProvider } from "../core/settings.js";
 import { readStaged } from "../core/staged.js";
@@ -146,13 +146,14 @@ export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
     const method = req.method;
 
     try {
-      // Token gate on all mutating requests (shared secret across PC/Pi).
+      // Token gate on all mutating requests: the shared secret across PC/Pi, or the
+      // per-launch token the desktop shell generated for its own window.
       if (method === "POST") {
-        const token = remoteToken();
-        if (token) {
+        const tokens = acceptedTokens();
+        if (tokens.length) {
           const h = req.headers.authorization || "";
           const provided = h.startsWith("Bearer ") ? h.slice(7) : (req.headers["x-skyhook-token"] || "");
-          if (provided !== token) return send(res, 403, { error: "invalid or missing token" });
+          if (!tokens.includes(provided)) return send(res, 403, { error: "invalid or missing token" });
         }
       }
 
@@ -529,11 +530,14 @@ export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
   });
 
   server.listen(port, host, () => {
+    // `port` is what the caller asked for. With `--port 0` — `skyhook app`'s default — the
+    // bound one is only known here, and a banner naming `:0` sends the reader to a dead URL (#17).
+    const bound = server.address()?.port ?? port;
     const shown = host.includes(":") ? `[${host}]` : host;
     const reach = isLoopbackHost(host) ? "loopback only" : "reachable on the network";
-    console.log(`\n🛰  Skyhook seeder API listening on http://${shown}:${port} (${reach})`);
-    console.log(`   GUI:  http://${shown}:${port}/`);
-    console.log(`   API:  http://${shown}:${port}/api/health\n`);
+    console.log(`\n🛰  Skyhook seeder API listening on http://${shown}:${bound} (${reach})`);
+    console.log(`   GUI:  http://${shown}:${bound}/`);
+    console.log(`   API:  http://${shown}:${bound}/api/health\n`);
   });
 
   // This function opens the state DB, so it is also where the handle is

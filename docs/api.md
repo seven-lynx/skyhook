@@ -10,9 +10,12 @@ loopback-only unless `--host` says otherwise.
 
 ## Auth
 
-When `remote.token` (or `SKYHOOK_REMOTE_TOKEN`) is set, every **POST** is rejected
-unless it carries `Authorization: Bearer <token>`. GETs stay open, which is why the
-listener binds `127.0.0.1` unless `--host` names another address, and why a
+When `remote.token` or `SKYHOOK_REMOTE_TOKEN` is set, every **POST** is rejected
+unless it carries `Authorization: Bearer <token>` (or `x-skyhook-token`). Both are
+accepted at once rather than one overriding the other: the configured secret is what
+this node presents to a peer, while `SKYHOOK_REMOTE_TOKEN` is the per-launch
+credential the desktop shell generates for its own window. GETs stay open, which is
+why the listener binds `127.0.0.1` unless `--host` names another address, and why a
 non-loopback bind with no token is refused at startup instead of warned about.
 
 With no token and the default bind, the API is reachable from this machine only —

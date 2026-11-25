@@ -53,13 +53,23 @@ const apiBase = () => {
 };
 
 const REQUEST_TIMEOUT_MS = 15000;
+
+/* The desktop shell injects a per-launch bearer token before any page script runs
+ * (`src-tauri/src/main.rs`, DC7). A browser has no such flag, so its requests are
+ * byte for byte what they were before the shell existed. */
+const desktopToken = () => window.__SKYHOOK_DESKTOP__?.token || null;
+
 async function api(method, path, body) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
+    const headers = {};
+    if (body) headers["Content-Type"] = "application/json";
+    const token = desktopToken();
+    if (token && method === "POST") headers.Authorization = `Bearer ${token}`;
     const res = await fetch(apiBase() + path, {
       method, signal: ctrl.signal,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers: Object.keys(headers).length ? headers : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
     const text = await res.text();
@@ -236,6 +246,12 @@ function navigate(hash) {
   else window.location.hash = hash;
 }
 function isPiNode() { return /pi/i.test(state.nodeId || ""); }
+
+// The pane head is the section's title bar, so one map is the whole naming rule.
+const ROUTE_TITLES = {
+  dashboard: "Dashboard", seeders: "Seeders", pipeline: "Pipeline",
+  stats: "Stats", curation: "Curation", timer: "Timer", settings: "Settings",
+};
 function applyNodeVisibility() {
   const show = isPiNode();
   $$("[data-pi-only]").forEach((el) => { el.style.display = show ? "" : "none"; });
@@ -244,8 +260,13 @@ function applyNodeVisibility() {
 function handleRouteChange() {
   const r = parseRoute();
   state.route = r;
-  $$(".panel").forEach((p) => p.classList.toggle("active", p.dataset.route === r.name));
-  $$(".sidenav-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === r.name));
+  $$(".surface").forEach((p) => p.classList.toggle("active", p.dataset.route === r.name));
+  $$(".rail-item, .navlist-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === r.name));
+  // The pane head names the section; a log route names its source instead.
+  const workTitle = $("#workTitle");
+  if (workTitle) workTitle.textContent = r.name === "log" ? (r.params.source || "log") : ROUTE_TITLES[r.name] || r.name;
+  const statusRoute = $("#statusRoute");
+  if (statusRoute) statusRoute.textContent = r.name;
   if (r.name === "timer" && !isPiNode()) { navigate("#/"); return; }
   if (r.name === "dashboard") renderDashboard();
   if (r.name === "seeders") renderSeeders();
@@ -1577,7 +1598,7 @@ async function init() {
 init().catch((err) => {
   console.error("init failed:", err);
   document.body.innerHTML =
-    '<div style="padding:32px;color:#ff5c5c;font-family:monospace;">' +
+    '<div style="padding:24px;color:var(--err);font-family:var(--font-mono);">' +
       '<h1>Skyhook GUI failed to start</h1>' +
       '<pre>' + esc(err.message) + '\n' + esc(err.stack || "") + '</pre>' +
       '<p>Check the browser dev tools console for details.</p>' +

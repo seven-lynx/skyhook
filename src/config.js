@@ -136,7 +136,9 @@ export function loadConfig(opts = {}) {
   let user = {};
   if (existsSync(file)) {
     try {
-      user = JSON.parse(readFileSync(file, "utf8"));
+      // A leading U+FEFF is an editor artefact (PowerShell 5.1 `Set-Content -Encoding utf8`,
+      // VS Code "UTF-8 with BOM"), not user error: `JSON.parse` refuses it, so drop it first.
+      user = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
     } catch (e) {
       throw new Error(`Invalid config ${file}: ${e.message}`);
     }

@@ -22,6 +22,20 @@ export function remoteToken() {
   return getConfig().remote?.token || process.env.SKYHOOK_REMOTE_TOKEN || null;
 }
 
+/**
+ * Every token this listener accepts on a mutating request.
+ *
+ * Two credentials, because they answer two different questions: `remoteToken()` is
+ * what this node *presents to a peer*, so the configured secret must keep winning
+ * there, while the desktop shell generates one per launch and passes it as
+ * `SKYHOOK_REMOTE_TOKEN` (`src-tauri/src/main.rs`, DC7). A desktop install that also
+ * sets `remote.token` for its peers would otherwise answer its own window 403.
+ */
+export function acceptedTokens() {
+  const tokens = [getConfig().remote?.token, process.env.SKYHOOK_REMOTE_TOKEN];
+  return [...new Set(tokens.filter((token) => typeof token === "string" && token))];
+}
+
 export function getPeers() {
   const peers = getConfig().remote?.peers ?? [];
   return peers.filter((p) => p && p.id && p.url);

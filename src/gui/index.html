@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Skyhook Control</title>
   <link rel="stylesheet" href="/styles.css" />
-  <meta name="theme-color" content="#0b0f17" />
+  <meta name="theme-color" content="#090a0c" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -51,10 +51,10 @@
     </defs>
   </svg>
 
-  <!-- App shell: topbar, side nav (desktop), main panels, bottom nav (mobile). -->
-  <div class="app">
-    <!-- ── topbar ──────────────────────────────────────────────────────── -->
-    <header class="topbar" role="banner">
+  <!-- Workbench shell: command bar, rail, navigator, work surface, inspector, log dock, status. -->
+  <div class="workbench" id="workbench" data-dock="collapsed">
+    <!-- ── command bar ─────────────────────────────────────────────────── -->
+    <header class="bar" role="banner">
       <a href="#/" class="brand" aria-label="Skyhook — go to dashboard">
         <span class="brand-logo"><img src="/icons/logo-96.png" alt="" width="32" height="32" /></span>
         <span class="brand-text">
@@ -62,11 +62,7 @@
           <span class="brand-sub" id="apiLabel">connecting…</span>
         </span>
       </a>
-      <div class="topbar-right">
-        <span class="topbar-status" id="topbarStatus" hidden>
-          <span class="dot live"></span>
-          <span>Live</span>
-        </span>
+      <div class="bar-right">
         <button id="refreshBtn" class="btn-ghost btn-sm" type="button" aria-label="Refresh">
           <svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg>
           <span class="sr-only">Refresh</span>
@@ -78,47 +74,60 @@
       </div>
     </header>
 
-    <!-- ── side nav (desktop only) ─────────────────────────────────────── -->
-    <nav class="sidenav" id="sidenav" aria-label="Primary">
-      <div class="sidenav-group">
-        <a class="sidenav-item" href="#/" data-route="dashboard">
-          <svg class="ic" aria-hidden="true"><use href="#ic-home"/></svg>
-          <span>Dashboard</span>
-        </a>
-        <a class="sidenav-item" href="#/seeders" data-route="seeders">
-          <svg class="ic" aria-hidden="true"><use href="#ic-rss"/></svg>
-          <span>Seeders</span>
-          <span class="badge" id="seederCountBadge">…</span>
-        </a>
-        <a class="sidenav-item" href="#/pipeline" data-route="pipeline">
-          <svg class="ic" aria-hidden="true"><use href="#ic-beaker"/></svg>
-          <span>Pipeline</span>
-        </a>
-        <a class="sidenav-item" href="#/stats" data-route="stats">
-          <svg class="ic" aria-hidden="true"><use href="#ic-bar"/></svg>
-          <span>Stats</span>
-        </a>
-        <a class="sidenav-item" href="#/curation" data-route="curation">
-          <svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg>
-          <span>Curation</span>
-        </a>
-        <a class="sidenav-item" href="#/timer" data-route="timer" data-pi-only>
-          <svg class="ic" aria-hidden="true"><use href="#ic-timer"/></svg>
-          <span>Timer</span>
-        </a>
-      </div>
-      <div class="sidenav-group">
-        <a class="sidenav-item" href="#/settings" data-route="settings">
-          <svg class="ic" aria-hidden="true"><use href="#ic-cog"/></svg>
-          <span>Settings</span>
-        </a>
-      </div>
+    <!-- ── rail (desktop sections) ─────────────────────────────────────── -->
+    <nav class="rail" id="rail" aria-label="Sections">
+      <a class="rail-item" href="#/" data-route="dashboard" title="Dashboard">
+        <svg class="ic" aria-hidden="true"><use href="#ic-home"/></svg><span class="sr-only">Dashboard</span>
+      </a>
+      <a class="rail-item" href="#/seeders" data-route="seeders" title="Seeders">
+        <svg class="ic" aria-hidden="true"><use href="#ic-rss"/></svg><span class="sr-only">Seeders</span>
+      </a>
+      <a class="rail-item" href="#/pipeline" data-route="pipeline" title="Pipeline">
+        <svg class="ic" aria-hidden="true"><use href="#ic-beaker"/></svg><span class="sr-only">Pipeline</span>
+      </a>
+      <a class="rail-item" href="#/stats" data-route="stats" title="Stats">
+        <svg class="ic" aria-hidden="true"><use href="#ic-bar"/></svg><span class="sr-only">Stats</span>
+      </a>
+      <a class="rail-item" href="#/curation" data-route="curation" title="Curation">
+        <svg class="ic" aria-hidden="true"><use href="#ic-trash"/></svg><span class="sr-only">Curation</span>
+      </a>
+      <a class="rail-item" href="#/timer" data-route="timer" title="Timer" data-pi-only>
+        <svg class="ic" aria-hidden="true"><use href="#ic-timer"/></svg><span class="sr-only">Timer</span>
+      </a>
+      <span class="rail-spacer"></span>
+      <span class="rail-sep"></span>
+      <a class="rail-item" href="#/settings" data-route="settings" title="Settings">
+        <svg class="ic" aria-hidden="true"><use href="#ic-cog"/></svg><span class="sr-only">Settings</span>
+      </a>
     </nav>
 
-    <!-- ── main ──────────────────────────────────────────────────────── -->
-    <main id="main">
+    <!-- ── navigator (a section list until a section has a tree) ────────── -->
+    <section class="pane navigator" id="nav" aria-label="Navigator">
+      <div class="pane-head">
+        <span class="pane-title" id="navTitle">Sections</span>
+      </div>
+      <div class="pane-body">
+        <nav class="navlist" aria-label="All sections">
+          <a class="navlist-item" href="#/" data-route="dashboard">Dashboard</a>
+          <a class="navlist-item" href="#/seeders" data-route="seeders">Seeders</a>
+          <a class="navlist-item" href="#/pipeline" data-route="pipeline">Pipeline</a>
+          <a class="navlist-item" href="#/stats" data-route="stats">Stats</a>
+          <a class="navlist-item" href="#/curation" data-route="curation">Curation</a>
+          <a class="navlist-item" href="#/timer" data-route="timer" data-pi-only>Timer</a>
+          <a class="navlist-item" href="#/settings" data-route="settings">Settings</a>
+        </nav>
+      </div>
+    </section>
+
+    <!-- ── work surface ────────────────────────────────────────────────── -->
+    <main class="pane work" id="work">
+      <div class="pane-head">
+        <span class="pane-title" id="workTitle">Dashboard</span>
+        <span class="pane-meta" id="workMeta"></span>
+      </div>
+      <div class="pane-body" id="workBody">
       <!-- Dashboard ────────────────────────────────────────────── -->
-      <section id="panel-dashboard" class="panel" data-route="dashboard" aria-label="Dashboard">
+      <section id="panel-dashboard" class="surface" data-route="dashboard" aria-label="Dashboard">
         <div class="grid grid-stats" id="dashStats"></div>
 
         <div class="flex gap-2 mb-4" style="flex-wrap: wrap;">
@@ -147,7 +156,7 @@
       </section>
 
       <!-- Seeders ──────────────────────────────────────────────── -->
-      <section id="panel-seeders" class="panel" data-route="seeders" aria-label="Seeders">
+      <section id="panel-seeders" class="surface" data-route="seeders" aria-label="Seeders">
         <div class="toolbar">
           <input id="filter" class="filter" type="search" placeholder="Filter source / name / category…" autocomplete="off" aria-label="Filter seeders" />
           <select id="tierFilter" aria-label="Tier filter">
@@ -220,7 +229,7 @@
       </section>
 
       <!-- Seeder detail / live log (route: /log/<source>) ───────────── -->
-      <section id="panel-log" class="panel" data-route="log" aria-label="Seeder log">
+      <section id="panel-log" class="surface" data-route="log" aria-label="Seeder log">
         <div class="log-page">
           <div class="log-page-head">
             <button id="logBackBtn" class="btn btn-sm" type="button" aria-label="Back to seeders">
@@ -250,8 +259,7 @@
       </section>
 
       <!-- Pipeline ─────────────────────────────────────────────── -->
-      <section id="panel-pipeline" class="panel" data-route="pipeline" aria-label="Pipeline">
-        <h1 class="h-page">Pipeline</h1>
+      <section id="panel-pipeline" class="surface" data-route="pipeline" aria-label="Pipeline">
         <p class="muted" id="pipelineNote"></p>
         <div class="card" id="pipelineProgress" style="display: none; margin-bottom: var(--space-3);"></div>
         <div class="metric-strip" id="pipelineMetrics" style="display: none;"></div>
@@ -284,8 +292,7 @@
       </section>
 
       <!-- Stats ────────────────────────────────────────────────── -->
-      <section id="panel-stats" class="panel" data-route="stats" aria-label="Stats">
-        <h1 class="h-page">Stats</h1>
+      <section id="panel-stats" class="surface" data-route="stats" aria-label="Stats">
         <div class="grid grid-stats" id="analyticsCards"></div>
         <h2 class="h-section">Tagging gaps</h2>
         <div class="grid grid-stats" id="statsGaps"></div>
@@ -293,8 +300,7 @@
       </section>
 
       <!-- Curation ─────────────────────────────────────────────── -->
-      <section id="panel-curation" class="panel" data-route="curation" aria-label="Curation">
-        <h1 class="h-page">Curation</h1>
+      <section id="panel-curation" class="surface" data-route="curation" aria-label="Curation">
         <p class="muted mb-4">Inspect and delete collected URLs per seeder / category / date. Deletions are soft — archived to <code>.skyhook/trash/</code>.</p>
 
         <div class="toolbar">
@@ -314,8 +320,7 @@
       </section>
 
       <!-- Timer (Pi only) ──────────────────────────────────────── -->
-      <section id="panel-timer" class="panel" data-route="timer" data-pi-only aria-label="Timer">
-        <h1 class="h-page">Timer</h1>
+      <section id="panel-timer" class="surface" data-route="timer" data-pi-only aria-label="Timer">
         <p class="muted mb-4">Regenerate the systemd timer unit for the seed runner on the Pi.</p>
         <div class="card" style="display: flex; flex-direction: column; gap: var(--space-3);">
           <div>
@@ -340,11 +345,40 @@
       </section>
 
       <!-- Settings -->
-      <section id="panel-settings" class="panel" data-route="settings" aria-label="Settings">
-        <h1 class="h-page">Settings</h1>
+      <section id="panel-settings" class="surface" data-route="settings" aria-label="Settings">
         <div id="settingsBody"></div>
       </section>
+      </div>
     </main>
+
+    <!-- ── inspector ───────────────────────────────────────────────────── -->
+    <aside class="pane inspector" id="insp" aria-label="Inspector">
+      <div class="pane-head">
+        <span class="pane-title">Inspector</span>
+      </div>
+      <div class="pane-body" id="inspBody">
+        <p class="pane-empty">Nothing selected.</p>
+        <p class="pane-note">Pick a seeder in the work surface to see its cadence, recent runs and actions.</p>
+      </div>
+    </aside>
+
+    <!-- ── log dock (collapsed until a log is open) ────────────────────── -->
+    <section class="pane dock" id="dock" aria-label="Log dock">
+      <div class="dock-head">
+        <div class="dock-tabs" id="dockTabs" role="tablist" aria-label="Open logs"></div>
+        <span class="pane-note" id="dockNote">no log open</span>
+      </div>
+    </section>
+
+    <!-- ── status bar ──────────────────────────────────────────────────── -->
+    <footer class="status" id="statusbar">
+      <span class="status-item"><b id="seederCountBadge">…</b> seeders</span>
+      <span class="status-sep"></span>
+      <span class="status-item" id="statusRoute">dashboard</span>
+      <span class="status-right">
+        <span class="status-item"><code>g</code> then <code>s</code> to jump</span>
+      </span>
+    </footer>
 
     <!-- ── bottom nav (mobile) ─────────────────────────────────────── -->
     <nav class="bottomnav" id="bottomnav" aria-label="Primary (mobile)">
