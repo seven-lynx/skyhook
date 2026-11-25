@@ -68,6 +68,13 @@ None of this is needed for `npm ci`, `npm test`, or any `skyhook` command — th
 shell is an optional layer. At this stage it is a development build only: there is
 no installer yet, and the sidecar runs the `node` on your `PATH`.
 
+What an installed build ships is pinned in `desktop/sidecar.json`: the `node.exe`
+20.x release that becomes the sidecar, its artifact and its checksum.
+`test/desktop-guard.test.mjs` fails when that major stops matching the one
+`.github/workflows/ci.yml` tests on, and it guards the two other ways a desktop
+build could drift — a `src/core`, `src/engine` or `src/adapters` import in
+`desktop/`, and a capability that grants the window more than `core` + `opener`.
+
 State lives in the app data directory the shell passes to the sidecar
 (`--root`), which is `%APPDATA%\com.sevenlynx.skyhook` on Windows — not the
 directory the shell was launched from.
