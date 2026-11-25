@@ -6,30 +6,9 @@
  * Zero framework — Node's built-in http server. CORS is open so the GUI (any
  * origin) can call it.
  *
- * Endpoints:
- *   GET  /api/health            { ok, seeders, scheduled, due, errors }
- *   GET  /api/status            summary + due list
- *   GET  /api/seeders           all seeders (?filter=, ?tier=, ?scheduled=1)
- *   GET  /api/seeders/:source   one seeder
- *   GET  /api/due               seeders due now
- *   GET  /api/history/:source   recent runs
- *   POST /api/run               { sources: [], parallel? }
- *   POST /api/schedule          { source, cadence?, isNews?, maxAgeDays? }
- *   POST /api/enable            { source, cadence? }
- *   POST /api/disable           { source }
- *   GET  /api/timer             current timer plan
- *   POST /api/timer             regenerate .skyhook/skyhook-seed.timer
- *   GET  /api/running           { running: [...], batch: { total, completed, remaining, etaMs } }
- *   GET  /api/logs/:source      tail a seeder's live log (?tail=N)
- *   POST /api/stop              { source? } stop one or all active runs
- *   GET  /api/pipeline          offline tagging pipeline status
- *   POST /api/pipeline/tag      run sync → import → LLM tag
- *   POST /api/pipeline/push     upload tagged URLs + tags to Supabase
- *   POST /api/pipeline/export   incremental offline-DB refresh
- *   POST /api/pipeline/export-full  full rebuild (wipes local tag progress)
- *   GET  /api/tagging/missing   counts of URLs missing category/subcategory/
- *                               tags/content-type/quality/attributes
- *   POST /api/tagging/run       { task } launch a targeted LLM gap-filling pass
+ * The route table is `docs/api.md` (the contract) and the `if (method === ...)`
+ * chain below (what serves it). This header used to list a subset of the routes
+ * and drifted from both; do not restate them here.
  */
 import { createServer } from "http";
 import { readFileSync, existsSync, statSync } from "fs";
