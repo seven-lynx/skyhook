@@ -79,21 +79,44 @@ loading under plain Node, so nothing native links into the window.
 ```powershell
 rustup default stable          # Rust toolchain
 # plus the MSVC Build Tools ("Desktop development with C++") and WebView2
-cargo install tauri-cli        # provides `tauri`, which `npm run desktop` calls
-npm run desktop                # tauri dev: window on the sidecar's URL
+cargo install tauri-cli        # provides `cargo tauri`, which the npm scripts call
+npm run desktop                # cargo tauri dev: window on the sidecar's URL
 npm run build:desktop-icons    # regenerate src-tauri/icons/ from src/gui/icons/
+npm run desktop:dist           # build the NSIS installer into dist/desktop/
 ```
 
 None of this is needed for `npm ci`, `npm test`, or any `skyhook` command — the
-shell is an optional layer. At this stage it is a development build only: there is
-no installer yet, and the sidecar runs the `node` on your `PATH`.
+shell is an optional layer.
+
+`npm run desktop:dist` is four steps in one. `scripts/fetch-sidecar.mjs` downloads the
+runtime `desktop/sidecar.json` pins, refuses it unless the pin's `sha256` **and**
+nodejs.org's own `SHASUMS256.txt` agree, and unpacks it to
+`src-tauri/binaries/skyhook-sidecar-x86_64-pc-windows-msvc.exe` — the name Tauri's
+`externalBin` requires. `scripts/stage-desktop-app.mjs` assembles the application that
+runtime runs: `desktop/`, `src/` and `config/` plus a production `node_modules`, installed
+**by the pinned runtime** so `better-sqlite3`'s build matches the Node the installer
+ships, and then loaded once to prove it. `cargo tauri build` bundles the result as the
+`app` resource, and the installer is copied to `dist/desktop/`.
+
+An installed copy carries the whole server, not a script: `desktop/server.js` imports
+`src/interfaces/app-session.js`, which imports everything else. It runs the `node.exe`
+beside its own executable and never the `node` on `PATH` — a release build refuses to
+start without it. The `desktop` job in `.github/workflows/ci.yml` runs the same command
+on a tag only, never on a pull request.
+
+The installer is **unsigned**: Authenticode is the one part of a desktop release that
+cannot be code, and the certificate route is still an open ruling (`PLAN.md` §6 item
+11), so Windows will call it an unrecognised app. The app it installs still runs only
+the runtime it shipped — never the `node` on `PATH` — which is what
+`desktop/sidecar.json` and `test/desktop-guard.test.mjs` exist to keep true.
 
 What an installed build ships is pinned in `desktop/sidecar.json`: the `node.exe`
 20.x release that becomes the sidecar, its artifact and its checksum.
 `test/desktop-guard.test.mjs` fails when that major stops matching the one
 `.github/workflows/ci.yml` tests on, and it guards the two other ways a desktop
 build could drift — a `src/core`, `src/engine` or `src/adapters` import in
-`desktop/`, and a capability that grants the window more than `core` + `opener`.
+`desktop/`, and a capability that grants the window more than `core` + `opener` +
+`autostart`.
 
 The window is not a browser tab, and the shared renderer is told so by the flag the
 shell injects (`window.__SKYHOOK_DESKTOP__`) rather than by a user-agent guess: the
@@ -101,6 +124,16 @@ API-base prompt is removed, so a base URL a browser session left in `localStorag
 cannot redirect the window away from the server the shell spawned, the PWA manifest
 link is not offered to a webview that cannot install it, and an `http(s)` link opens
 in the system browser instead of navigating the window off the dashboard.
+
+The app is also the scheduler on Windows. While it runs, the sidecar's child asks
+its own server what is due once a minute and starts it: no systemd timer, no
+registered OS task, and no second copy of the cadence rules — `/api/due` is the
+same selector the *Run due now* menu item uses. A seeder whose run is still in
+flight is skipped, because `last_run_at` is written when a run *ends* and the due
+selector would otherwise offer it again. *Start with Windows* — in the app menu and
+the tray — writes a per-user `Run` entry, not a service, and the check mark is read
+back from that entry, so the toggle survives a restart without anything being
+stored twice. `emit-timer` stays the Linux path, untouched.
 
 State lives in the app data directory the shell passes to the sidecar
 (`--root`), which is `%APPDATA%\com.sevenlynx.skyhook` on Windows — not the

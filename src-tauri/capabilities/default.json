@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The minimum the Skyhook shell needs: the window itself, and opening a URL in the system browser. The renderer talks HTTP to the sidecar, so it is granted no IPC — which is why no remote-url allow-list is needed.",
+  "description": "The minimum the Skyhook shell needs: the window itself, opening a URL in the system browser, and the per-user Run entry behind the Start with Windows toggle. The renderer talks HTTP to the sidecar, so it is granted no IPC — which is why no remote-url allow-list is needed.",
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    "autostart:default"
   ]
 }

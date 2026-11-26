@@ -15,6 +15,12 @@
 //! * Nothing is stored twice. The URL, the root and the child handle live in one
 //!   `Session`, because a window reload must reuse the running server and Quit
 //!   must leave no `node` behind at the `.app-session.lock`.
+//!
+//! The shell is also the scheduler on Windows: the sidecar's child ticks the due
+//! set while the app runs (`desktop/schedule.js`), so there is no systemd unit and
+//! no registered OS task. The only thing Windows is told is where the exe lives —
+//! the *Start with Windows* check item, a per-user `Run` entry the autostart plugin
+//! writes and reads back, so the menu holds no second copy of that fact.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -24,19 +30,22 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
-/// The OS CSPRNG, declared by hand.
-///
-/// `windows` is in the lock file only as a tauri dependency, and reaching into it
-/// for one function would pin an API surface that is not ours. `bcrypt.lib` ships
-/// with the Windows SDK the MSVC build already needs, and a null algorithm handle
-/// plus this flag is the documented "use the system-preferred generator" form.
+// The OS CSPRNG, declared by hand.
+//
+// `windows` is in the lock file only as a tauri dependency, and reaching into it
+// for one function would pin an API surface that is not ours. `bcrypt.lib` ships
+// with the Windows SDK the MSVC build already needs, and a null algorithm handle
+// plus this flag is the documented "use the system-preferred generator" form.
+// (A doc comment is not used here: rustdoc does not document `extern` blocks, and
+// `cargo build` warns about it.)
 #[cfg(windows)]
 #[link(name = "bcrypt")]
 extern "system" {
@@ -116,22 +125,69 @@ impl Session {
     }
 }
 
-/// The script to run, from the bundle when D8 ships one and from the checkout
+/// Replace one of the session's slots, ignoring a poisoned lock.
+///
+/// Every slot is only ever replaced wholesale — the token at launch, the child and the
+/// URL when the handshake lands — so a panic elsewhere in the shell must not turn a
+/// poisoned mutex into a second, unrelated failure. This is also why the writes are a
+/// `match` on the lock rather than an `if let`: the guard's temporary has to be dropped
+/// inside the statement, or the borrow outlives the `State` it came from.
+fn remember<T>(slot: &Mutex<Option<T>>, value: T) {
+    match slot.lock() {
+        Ok(mut guard) => *guard = Some(value),
+        Err(poisoned) => *poisoned.into_inner() = Some(value),
+    }
+}
+
+/// A path the child can actually open.
+///
+/// `resource_dir()` and `app_data_dir()` are derived from `current_exe()`, which on
+/// Windows is a verbatim path (`\\?\C:\…`). The OS accepts it; Node 20 does not — a
+/// verbatim entry script fails in `resolveMainPath` with `EISDIR: lstat 'C:'`, which is
+/// how the first installed build refused to start. The prefix is stripped rather than
+/// canonicalized away, because `canonicalize` is what adds it.
+fn plain_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest.to_string());
+    }
+    path.to_path_buf()
+}
+
+/// The script to run, from the bundle when it shipped one and from the checkout
 /// that built this binary until then.
+///
+/// The installed tree is the repository's own layout under `app/` — the sidecar imports
+/// `src/interfaces/app-session.js`, which imports the server, so the installer carries the
+/// application rather than a script (`scripts/stage-desktop-app.mjs`).
 fn sidecar_script(app: &AppHandle) -> PathBuf {
     if let Ok(dir) = app.path().resource_dir() {
-        let packaged = dir.join("desktop").join("server.js");
+        let packaged = dir.join("app").join("desktop").join("server.js");
         if packaged.exists() {
-            return packaged;
+            return plain_path(&packaged);
         }
     }
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../desktop/server.js"))
 }
 
+/// The runtime an installed build ships: the pinned `node.exe`, renamed to
+/// `skyhook-sidecar.exe` by Tauri's `externalBin` and installed beside the app's own
+/// executable. Absent in a checkout, which is the only place `node` from `PATH` is
+/// used at all (DC6, DC11).
+fn bundled_runtime() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let exe = dir.join(format!("skyhook-sidecar{}", std::env::consts::EXE_SUFFIX));
+    exe.exists().then_some(exe)
+}
+
 /// Start the sidecar and wait for its handshake line.
 ///
-/// D3 runs the dev machine's `node`; D8 swaps in the pinned `node.exe` shipped
-/// beside the installed exe as an `externalBin`. `--root` is passed because the
+/// A development build runs the machine's `node` on the checkout's script; an installed
+/// build runs the pinned `node.exe` the bundle shipped beside its exe as an `externalBin`
+/// (`desktop/sidecar.json`, `scripts/fetch-sidecar.mjs`). `--root` is passed because the
 /// sidecar resolves every config path against its working directory
 /// (`src/config.js:134,149-151`) — without it an installed build would write
 /// `.skyhook/` next to its own exe instead of under `%APPDATA%`. `SKYHOOK_REMOTE_TOKEN`
@@ -142,12 +198,34 @@ async fn spawn_sidecar(app: &AppHandle, token: &str) -> Result<(CommandChild, Si
         .path()
         .app_data_dir()
         .map_err(|err| format!("no app data directory: {err}"))?;
+    let root = plain_path(&root);
     fs::create_dir_all(&root).map_err(|err| format!("cannot create {}: {err}", root.display()))?;
 
     let script = sidecar_script(app);
-    let (mut events, child) = app
-        .shell()
-        .command("node")
+    let runtime = bundled_runtime();
+
+    // An installed copy may only run the runtime it shipped (DC6): no sidecar beside the
+    // exe in a release build is a broken install, not an invitation to use the user's Node.
+    if runtime.is_none() && !cfg!(debug_assertions) {
+        return Err("the bundled runtime is missing beside the app (desktop/sidecar.json)".into());
+    }
+
+    let builder = match &runtime {
+        Some(exe) => app.shell().command(exe.to_string_lossy().into_owned()),
+        None => app.shell().command("node"),
+    };
+    // Which runtime and which script, in the app's own log: an installed build's only
+    // audit trail for the ABI it runs (DC6), and the first line to read when a sidecar
+    // refuses to start.
+    eprintln!(
+        "sidecar: launching {} {}",
+        runtime
+            .as_ref()
+            .map(|exe| exe.display().to_string())
+            .unwrap_or_else(|| "node (PATH)".to_string()),
+        script.display()
+    );
+    let (mut events, child) = builder
         .args([
             script.to_string_lossy().into_owned(),
             "--root".to_string(),
@@ -156,7 +234,7 @@ async fn spawn_sidecar(app: &AppHandle, token: &str) -> Result<(CommandChild, Si
         ])
         .env("SKYHOOK_REMOTE_TOKEN", token)
         .spawn()
-        .map_err(|err| format!("cannot start {}: {err}", script.display()))?;
+        .map_err(|err| format!("cannot start the sidecar ({}): {err}", script.display()))?;
 
     // Chunks are not lines: the banner and the handshake can arrive split across
     // reads, and a handshake cut in half must still be parsed whole.
@@ -350,15 +428,70 @@ fn open_failure(app: &AppHandle, reason: &str) -> Result<(), String> {
 }
 
 /// The app menu, shared by the window and the tray.
-fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+///
+/// *Start with Windows* is a check item whose mark is read from the OS's own Run
+/// entry, so an install where the entry exists shows it — nothing here remembers
+/// the answer. The mark is passed in rather than re-read so a toggle can rebuild the
+/// tray's menu with the value it just wrote.
+fn build_menu(app: &AppHandle, autostart_checked: bool) -> tauri::Result<Menu<tauri::Wry>> {
     let data = MenuItem::with_id(app, "open-data", "Open data folder", true, None::<&str>)?;
     let log = MenuItem::with_id(app, "open-log", "Open latest log", true, None::<&str>)?;
     let run = MenuItem::with_id(app, "run-due", "Run due now", true, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "Start with Windows",
+        true,
+        autostart_checked,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, Some("CmdOrCtrl+Q"))?;
     Menu::with_items(
         app,
-        &[&data, &log, &run, &PredefinedMenuItem::separator(app)?, &quit],
+        &[
+            &data,
+            &log,
+            &run,
+            &autostart,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
     )
+}
+
+/// Whether this user's launch entry exists — read from the plugin, never stored.
+fn autostart_enabled(app: &AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+/// Re-state the check mark on both menus that carry it, after a toggle.
+///
+/// The item exists twice — the window's menu bar and the tray's — because each is a
+/// separate menu. `TrayIcon` in tauri 2.12 offers `set_menu` and no getter (checked in
+/// the crate source, `tray/mod.rs:526`), so the tray's copy is replaced with a freshly
+/// built menu rather than read back; the window's copy is walked. A mark that disagreed
+/// with the Run entry would be the only copy of that fact anywhere, which is what
+/// reading the OS exists to avoid.
+fn sync_autostart_checks(app: &AppHandle, checked: bool) {
+    if let Some(tray) = app.tray_by_id("skyhook") {
+        match build_menu(app, checked) {
+            Ok(menu) => {
+                if let Err(err) = tray.set_menu(Some(menu)) {
+                    eprintln!("tray menu: {err}");
+                }
+            }
+            Err(err) => eprintln!("tray menu: {err}"),
+        }
+    }
+    if let Some(menu) = app.menu() {
+        for item in menu.items().unwrap_or_default() {
+            if item.id().as_ref() == "autostart" {
+                if let Some(check) = item.as_check_menuitem() {
+                    let _ = check.set_checked(checked);
+                }
+            }
+        }
+    }
 }
 
 /// Menu ids are the contract between this function and `build_menu`.
@@ -389,6 +522,18 @@ fn on_menu(app: &AppHandle, id: &str) {
             },
             None => eprintln!("run due: no session yet"),
         },
+        // A per-user Run entry, written and read by the plugin: the OS keeps this
+        // fact, so a reinstall or a manual edit of the registry shows through.
+        "autostart" => {
+            let autolaunch = app.autolaunch();
+            let wanted = !autolaunch.is_enabled().unwrap_or(false);
+            let result = if wanted { autolaunch.enable() } else { autolaunch.disable() };
+            match result {
+                Ok(()) => sync_autostart_checks(app, wanted),
+                // The mark is left as it was: the entry did not move, so neither does it.
+                Err(err) => eprintln!("start with windows: {err}"),
+            }
+        }
         "quit" => {
             kill_sidecar(app);
             app.exit(0);
@@ -413,7 +558,7 @@ fn kill_sidecar(app: &AppHandle) {
 }
 
 fn install_tray(app: &AppHandle) -> tauri::Result<()> {
-    let menu = build_menu(app)?;
+    let menu = build_menu(app, autostart_enabled(app))?;
     let mut tray = TrayIconBuilder::with_id("skyhook")
         .tooltip("Skyhook")
         .menu(&menu)
@@ -439,17 +584,18 @@ fn main() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .menu(|app| build_menu(app))
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .manage(Session::default())
         .setup(|app| {
             let handle = app.handle().clone();
+            // Menus are built here, not by `Builder::menu`: the autostart item reads
+            // the plugin's state, and plugin state exists by the time `setup` runs.
+            build_menu(&handle, autostart_enabled(&handle))?.set_as_app_menu()?;
             install_tray(&handle)?;
             let token = launch_token();
             {
                 let session = handle.state::<Session>();
-                if let Ok(mut slot) = session.token.lock() {
-                    *slot = Some(token.clone());
-                }
+                remember(&session.token, token.clone());
             }
             tauri::async_runtime::spawn(async move {
                 match spawn_sidecar(&handle, &token).await {
@@ -457,15 +603,9 @@ fn main() {
                         eprintln!("sidecar: {} (port {})", info.base_url, info.port);
                         {
                             let session = handle.state::<Session>();
-                            if let Ok(mut slot) = session.child.lock() {
-                                *slot = Some(child);
-                            }
-                            if let Ok(mut url) = session.base_url.lock() {
-                                *url = Some(info.base_url.clone());
-                            }
-                            if let Ok(mut root) = session.root.lock() {
-                                *root = Some(PathBuf::from(&info.root));
-                            }
+                            remember(&session.child, child);
+                            remember(&session.base_url, info.base_url.clone());
+                            remember(&session.root, PathBuf::from(&info.root));
                         }
                         if let Err(err) = open_dashboard(&handle, &info.base_url, &token) {
                             eprintln!("window: {err}");

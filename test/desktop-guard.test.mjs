@@ -37,6 +37,11 @@ const capabilitiesDir = join(root, "src-tauri", "capabilities");
 const sidecarManifest = join(desktopDir, "sidecar.json");
 const ciWorkflow = join(root, ".github", "workflows", "ci.yml");
 const shellMain = join(root, "src-tauri", "src", "main.rs");
+const sidecarSchedule = join(desktopDir, "schedule.js");
+const tauriConfig = join(root, "src-tauri", "tauri.conf.json");
+const packageManifest = join(root, "package.json");
+const distWrapper = join(root, "scripts", "desktop-dist.mjs");
+const stageScript = join(root, "scripts", "stage-desktop-app.mjs");
 const guiApp = join(root, "src", "gui", "app.js");
 const guiHtml = join(root, "src", "gui", "index.html");
 
@@ -90,13 +95,24 @@ function forbiddenSpecifier(spec) {
 }
 
 /**
+ * The plugin prefixes the shell may ask for at all.
+ *
+ * `core` is the window itself, `opener` is the one verb the window needs — hand an
+ * `http(s)` link to the system browser — and `autostart` is the *Start with
+ * Windows* toggle, a per-user Run entry the app writes (`PLAN.md` §6 item 9).
+ */
+const ALLOWED_PERMISSIONS = ["core:", "opener:", "autostart:"];
+
+/**
  * Every way a capability file could grant the renderer more than it needs, or
  * `[]` when it stays inside the shell's actual requirement.
  *
  * The renderer is a webview on the sidecar's own origin, so it talks HTTP and
  * asks for no IPC: `fs:` would let a page script write the user's disk,
  * `shell:allow-execute` would spawn whatever it named, and `remote.urls` would
- * open that IPC to an origin the shell did not ship.
+ * open that IPC to an origin the shell did not ship. Beyond those three named
+ * holes the set is an allow-list — `core`, `opener` and `autostart` — so a fourth
+ * plugin's permission has to be argued for here rather than slipping in.
  */
 function capabilityViolations(capability) {
   const violations = [];
@@ -104,6 +120,9 @@ function capabilityViolations(capability) {
     const id = typeof permission === "string" ? permission : (permission?.identifier ?? "");
     if (id.startsWith("fs:")) violations.push(`grants ${id}`);
     if (id.startsWith("shell:allow-execute")) violations.push(`grants ${id}`);
+    if (id && !ALLOWED_PERMISSIONS.some((prefix) => id.startsWith(prefix))) {
+      violations.push(`grants ${id}, which is not core, opener or autostart`);
+    }
   }
   if (capability.remote?.urls?.length) {
     violations.push(`allow-lists ${capability.remote.urls.join(", ")}`);
@@ -176,6 +195,72 @@ function desktopChrome(mainRs, appJs) {
   };
 }
 
+/**
+ * The halves of "the app is the scheduler on Windows", read from the four files
+ * that carry them.
+ *
+ * The tick lives in `desktop/schedule.js` because a Node module is the half a test
+ * can drive; the shell's half is a per-user Run entry behind the *Start with
+ * Windows* check item, and no toolchain here compiles it. So both are matched as
+ * wired shapes and every limb is also fed a copy with it removed — the same
+ * stand-in `npm run desktop` gets, for the same reason.
+ */
+function scheduleWiring({ serverJs, scheduleJs, mainRs, capability }) {
+  const permissions = (capability.permissions ?? []).map((permission) =>
+    typeof permission === "string" ? permission : (permission?.identifier ?? ""),
+  );
+  return {
+    startsInSidecar: serverJs.includes("startSchedule({") && /schedule\??\.tick\(\)/.test(serverJs),
+    stopsWithServer: /schedule\??\.stop\(\)/.test(serverJs),
+    pollsDueSet:
+      scheduleJs.includes('"/api/running"')
+      && scheduleJs.includes('"/api/due"')
+      && scheduleJs.includes('"/api/run"'),
+    neverOverlapsRun: scheduleJs.includes('skipped: "running"'),
+    autostartToggle:
+      mainRs.includes('"Start with Windows"')
+      && mainRs.includes("CheckMenuItem::with_id")
+      && mainRs.includes(".autolaunch()"),
+    autostartAllowed: permissions.includes("autostart:default"),
+  };
+}
+
+/**
+ * The halves of "a fresh checkout produces an installer", read from the five files that
+ * carry them: the pin, the bundle config, the npm script that wraps the build, the
+ * wrapper itself, and the workflow that builds it on CI.
+ *
+ * This family has the least to observe on a machine without Rust — no installer is built
+ * here — so what is asserted is that each piece is wired to the next: the runtime present
+ * under the name `externalBin` requires, the sidecar script shipped as a resource (an
+ * installed window has no checkout to fall back to), the fetch running before `tauri
+ * build`, the release build refusing the machine's own Node, and the CI job guarded to a
+ * tag so the installer never becomes a pull-request gate.
+ */
+function distWiring({ pin, tauriConf, packageJson, distScript, stageScript, ciYaml, mainRs }) {
+  const bundle = tauriConf.bundle ?? {};
+  const externalBin = Array.isArray(bundle.externalBin) ? bundle.externalBin : [];
+  const resources = Object.keys(bundle.resources ?? {}).map((key) => key.replace(/\\/g, "/"));
+  return {
+    sidecarBundled: externalBin.includes(pin.externalBin),
+    appShippedAsResource: resources.some((key) => key.endsWith("dist/desktop/app")),
+    fetchesBeforeBuild: String(tauriConf.build?.beforeBuildCommand ?? "").includes("fetch-sidecar"),
+    distScriptBuilds:
+      String(packageJson.scripts?.["desktop:dist"] ?? "").includes("desktop-dist.mjs")
+      && distScript.includes('spawnSync("cargo", ["tauri", "build"]'),
+    appStaged:
+      distScript.includes("import { stageDesktopApp }")
+      && distScript.includes("stageDesktopApp();")
+      && stageScript.includes('"ci"')
+      && stageScript.includes("--omit=dev"),
+    bundledRuntime: mainRs.includes("let runtime = bundled_runtime();") && mainRs.includes("cfg!(debug_assertions)"),
+    plainPaths: mainRs.includes("fn plain_path(") && mainRs.includes("plain_path(&packaged)"),
+    tagOnlyJob:
+      ciYaml.includes("windows-latest")
+      && /if:\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/.test(ciYaml),
+  };
+}
+
 test("guard: no desktop module reaches a core, engine or adapter tier", () => {
   const files = filesWith(desktopDir, ".js");
   assert.ok(
@@ -210,7 +295,7 @@ test("guard: the tier rule refuses the import that would break the shell", () =>
   assert.deepEqual(specifiersOf("// named only to say it is never imported: src/core/seed.js"), []);
 });
 
-test("guard: every capability stays inside core and opener", () => {
+test("guard: every capability stays inside core, opener and autostart", () => {
   const files = filesWith(capabilitiesDir, ".json");
   assert.ok(files.length > 0, "src-tauri/capabilities/ has a capability to check");
 
@@ -226,7 +311,11 @@ test("guard: every capability stays inside core and opener", () => {
 });
 
 test("guard: the capability rule refuses fs, shell-execute and remote origins", () => {
-  assert.deepEqual(capabilityViolations({ permissions: ["core:default", "opener:default"] }), []);
+  assert.deepEqual(
+    capabilityViolations({ permissions: ["core:default", "opener:default", "autostart:default"] }),
+    [],
+    "the three the shell actually uses",
+  );
   assert.match(
     capabilityViolations({ permissions: ["core:default", "fs:allow-read"] }).join(" "),
     /fs:allow-read/,
@@ -238,6 +327,12 @@ test("guard: the capability rule refuses fs, shell-execute and remote origins", 
   assert.match(
     capabilityViolations({ permissions: ["core:default"], remote: { urls: ["https://example.com"] } }).join(" "),
     /example\.com/,
+  );
+
+  // A fourth plugin's permission is argued for in this file, or not granted at all.
+  assert.match(
+    capabilityViolations({ permissions: ["core:default", "clipboard:allow-read"] }).join(" "),
+    /clipboard:allow-read/,
   );
 });
 
@@ -365,5 +460,170 @@ test("guard: the chrome rule refuses a window that still thinks it is a browser"
     hidesSettingsField: false,
     skipsManifest: false,
   });
+});
+
+test("guard: the app is the scheduler, and Start with Windows is a Run entry", () => {
+  const wiring = scheduleWiring({
+    serverJs: readFileSync(join(desktopDir, "server.js"), "utf8"),
+    scheduleJs: readFileSync(sidecarSchedule, "utf8"),
+    mainRs: readFileSync(shellMain, "utf8"),
+    capability: JSON.parse(readFileSync(join(capabilitiesDir, "default.json"), "utf8")),
+  });
+
+  assert.deepEqual(
+    wiring,
+    {
+      startsInSidecar: true,
+      stopsWithServer: true,
+      pollsDueSet: true,
+      neverOverlapsRun: true,
+      autostartToggle: true,
+      autostartAllowed: true,
+    },
+    "the child ticks the due set while the app runs, and the shell's schedule affordance is the Run entry",
+  );
+});
+
+test("guard: the schedule rule refuses a shell that stopped owning the schedule", () => {
+  const serverJs = readFileSync(join(desktopDir, "server.js"), "utf8");
+  const scheduleJs = readFileSync(sidecarSchedule, "utf8");
+  const mainRs = readFileSync(shellMain, "utf8");
+  const capability = JSON.parse(readFileSync(join(capabilitiesDir, "default.json"), "utf8"));
+  const wiring = (changes) => scheduleWiring({ serverJs, scheduleJs, mainRs, capability, ...changes });
+
+  // 1. Nothing starts the loop, so the app runs only when a person presses Run.
+  const noStart = serverJs.replace("startSchedule({", "");
+  assert.notEqual(noStart, serverJs, "server.js still starts the schedule");
+  assert.equal(wiring({ serverJs: noStart }).startsInSidecar, false);
+
+  // 2. The loop outlives the server it posts to.
+  const noStop = serverJs.replace("schedule?.stop();", "");
+  assert.notEqual(noStop, serverJs, "the stop path still stops the schedule");
+  assert.equal(wiring({ serverJs: noStop }).stopsWithServer, false);
+
+  // 3. The tick stops gating on the run in flight: `/api/due` still lists it, so
+  // the next tick starts a second child for one source.
+  const noGate = scheduleJs.replace('return { skipped: "running", active };', "");
+  assert.notEqual(noGate, scheduleJs, "the tick still refuses a running seeder");
+  assert.equal(wiring({ scheduleJs: noGate }).neverOverlapsRun, false);
+
+  // 4. The tick never asks what is running at all.
+  const noRunning = scheduleJs.replace('request("GET", "/api/running")', "");
+  assert.notEqual(noRunning, scheduleJs, "the tick still asks what is running");
+  assert.equal(wiring({ scheduleJs: noRunning }).pollsDueSet, false);
+
+  // 5. The check item is gone, so the Run entry is unreachable from the app.
+  const noToggle = mainRs.replace('"Start with Windows"', "");
+  assert.notEqual(noToggle, mainRs, "the menu still offers the toggle");
+  assert.equal(wiring({ mainRs: noToggle }).autostartToggle, false);
+
+  // 6. The toggle is there but the capability never grants the plugin, so it fails
+  // the first time a person clicks it.
+  const noPermission = {
+    ...capability,
+    permissions: (capability.permissions ?? []).filter(
+      (permission) =>
+        (typeof permission === "string" ? permission : permission?.identifier) !== "autostart:default",
+    ),
+  };
+  assert.equal(wiring({ capability: noPermission }).autostartAllowed, false);
+});
+
+test("guard: a fresh checkout carries every piece the installer build needs", () => {
+  const wiring = distWiring({
+    pin: JSON.parse(readFileSync(sidecarManifest, "utf8")),
+    tauriConf: JSON.parse(readFileSync(tauriConfig, "utf8")),
+    packageJson: JSON.parse(readFileSync(packageManifest, "utf8")),
+    distScript: readFileSync(distWrapper, "utf8"),
+    stageScript: readFileSync(stageScript, "utf8"),
+    ciYaml: readFileSync(ciWorkflow, "utf8"),
+    mainRs: readFileSync(shellMain, "utf8"),
+  });
+
+  assert.deepEqual(
+    wiring,
+    {
+      sidecarBundled: true,
+      appShippedAsResource: true,
+      fetchesBeforeBuild: true,
+      distScriptBuilds: true,
+      appStaged: true,
+      bundledRuntime: true,
+      plainPaths: true,
+      tagOnlyJob: true,
+    },
+    "the bundle carries its runtime and the app that runtime runs, and the CI job is a tag job",
+  );
+});
+
+test("guard: the dist rule refuses a build that would ship a runtime it cannot run", () => {
+  const base = {
+    pin: JSON.parse(readFileSync(sidecarManifest, "utf8")),
+    tauriConf: JSON.parse(readFileSync(tauriConfig, "utf8")),
+    packageJson: JSON.parse(readFileSync(packageManifest, "utf8")),
+    distScript: readFileSync(distWrapper, "utf8"),
+    stageScript: readFileSync(stageScript, "utf8"),
+    ciYaml: readFileSync(ciWorkflow, "utf8"),
+    mainRs: readFileSync(shellMain, "utf8"),
+  };
+  const wiring = (changes) => distWiring({ ...base, ...changes });
+
+  // 1. The runtime is fetched but never bundled, so the installer has none.
+  assert.equal(
+    wiring({ tauriConf: { ...base.tauriConf, bundle: { ...base.tauriConf.bundle, externalBin: [] } } })
+      .sidecarBundled,
+    false,
+  );
+
+  // 2. The application the child runs is not shipped, so an installed copy dies on its
+  // first import — the failure the first installed build actually produced.
+  const { resources, ...withoutResources } = base.tauriConf.bundle;
+  assert.ok(Object.keys(resources ?? {}).length > 0, "tauri.conf.json still ships the app");
+  assert.equal(
+    wiring({ tauriConf: { ...base.tauriConf, bundle: withoutResources } }).appShippedAsResource,
+    false,
+  );
+
+  // 3. The app is staged by whatever Node ran the wrapper, so `better-sqlite3` carries the
+  // wrong ABI and the installed app dies on its first database call.
+  const noStage = base.distScript.replace("stageDesktopApp();", "");
+  assert.notEqual(noStage, base.distScript, "the wrapper still stages the app");
+  assert.equal(wiring({ distScript: noStage }).appStaged, false);
+
+  // 4. Nothing fetches the pinned archive before the build.
+  assert.equal(
+    wiring({
+      tauriConf: { ...base.tauriConf, build: { ...base.tauriConf.build, beforeBuildCommand: "" } },
+    }).fetchesBeforeBuild,
+    false,
+  );
+
+  // 5. `desktop:dist` calls `tauri build` itself, skipping the fetch, the staging and the copy.
+  assert.equal(
+    wiring({
+      packageJson: { ...base.packageJson, scripts: { ...base.packageJson.scripts, "desktop:dist": "tauri build" } },
+    }).distScriptBuilds,
+    false,
+  );
+
+  // 6. The shell drops the bundled-runtime branch, so a release build would run the
+  // user's own Node and the ABI the suite tested would prove nothing (DC6).
+  const noRuntime = base.mainRs.replace("let runtime = bundled_runtime();", "");
+  assert.notEqual(noRuntime, base.mainRs, "main.rs still prefers the bundled runtime");
+  assert.equal(wiring({ mainRs: noRuntime }).bundledRuntime, false);
+
+  // 7. The child is handed the verbatim path `resource_dir()` returns, and Node refuses to
+  // start the entry script at all (`EISDIR: lstat 'C:'`) — the first installed build's bug.
+  const noPlain = base.mainRs.replace("plain_path(&packaged)", "packaged");
+  assert.notEqual(noPlain, base.mainRs, "sidecar_script still normalizes the resource path");
+  assert.equal(wiring({ mainRs: noPlain }).plainPaths, false);
+
+  // 8. The CI job loses its tag guard and becomes a pull-request gate.
+  const noGuard = base.ciYaml.replace(
+    "if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'",
+    "",
+  );
+  assert.notEqual(noGuard, base.ciYaml, "ci.yml still guards the desktop job");
+  assert.equal(wiring({ ciYaml: noGuard }).tagOnlyJob, false);
 });
 

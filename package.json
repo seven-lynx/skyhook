@@ -20,7 +20,9 @@
     "test": "node --test",
     "build:icons": "node scripts/build-icons.js",
     "build:desktop-icons": "node scripts/build-desktop-icons.js",
-    "desktop": "tauri dev"
+    "desktop": "cargo tauri dev",
+    "desktop:dist": "node scripts/desktop-dist.mjs",
+    "sidecar:fetch": "node scripts/fetch-sidecar.mjs"
   },
   "keywords": [
     "seeder",

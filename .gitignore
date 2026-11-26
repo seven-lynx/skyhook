@@ -17,7 +17,9 @@ config/skyhook.config.json
 
 # Desktop shell build output and the fetched sidecar binary — never tracked.
 # `src-tauri/target/` appears on the first `tauri dev`; the installer lands in
-# dist/desktop/ and the pinned node.exe is fetched, not committed.
+# dist/desktop/ and the pinned node.exe is fetched, not committed. `src-tauri/gen/`
+# is the ACL schema set the CLI regenerates on every build.
 src-tauri/target/
+src-tauri/gen/
 dist/desktop/
 src-tauri/binaries/*.exe
