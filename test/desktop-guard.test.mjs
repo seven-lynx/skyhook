@@ -1,5 +1,5 @@
 /**
- * desktop-guard.test.mjs — the four ways a desktop build could stop being the
+ * desktop-guard.test.mjs — the five ways a desktop build could stop being the
  * build CI tested, checked instead of trusted.
  *
  * A desktop release is two processes written in two languages, and the failures
@@ -15,6 +15,12 @@
  * is never compiled on this machine and a renderer that never runs in CI, so it is
  * read as wiring in the two files that carry it — and both files are also fed a
  * copy with one half removed. It is a wiring check, not a parser.
+ *
+ * The fifth family is that same shape one layer out: what the window is *allowed to
+ * be*. A renderer still offering a browser's affordances, and a shell that lets a
+ * link navigate the window off the sidecar's origin, are read as wiring in the two
+ * files that carry them — `index.html` is read only to prove the manifest skip still
+ * has something to skip.
  *
  * The import scan reads module *specifiers*, not raw text: `desktop/server.js`
  * names `better-sqlite3` in its docblock precisely to say it never imports it.
@@ -32,6 +38,7 @@ const sidecarManifest = join(desktopDir, "sidecar.json");
 const ciWorkflow = join(root, ".github", "workflows", "ci.yml");
 const shellMain = join(root, "src-tauri", "src", "main.rs");
 const guiApp = join(root, "src", "gui", "app.js");
+const guiHtml = join(root, "src", "gui", "index.html");
 
 /** Every file under `dir` whose name ends with `ext`, as absolute paths. */
 function filesWith(dir, ext) {
@@ -144,6 +151,28 @@ function tokenWiring(mainRs, appJs) {
       mainRs.includes(".initialization_script(")
       && mainRs.includes("\"window.__SKYHOOK_DESKTOP__ = {};\""),
     fromWindow: /headers\.Authorization/.test(appJs) && appJs.includes("__SKYHOOK_DESKTOP__"),
+  };
+}
+
+/**
+ * The halves of "this window is the app, not a browser tab", read from the two files
+ * that carry them. A shell window has one server — the one it spawned — cannot
+ * install a PWA, and must not be navigated off the sidecar's origin: so the API-base
+ * affordances go, the manifest link goes, and an `http(s)` link out belongs to the
+ * system browser.
+ *
+ * `handsLinksOut` is Rust nothing on this machine compiles and the renderer flags are
+ * matched as strings, which makes this a stand-in for `npm run desktop` — the one
+ * verification D6 cannot get from a toolchain it does not have. The second test
+ * removes each limb to prove the wiring check can fail.
+ */
+function desktopChrome(mainRs, appJs) {
+  return {
+    handsLinksOut: mainRs.includes(".on_navigation(") && mainRs.includes("open_url("),
+    hidesApiButton: appJs.includes('$("#apiBaseBtn")?.remove()'),
+    ignoresStoredBase: appJs.includes("if (isDesktop()) return window.location.origin;"),
+    hidesSettingsField: appJs.includes("const apiEndpoint = isDesktop()"),
+    skipsManifest: appJs.includes("document.querySelector('link[rel=\"manifest\"]')?.remove()"),
   };
 }
 
@@ -272,5 +301,69 @@ test("guard: the token rule refuses a handshake with a half removed", () => {
   const noHeader = appJs.replace(header, "");
   assert.notEqual(noHeader, appJs, "app.js still sets the bearer header");
   assert.equal(tokenWiring(mainRs, noHeader).fromWindow, false);
+});
+
+test("guard: the window drops what a webview cannot honour", () => {
+  const mainRs = readFileSync(shellMain, "utf8");
+  const appJs = readFileSync(guiApp, "utf8");
+
+  // The skip is only worth asserting while the shared markup still offers the PWA.
+  assert.match(
+    readFileSync(guiHtml, "utf8"),
+    /rel="manifest"/,
+    "src/gui/index.html still links the manifest — the shell has to be the one that skips it",
+  );
+
+  assert.deepEqual(
+    desktopChrome(mainRs, appJs),
+    {
+      handsLinksOut: true,
+      hidesApiButton: true,
+      ignoresStoredBase: true,
+      hidesSettingsField: true,
+      skipsManifest: true,
+    },
+    "the shell hands http(s) links to the browser, and the renderer hides the API-base prompt and the manifest",
+  );
+});
+
+test("guard: the chrome rule refuses a window that still thinks it is a browser", () => {
+  const mainRs = readFileSync(shellMain, "utf8");
+  const appJs = readFileSync(guiApp, "utf8");
+
+  // 1. Nothing holds the window at the sidecar's origin any more.
+  const noGuard = mainRs.replace(".on_navigation(move |target| {", "");
+  assert.notEqual(noGuard, mainRs, "main.rs still guards the navigation");
+  assert.equal(desktopChrome(noGuard, appJs).handsLinksOut, false);
+
+  // 2. The top-bar button survives into a window where it can do nothing.
+  const keepButton = appJs.replace('$("#apiBaseBtn")?.remove();', "");
+  assert.notEqual(keepButton, appJs, "applyDesktopChrome still drops the button");
+  assert.equal(desktopChrome(mainRs, keepButton).hidesApiButton, false);
+
+  // 3. A base URL a browser session stored redirects the window.
+  const keepBase = appJs.replace("if (isDesktop()) return window.location.origin;", "");
+  assert.notEqual(keepBase, appJs, "apiBase() still short-circuits in a window");
+  assert.equal(desktopChrome(mainRs, keepBase).ignoresStoredBase, false);
+
+  // 4. Settings offers a field the window will ignore.
+  const keepField = appJs.replace("const apiEndpoint = isDesktop()", "const apiEndpoint = false");
+  assert.notEqual(keepField, appJs, "renderSettings still branches on the flag");
+  assert.equal(desktopChrome(mainRs, keepField).hidesSettingsField, false);
+
+  // 5. The webview is offered an install it cannot complete.
+  const manifestSkip = "document.querySelector('link[rel=\"manifest\"]')?.remove();";
+  const keepManifest = appJs.replace(manifestSkip, "");
+  assert.notEqual(keepManifest, appJs, "applyDesktopChrome still drops the manifest link");
+  assert.equal(desktopChrome(mainRs, keepManifest).skipsManifest, false);
+
+  // The browser path is not collateral: with no flag none of the five fires.
+  assert.deepEqual(desktopChrome("", 'document.querySelector("#refreshBtn")'), {
+    handsLinksOut: false,
+    hidesApiButton: false,
+    ignoresStoredBase: false,
+    hidesSettingsField: false,
+    skipsManifest: false,
+  });
 });
 
