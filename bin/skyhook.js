@@ -642,11 +642,25 @@ async function cmdTag(a) {
   const provider = providers.find((p) => p.id === (val(a, "--provider") || null)) || getActiveTaggingProvider() || providers[0];
 
   const taskKey = val(a, "--task", null);
+  const model = val(a, "--model", c.tagging?.model);
+
+  // Resolve the id the provider actually offers before the first batch, so a
+  // typo — or a configured id carrying a quantisation suffix — is a refusal
+  // that names the ids it has, not a run that fails half a batch in (R7).
+  const { resolveTaggingModel } = await import("../src/adapters/tagging/index.js");
+  const resolved = await resolveTaggingModel(provider, model);
+  if (!resolved.ok) {
+    console.error(`Tag worker: ${resolved.error}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (resolved.warning) console.warn(`Tag worker: ${resolved.warning}`);
+  else if (resolved.loaded && resolved.loadTimeSeconds) console.log(`Tag worker: loaded ${model} in ${resolved.loadTimeSeconds}s`);
 
   const opts = {
     dbPath: c.pipeline?.offlineDb,
     provider,
-    model: val(a, "--model", c.tagging?.model),
+    model,
     prompt: loadPrompt(c.tagging?.promptFile),
     modelSource: val(a, "--model-source", c.tagging?.worker?.modelSource || "llm"),
     batchSize: parseInt(val(a, "--batch-size", String(c.tagging?.worker?.batchSize || 25)), 10) || 25,
@@ -657,6 +671,7 @@ async function cmdTag(a) {
     task: taskKey,
     retryFailed: has(a, "--retry-failed"),
     requeueUntagged: has(a, "--requeue-untagged"),
+    reaskNoTags: has(a, "--reask-no-tags"),
     logFile: join(c.logDir, "tagger.log"),
   };
 

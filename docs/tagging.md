@@ -54,8 +54,16 @@ task), Skyhook automatically manages the model lifecycle:
 3. If a **different** model is loaded → unloads it first (avoids double instances).
 4. Loads the target model via `POST /api/v1/models/load`.
 
-This happens server-side before any tagging worker is launched. The API is
-`POST /api/tagging/models/load { model, provider? }` and returns
+This happens server-side before any tagging worker is launched, and `skyhook tag`
+does the same before its first batch: the configured `tagging.model` is resolved
+against what the provider lists. An id carrying a quantisation suffix
+(`llama-3.1-8b@q4_k_m`) resolves on its base id — that is what `/v1/models`
+lists — while the pass still sends the configured string. A model that is
+downloaded but not loaded is loaded first; one the provider does not have at all
+is refused with the ids it does have, before any GPU time is spent. An
+unreachable provider is not a refusal: the first completion reports it.
+
+The API is `POST /api/tagging/models/load { model, provider? }` and returns
 `{ alreadyLoaded, loaded, instanceId, loadTimeSeconds }`.
 
 ## Prompt

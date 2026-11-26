@@ -73,7 +73,8 @@ skyhook tag                     # first pass: tag untagged URLs
 skyhook tag --mode retag-add    # second pass: add more tags to already-tagged URLs
 skyhook tag --mode retag-replace # second pass: replace existing tags
 skyhook tag --retry-failed      # re-select only the rows a failed batch stranded
-skyhook tag --requeue-untagged  # re-select URLs with zero tags, marker or not (skips junk)
+skyhook tag --requeue-untagged  # re-select URLs with zero tags it has not given up on (skips junk)
+skyhook tag --reask-no-tags     # put the URLs it did give up on back to the model, once
 skyhook tag --task fill-category # targeted gap-filling pass (see tagging.md)
 skyhook tag --provider ollama --batch-size 50
 
@@ -139,5 +140,11 @@ The first also appears automatically whenever the status payload reports failure
 
 A job is treated as an **LLM job** (only one may run at a time, because they share one
 model endpoint) when its command array contains `tag`, or when it sets `"llm": true`.
+
+`pipeline.jobs` is a **config-to-process boundary**: the command string is executed, so it is
+written only in `skyhook.config.json` — the owner's file. No HTTP body can supply one: the API
+takes a `kind`, looks it up in that map, and answers `404` for a kind it does not know. Anything
+that exposes job *editing* would be handing a command to an unauthenticated caller, which is why
+it is out of scope (`30-optional-features`, *Exposure*).
 A key name alone is not enough - a custom key must satisfy one of those two.
 
