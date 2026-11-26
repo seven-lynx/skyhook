@@ -386,6 +386,17 @@ code, kbd {
 /* A row is a tab stop (roving: one 0, the rest -1), so it has to show where focus is. */
 #seederBody tr:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 
+/* The pick is a state, not a hover: one brand edge on the left, the shape a running card already
+ * uses. Focus is the outline above, so the two never read as the same thing. The edge is on the
+ * first cell, not the row — Chromium does not paint a box-shadow on a `tr`. */
+#seederBody tr.focused { background: var(--bg-overlay); }
+#seederBody tr.focused td:first-child { box-shadow: inset 2px 0 0 var(--brand); }
+.seeder-card.focused {
+  background: var(--bg-overlay);
+  border-color: var(--border-strong);
+  box-shadow: inset 2px 0 0 var(--brand);
+}
+
 
 
 /* Splitters are overlays, not grid tracks: the grid has no gutters, and an overlay costs no
@@ -449,6 +460,39 @@ body.resizing { user-select: none; }
 
 .inspector { grid-area: insp; border-left: 1px solid var(--seam-strong); }
 .inspector .pane-body { padding: 0 var(--space-3) var(--space-3); }
+
+/* The inspector is read at a glance from 300 px, so it is a stack of dense mono rows, not prose:
+ * identity, the five actions, the facts the table already shows, then the run strip. */
+.insp { display: flex; flex-direction: column; gap: var(--space-3); padding-top: var(--space-3); }
+.insp-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.insp-title {
+  font-family: var(--font-mono); font-size: var(--text-md); font-weight: 600;
+  color: var(--text); word-break: break-word;
+}
+.insp-sub {
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-subtle);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.insp-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-1); }
+.insp-actions .btn { justify-content: flex-start; height: var(--btn-h); padding: 0 var(--space-2); }
+.insp-actions .btn:last-child { grid-column: 1 / -1; }
+
+.insp .info-grid { font-size: var(--text-sm); gap: 0 var(--space-2); }
+.insp .info-grid .info-v { word-break: break-word; }
+
+.insp-section {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-subtle);
+  letter-spacing: .1em; text-transform: uppercase;
+}
+.insp-runs { display: block; width: 100%; height: 36px; }
+/* One bar per run: rows found decide the height, the run's status decides the colour. A failed run
+ * is --err even at zero rows, because "it failed" is the fact, not how much it failed to find. */
+.insp-run.ok  { fill: var(--ok); }
+.insp-run.err { fill: var(--err); }
 
 /* ── work surface ───────────────────────────────────────────────────────── */
 
