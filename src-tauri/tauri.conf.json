@@ -5,7 +5,7 @@
   "identifier": "com.sevenlynx.skyhook",
   "build": {
     "frontendDist": "../src/gui",
-    "beforeBuildCommand": "node ../scripts/fetch-sidecar.mjs"
+    "beforeBuildCommand": "node scripts/fetch-sidecar.mjs"
   },
   "app": {
     "windows": []
@@ -15,8 +15,7 @@
     "targets": ["nsis"],
     "externalBin": ["binaries/skyhook-sidecar"],
     "resources": {
-      "../desktop/server.js": "desktop/server.js",
-      "../desktop/schedule.js": "desktop/schedule.js"
+      "../dist/desktop/app": "app"
     },
     "icon": [
       "icons/32x32.png",

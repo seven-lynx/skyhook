@@ -22,6 +22,7 @@ import { dirname, join, relative, resolve } from "path";
 import { fileURLToPath } from "url";
 
 import { ensureSidecar } from "./fetch-sidecar.mjs";
+import { stageDesktopApp } from "./stage-desktop-app.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BUNDLE = join(ROOT, "src-tauri", "target", "release", "bundle", "nsis");
@@ -31,14 +32,22 @@ async function main() {
   const runtime = await ensureSidecar();
   console.log(`desktop:dist: sidecar ${runtime.fetched ? "fetched" : "cached"}`);
 
-  // `shell: true` is about the CLI's two spellings: `cargo install tauri-cli` provides
-  // `tauri.exe`, an npm-installed CLI is `tauri.cmd`. The argv is fixed, so nothing from
-  // the environment reaches a command interpreter.
-  const build = spawnSync("tauri", ["build"], { stdio: "inherit", shell: true, windowsHide: true });
+  // The app the sidecar runs, staged under the pinned runtime so `better-sqlite3`'s
+  // prebuild matches the Node the installer ships (see stage-desktop-app.mjs).
+  stageDesktopApp();
+
+  // `cargo install tauri-cli` installs `cargo-tauri.exe`, so the command is `cargo tauri`,
+  // not `tauri` — the spelling Q5's default produces. Both are real executables on PATH, so
+  // no command interpreter is involved and nothing from the environment is re-parsed.
+  const build = spawnSync("cargo", ["tauri", "build"], { stdio: "inherit", windowsHide: true });
   if (build.error) {
-    throw new Error(`cannot run tauri (${build.error.message}) — cargo install tauri-cli --version "^2" --locked`);
+    throw new Error(`cannot run cargo (${build.error.message}) — the Rust toolchain is not on PATH`);
   }
-  if (build.status !== 0) throw new Error(`tauri build exited ${build.status}`);
+  if (build.status !== 0) {
+    throw new Error(
+      `cargo tauri build exited ${build.status} — cargo install tauri-cli --version "^2" --locked if the subcommand is missing`,
+    );
+  }
 
   if (!existsSync(BUNDLE)) throw new Error(`no bundle directory at ${relative(ROOT, BUNDLE)}`);
   const installers = readdirSync(BUNDLE).filter((file) => file.endsWith(".exe"));

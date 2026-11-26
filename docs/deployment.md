@@ -79,8 +79,8 @@ loading under plain Node, so nothing native links into the window.
 ```powershell
 rustup default stable          # Rust toolchain
 # plus the MSVC Build Tools ("Desktop development with C++") and WebView2
-cargo install tauri-cli        # provides `tauri`, which `npm run desktop` calls
-npm run desktop                # tauri dev: window on the sidecar's URL
+cargo install tauri-cli        # provides `cargo tauri`, which the npm scripts call
+npm run desktop                # cargo tauri dev: window on the sidecar's URL
 npm run build:desktop-icons    # regenerate src-tauri/icons/ from src/gui/icons/
 npm run desktop:dist           # build the NSIS installer into dist/desktop/
 ```
@@ -88,15 +88,21 @@ npm run desktop:dist           # build the NSIS installer into dist/desktop/
 None of this is needed for `npm ci`, `npm test`, or any `skyhook` command — the
 shell is an optional layer.
 
-`npm run desktop:dist` is three steps in one. `scripts/fetch-sidecar.mjs` downloads
-the runtime `desktop/sidecar.json` pins, refuses it unless the pin's `sha256` **and**
+`npm run desktop:dist` is four steps in one. `scripts/fetch-sidecar.mjs` downloads the
+runtime `desktop/sidecar.json` pins, refuses it unless the pin's `sha256` **and**
 nodejs.org's own `SHASUMS256.txt` agree, and unpacks it to
 `src-tauri/binaries/skyhook-sidecar-x86_64-pc-windows-msvc.exe` — the name Tauri's
-`externalBin` requires. `tauri build` then bundles it, and the installer is copied to
-`dist/desktop/`. `bundle.resources` ships `desktop/server.js` and its timer beside the
-window, so an installed build reads its sidecar from the resource directory instead of
-a checkout path. The `desktop` job in `.github/workflows/ci.yml` runs the same command
-on a tag only — never on a pull request.
+`externalBin` requires. `scripts/stage-desktop-app.mjs` assembles the application that
+runtime runs: `desktop/`, `src/` and `config/` plus a production `node_modules`, installed
+**by the pinned runtime** so `better-sqlite3`'s build matches the Node the installer
+ships, and then loaded once to prove it. `cargo tauri build` bundles the result as the
+`app` resource, and the installer is copied to `dist/desktop/`.
+
+An installed copy carries the whole server, not a script: `desktop/server.js` imports
+`src/interfaces/app-session.js`, which imports everything else. It runs the `node.exe`
+beside its own executable and never the `node` on `PATH` — a release build refuses to
+start without it. The `desktop` job in `.github/workflows/ci.yml` runs the same command
+on a tag only, never on a pull request.
 
 The installer is **unsigned**: Authenticode is the one part of a desktop release that
 cannot be code, and the certificate route is still an open ruling (`PLAN.md` §6 item
