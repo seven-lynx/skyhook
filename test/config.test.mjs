@@ -13,7 +13,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { loadConfig } from "../src/config.js";
@@ -51,4 +51,29 @@ test("loadSettings keeps a BOM'd settings.json instead of degrading to {}", () =
   assert.equal(allowRemote(), true, "a runtime toggle in a BOM'd file still wins");
 
   rmSync(dir, { recursive: true, force: true });
+});
+
+test(".env.example lists the keys and carries no value", () => {
+  const file = join(process.cwd(), ".env.example");
+  assert.ok(existsSync(file), ".env.example is the tracked list of the keys .env may set");
+  const lines = readFileSync(file, "utf8").split(/\r?\n/);
+  const keys = [];
+  for (const [i, line] of lines.entries()) {
+    const text = line.trim();
+    if (!text || text.startsWith("#")) continue;
+    const match = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(text);
+    assert.ok(match, `.env.example:${i + 1} is neither a comment nor KEY=value: ${text}`);
+    assert.equal(match[2], "", `.env.example:${i + 1} must carry no value — ${match[1]} would ship a secret`);
+    keys.push(match[1]);
+  }
+  // The four surfaces the config rules name, plus the two credentials a
+  // database provider needs. A key that is read by src/ but missing here is a
+  // reader who cannot find it.
+  for (const key of [
+    "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "POSTGRES_URL", "DATABASE_URL",
+    "SKYHOOK_REMOTE_TOKEN", "FLARESOLVERR_ENABLED", "FLARESOLVERR_URL",
+    "FLARESOLVERR_EXE", "FLARESOLVERR_PORT",
+  ]) {
+    assert.ok(keys.includes(key), `.env.example documents ${key}`);
+  }
 });

@@ -63,6 +63,8 @@ same commit, or neither does; `check_plans.py` rule `W15` warns while they disag
 | File | Holds |
 |---|---|
 | `README.md` | what the project is, the command table, the feature list, the Status paragraph |
+| `CHANGELOG.md` | release history, newest first — the README Status paragraph is rewritten from it each release |
+| `.env.example` | every environment key `.env` may set, with empty values; `src/config.js` reads them |
 | `src/config.js` | `DEFAULTS` — the defaults every install starts from |
 | `config/categories.json` | the taxonomy: 8 pillars, 98 subcategories |
 | `config/schema.json` | the canonical-field → column mapping for a user's database |

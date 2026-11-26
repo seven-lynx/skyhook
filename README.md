@@ -64,7 +64,7 @@ node bin/skyhook.js init --provider sqlite
 
 ## Requirements
 
-- **Node.js ≥ 20** (CI runs Node 20).
+- **Node.js ≥ 22** (CI tests 22 and 24; the desktop installer bundles a Node 24 runtime).
 - `npm install` works out of the box on Windows/macOS/Linux — no C++ toolchain
   required. `better-sqlite3` is pinned to **12.x** (v13 forces a source build on
   clean installs).
@@ -121,7 +121,7 @@ Env fallbacks: `FLARESOLVERR_ENABLED=1`, `FLARESOLVERR_EXE`, `FLARESOLVERR_URL`,
 | `cache` | Inspect / prune staged results and the discovery cache |
 | `sync pull <peer>` | Merge a peer's staged results (Pi ⇄ PC, URL dedup) |
 | `push` | Push staged results into storage |
-| `tag` | Offline LLM tag worker (resumable; `--mode retag-add\|retag-replace`, `--retry-failed`, `--requeue-untagged`) |
+| `tag` | Offline LLM tag worker (resumable; `--mode retag-add\|retag-replace`, `--retry-failed`, `--requeue-untagged`, `--reask-no-tags`) |
 | `pull` / `upload` | Pull URLs into the offline DB / upload tags & attributes back |
 | `settings` | View or toggle node settings (`allow-remote`) |
 | `init` | Scaffold `skyhook.config.json`, `config/`, `seeders/`, `.skyhook/` |
