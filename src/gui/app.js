@@ -47,16 +47,24 @@ const state = {
   nodeId: "local",
 };
 
+/* The desktop shell injects a flag before any page script runs
+ * (`src-tauri/src/main.rs`, DC7), and a browser has none. It is the only desktop
+ * signal on purpose: a user-agent string is a guess about the host, while this is
+ * the shell stating it. */
+const isDesktop = () => Boolean(window.__SKYHOOK_DESKTOP__);
+
+const REQUEST_TIMEOUT_MS = 15000;
+
 const apiBase = () => {
+  // A window has exactly one server — the one the shell spawned — so an override a
+  // browser session left in localStorage must not redirect it.
+  if (isDesktop()) return window.location.origin;
   if (state.apiBase.trim()) return state.apiBase.trim().replace(/\/+$/, "");
   return window.location.origin;
 };
 
-const REQUEST_TIMEOUT_MS = 15000;
-
-/* The desktop shell injects a per-launch bearer token before any page script runs
- * (`src-tauri/src/main.rs`, DC7). A browser has no such flag, so its requests are
- * byte for byte what they were before the shell existed. */
+/* The per-launch bearer token the shell also injects, so `api()` can answer a
+ * mutating route. With no flag the renderer's requests are unchanged. */
 const desktopToken = () => window.__SKYHOOK_DESKTOP__?.token || null;
 
 async function api(method, path, body) {
@@ -862,6 +870,15 @@ async function renderSettings() {
     const peers = s.remote && s.remote.peers && s.remote.peers.length
       ? s.remote.peers.map((p) => '<li><code>' + esc(p.id) + '</code> → ' + esc(p.url) + '</li>').join("")
       : "<li class='muted'>(none)</li>";
+    // A window has no use for this field and no way to honour it (`apiBase`).
+    const apiEndpoint = isDesktop()
+      ? ""
+      : '<h2 class="h-section">API endpoint</h2>' +
+        '<div class="field">' +
+          '<label for="apiBase">Base URL (blank = this origin)</label>' +
+          '<input id="apiBase" type="text" value="' + esc(state.apiBase) + '" placeholder="' + esc(window.location.origin) + '" />' +
+          '<span class="hint">If you are running the GUI on a different host from the API, set the full URL here.</span>' +
+        '</div>';
     body.innerHTML =
       '<div class="grid grid-stats mb-4">' +
         '<div class="stat" style="cursor: default;"><span class="stat-num">' + esc((s.node && s.node.id) || "—") + '</span><span class="stat-label">node id</span></div>' +
@@ -884,12 +901,7 @@ async function renderSettings() {
       '<p><button class="btn ' + ((s.node && s.node.allowRemote) ? "btn-danger" : "btn-primary") + '" id="toggleRemoteBtn" type="button">' +
         ((s.node && s.node.allowRemote) ? "Turn off remote control" : "Turn on remote control (worker)") +
       '</button></p>' +
-      '<h2 class="h-section">API endpoint</h2>' +
-      '<div class="field">' +
-        '<label for="apiBase">Base URL (blank = this origin)</label>' +
-        '<input id="apiBase" type="text" value="' + esc(state.apiBase) + '" placeholder="' + esc(window.location.origin) + '" />' +
-        '<span class="hint">If you are running the GUI on a different host from the API, set the full URL here.</span>' +
-      '</div>' +
+      apiEndpoint +
       '<h2 class="h-section">Auto-refresh</h2>' +
       '<label class="toggle">' +
         '<input id="live" type="checkbox" />' +
@@ -1344,7 +1356,7 @@ async function refreshAll() {
 
 function bind() {
   $("#refreshBtn").addEventListener("click", () => refreshAll());
-  $("#apiBaseBtn").addEventListener("click", openApiBasePrompt);
+  $("#apiBaseBtn")?.addEventListener("click", openApiBasePrompt);
 
   const filterEl = $("#filter");
   if (filterEl) filterEl.addEventListener("input", debounce(renderSeeders, 80));
@@ -1584,7 +1596,17 @@ async function writeTimer() {
   } catch (err) { toast("Timer failed: " + err.message, "err"); }
 }
 
+/* The affordances a window cannot honour, removed rather than hidden so nothing in
+ * the DOM can be tabbed to or brought back by a later render: the API-base prompt
+ * (the shell chose the server) and the PWA manifest (a webview cannot install one). */
+function applyDesktopChrome() {
+  if (!isDesktop()) return;
+  $("#apiBaseBtn")?.remove();
+  document.querySelector('link[rel="manifest"]')?.remove();
+}
+
 async function init() {
+  applyDesktopChrome();
   $("#apiLabel").textContent = "api: " + apiBase();
   bind();
   await loadCategories();

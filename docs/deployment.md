@@ -95,6 +95,13 @@ What an installed build ships is pinned in `desktop/sidecar.json`: the `node.exe
 build could drift — a `src/core`, `src/engine` or `src/adapters` import in
 `desktop/`, and a capability that grants the window more than `core` + `opener`.
 
+The window is not a browser tab, and the shared renderer is told so by the flag the
+shell injects (`window.__SKYHOOK_DESKTOP__`) rather than by a user-agent guess: the
+API-base prompt is removed, so a base URL a browser session left in `localStorage`
+cannot redirect the window away from the server the shell spawned, the PWA manifest
+link is not offered to a webview that cannot install it, and an `http(s)` link opens
+in the system browser instead of navigating the window off the dashboard.
+
 State lives in the app data directory the shell passes to the sidecar
 (`--root`), which is `%APPDATA%\com.sevenlynx.skyhook` on Windows — not the
 directory the shell was launched from.

@@ -279,11 +279,35 @@ fn open_dashboard(app: &AppHandle, base_url: &str, token: &str) -> Result<(), St
         "window.__SKYHOOK_DESKTOP__ = {};",
         json!({ "token": token })
     );
+    // The window belongs to one origin — the sidecar's — so a link out of it is handed
+    // to the system browser and the navigation cancelled. A stray href can then never
+    // strand the app on a page with no way back, and a same-origin reload or hash route
+    // passes untouched, which is how the renderer already moves between its screens.
+    // The comparison is scheme + host + defaulted port rather than a string prefix,
+    // so `http://127.0.0.1:41730` cannot pass for the session on `:4173`.
+    let home_scheme = url.scheme().to_string();
+    let home_host = url.host_str().map(str::to_string);
+    let home_port = url.port_or_known_default();
+    let opener = app.clone();
     WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
         .title("Skyhook")
         .inner_size(1440.0, 900.0)
         .min_inner_size(720.0, 520.0)
         .initialization_script(script.as_str())
+        .on_navigation(move |target| {
+            let at_home = target.scheme() == home_scheme.as_str()
+                && target.host_str() == home_host.as_deref()
+                && target.port_or_known_default() == home_port;
+            if at_home {
+                return true;
+            }
+            if matches!(target.scheme(), "http" | "https") {
+                if let Err(err) = opener.opener().open_url(target.as_str(), None::<String>) {
+                    eprintln!("open link: {err}");
+                }
+            }
+            false
+        })
         .build()
         .map_err(|err| err.to_string())?;
     Ok(())
