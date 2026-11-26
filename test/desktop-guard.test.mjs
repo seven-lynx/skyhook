@@ -38,6 +38,9 @@ const sidecarManifest = join(desktopDir, "sidecar.json");
 const ciWorkflow = join(root, ".github", "workflows", "ci.yml");
 const shellMain = join(root, "src-tauri", "src", "main.rs");
 const sidecarSchedule = join(desktopDir, "schedule.js");
+const tauriConfig = join(root, "src-tauri", "tauri.conf.json");
+const packageManifest = join(root, "package.json");
+const distWrapper = join(root, "scripts", "desktop-dist.mjs");
 const guiApp = join(root, "src", "gui", "app.js");
 const guiHtml = join(root, "src", "gui", "index.html");
 
@@ -218,6 +221,36 @@ function scheduleWiring({ serverJs, scheduleJs, mainRs, capability }) {
       && mainRs.includes("CheckMenuItem::with_id")
       && mainRs.includes(".autolaunch()"),
     autostartAllowed: permissions.includes("autostart:default"),
+  };
+}
+
+/**
+ * The halves of "a fresh checkout produces an installer", read from the five files that
+ * carry them: the pin, the bundle config, the npm script that wraps the build, the
+ * wrapper itself, and the workflow that builds it on CI.
+ *
+ * This family has the least to observe on a machine without Rust — no installer is built
+ * here — so what is asserted is that each piece is wired to the next: the runtime present
+ * under the name `externalBin` requires, the sidecar script shipped as a resource (an
+ * installed window has no checkout to fall back to), the fetch running before `tauri
+ * build`, the release build refusing the machine's own Node, and the CI job guarded to a
+ * tag so the installer never becomes a pull-request gate.
+ */
+function distWiring({ pin, tauriConf, packageJson, distScript, ciYaml, mainRs }) {
+  const bundle = tauriConf.bundle ?? {};
+  const externalBin = Array.isArray(bundle.externalBin) ? bundle.externalBin : [];
+  const resources = Object.keys(bundle.resources ?? {});
+  return {
+    sidecarBundled: externalBin.includes(pin.externalBin),
+    scriptShippedAsResource: resources.some((key) => key.endsWith("desktop/server.js")),
+    fetchesBeforeBuild: String(tauriConf.build?.beforeBuildCommand ?? "").includes("fetch-sidecar"),
+    distScriptBuilds:
+      String(packageJson.scripts?.["desktop:dist"] ?? "").includes("desktop-dist.mjs")
+      && distScript.includes("tauri build"),
+    bundledRuntime: mainRs.includes("let runtime = bundled_runtime();") && mainRs.includes("cfg!(debug_assertions)"),
+    tagOnlyJob:
+      ciYaml.includes("windows-latest")
+      && /if:\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/.test(ciYaml),
   };
 }
 
@@ -487,5 +520,87 @@ test("guard: the schedule rule refuses a shell that stopped owning the schedule"
     ),
   };
   assert.equal(wiring({ capability: noPermission }).autostartAllowed, false);
+});
+
+test("guard: a fresh checkout carries every piece the installer build needs", () => {
+  const wiring = distWiring({
+    pin: JSON.parse(readFileSync(sidecarManifest, "utf8")),
+    tauriConf: JSON.parse(readFileSync(tauriConfig, "utf8")),
+    packageJson: JSON.parse(readFileSync(packageManifest, "utf8")),
+    distScript: readFileSync(distWrapper, "utf8"),
+    ciYaml: readFileSync(ciWorkflow, "utf8"),
+    mainRs: readFileSync(shellMain, "utf8"),
+  });
+
+  assert.deepEqual(
+    wiring,
+    {
+      sidecarBundled: true,
+      scriptShippedAsResource: true,
+      fetchesBeforeBuild: true,
+      distScriptBuilds: true,
+      bundledRuntime: true,
+      tagOnlyJob: true,
+    },
+    "the bundle carries its runtime and its script, the release build refuses the PATH's node, and the CI job is a tag job",
+  );
+});
+
+test("guard: the dist rule refuses a build that would ship a runtime it cannot run", () => {
+  const base = {
+    pin: JSON.parse(readFileSync(sidecarManifest, "utf8")),
+    tauriConf: JSON.parse(readFileSync(tauriConfig, "utf8")),
+    packageJson: JSON.parse(readFileSync(packageManifest, "utf8")),
+    distScript: readFileSync(distWrapper, "utf8"),
+    ciYaml: readFileSync(ciWorkflow, "utf8"),
+    mainRs: readFileSync(shellMain, "utf8"),
+  };
+  const wiring = (changes) => distWiring({ ...base, ...changes });
+
+  // 1. The runtime is fetched but never bundled, so the installer has none.
+  assert.equal(
+    wiring({ tauriConf: { ...base.tauriConf, bundle: { ...base.tauriConf.bundle, externalBin: [] } } })
+      .sidecarBundled,
+    false,
+  );
+
+  // 2. The window's script is not shipped, so an installed copy falls back to a
+  // checkout path that does not exist on the user's disk.
+  const { resources, ...withoutResources } = base.tauriConf.bundle;
+  assert.ok(Object.keys(resources ?? {}).length > 0, "tauri.conf.json still ships the sidecar script");
+  assert.equal(
+    wiring({ tauriConf: { ...base.tauriConf, bundle: withoutResources } }).scriptShippedAsResource,
+    false,
+  );
+
+  // 3. Nothing fetches the pinned archive before the build.
+  assert.equal(
+    wiring({
+      tauriConf: { ...base.tauriConf, build: { ...base.tauriConf.build, beforeBuildCommand: "" } },
+    }).fetchesBeforeBuild,
+    false,
+  );
+
+  // 4. `desktop:dist` calls `tauri build` itself, skipping the fetch and the copy.
+  assert.equal(
+    wiring({
+      packageJson: { ...base.packageJson, scripts: { ...base.packageJson.scripts, "desktop:dist": "tauri build" } },
+    }).distScriptBuilds,
+    false,
+  );
+
+  // 5. The shell drops the bundled-runtime branch, so a release build would run the
+  // user's own Node and the ABI the suite tested would prove nothing (DC6).
+  const noRuntime = base.mainRs.replace("let runtime = bundled_runtime();", "");
+  assert.notEqual(noRuntime, base.mainRs, "main.rs still prefers the bundled runtime");
+  assert.equal(wiring({ mainRs: noRuntime }).bundledRuntime, false);
+
+  // 6. The CI job loses its tag guard and becomes a pull-request gate.
+  const noGuard = base.ciYaml.replace(
+    "if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'",
+    "",
+  );
+  assert.notEqual(noGuard, base.ciYaml, "ci.yml still guards the desktop job");
+  assert.equal(wiring({ ciYaml: noGuard }).tagOnlyJob, false);
 });
 

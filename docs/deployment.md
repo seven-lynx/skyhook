@@ -82,11 +82,27 @@ rustup default stable          # Rust toolchain
 cargo install tauri-cli        # provides `tauri`, which `npm run desktop` calls
 npm run desktop                # tauri dev: window on the sidecar's URL
 npm run build:desktop-icons    # regenerate src-tauri/icons/ from src/gui/icons/
+npm run desktop:dist           # build the NSIS installer into dist/desktop/
 ```
 
 None of this is needed for `npm ci`, `npm test`, or any `skyhook` command — the
-shell is an optional layer. At this stage it is a development build only: there is
-no installer yet, and the sidecar runs the `node` on your `PATH`.
+shell is an optional layer.
+
+`npm run desktop:dist` is three steps in one. `scripts/fetch-sidecar.mjs` downloads
+the runtime `desktop/sidecar.json` pins, refuses it unless the pin's `sha256` **and**
+nodejs.org's own `SHASUMS256.txt` agree, and unpacks it to
+`src-tauri/binaries/skyhook-sidecar-x86_64-pc-windows-msvc.exe` — the name Tauri's
+`externalBin` requires. `tauri build` then bundles it, and the installer is copied to
+`dist/desktop/`. `bundle.resources` ships `desktop/server.js` and its timer beside the
+window, so an installed build reads its sidecar from the resource directory instead of
+a checkout path. The `desktop` job in `.github/workflows/ci.yml` runs the same command
+on a tag only — never on a pull request.
+
+The installer is **unsigned**: Authenticode is the one part of a desktop release that
+cannot be code, and the certificate route is still an open ruling (`PLAN.md` §6 item
+11), so Windows will call it an unrecognised app. The app it installs still runs only
+the runtime it shipped — never the `node` on `PATH` — which is what
+`desktop/sidecar.json` and `test/desktop-guard.test.mjs` exist to keep true.
 
 What an installed build ships is pinned in `desktop/sidecar.json`: the `node.exe`
 20.x release that becomes the sidecar, its artifact and its checksum.

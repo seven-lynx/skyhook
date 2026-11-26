@@ -123,7 +123,7 @@ impl Session {
     }
 }
 
-/// The script to run, from the bundle when D8 ships one and from the checkout
+/// The script to run, from the bundle when it shipped one and from the checkout
 /// that built this binary until then.
 fn sidecar_script(app: &AppHandle) -> PathBuf {
     if let Ok(dir) = app.path().resource_dir() {
@@ -135,10 +135,21 @@ fn sidecar_script(app: &AppHandle) -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../desktop/server.js"))
 }
 
+/// The runtime an installed build ships: the pinned `node.exe`, renamed to
+/// `skyhook-sidecar.exe` by Tauri's `externalBin` and installed beside the app's own
+/// executable. Absent in a checkout, which is the only place `node` from `PATH` is
+/// used at all (DC6, DC11).
+fn bundled_runtime() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let exe = dir.join(format!("skyhook-sidecar{}", std::env::consts::EXE_SUFFIX));
+    exe.exists().then_some(exe)
+}
+
 /// Start the sidecar and wait for its handshake line.
 ///
-/// D3 runs the dev machine's `node`; D8 swaps in the pinned `node.exe` shipped
-/// beside the installed exe as an `externalBin`. `--root` is passed because the
+/// A development build runs the machine's `node` on the checkout's script; an installed
+/// build runs the pinned `node.exe` the bundle shipped beside its exe as an `externalBin`
+/// (`desktop/sidecar.json`, `scripts/fetch-sidecar.mjs`). `--root` is passed because the
 /// sidecar resolves every config path against its working directory
 /// (`src/config.js:134,149-151`) — without it an installed build would write
 /// `.skyhook/` next to its own exe instead of under `%APPDATA%`. `SKYHOOK_REMOTE_TOKEN`
@@ -152,9 +163,19 @@ async fn spawn_sidecar(app: &AppHandle, token: &str) -> Result<(CommandChild, Si
     fs::create_dir_all(&root).map_err(|err| format!("cannot create {}: {err}", root.display()))?;
 
     let script = sidecar_script(app);
-    let (mut events, child) = app
-        .shell()
-        .command("node")
+    let runtime = bundled_runtime();
+
+    // An installed copy may only run the runtime it shipped (DC6): no sidecar beside the
+    // exe in a release build is a broken install, not an invitation to use the user's Node.
+    if runtime.is_none() && !cfg!(debug_assertions) {
+        return Err("the bundled runtime is missing beside the app (desktop/sidecar.json)".into());
+    }
+
+    let builder = match &runtime {
+        Some(exe) => app.shell().command(exe.to_string_lossy().into_owned()),
+        None => app.shell().command("node"),
+    };
+    let (mut events, child) = builder
         .args([
             script.to_string_lossy().into_owned(),
             "--root".to_string(),
@@ -163,7 +184,7 @@ async fn spawn_sidecar(app: &AppHandle, token: &str) -> Result<(CommandChild, Si
         ])
         .env("SKYHOOK_REMOTE_TOKEN", token)
         .spawn()
-        .map_err(|err| format!("cannot start {}: {err}", script.display()))?;
+        .map_err(|err| format!("cannot start the sidecar ({}): {err}", script.display()))?;
 
     // Chunks are not lines: the banner and the handshake can arrive split across
     // reads, and a handshake cut in half must still be parsed whole.
