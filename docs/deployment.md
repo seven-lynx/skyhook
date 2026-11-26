@@ -1,7 +1,8 @@
 # Deployment & Scheduling
 
-Status: **guide** — scaffolding with `init`, the systemd timer `emit-timer` regenerates, the
-development path for the optional desktop shell, and the pointer to the multi-node setup.
+Status: **guide** — scaffolding with `init`, the app window `app` opens, the systemd timer
+`emit-timer` regenerates, the development path for the optional desktop shell, and the pointer to
+the multi-node setup.
 
 ## Scaffolding a project
 
@@ -23,6 +24,25 @@ node bin/skyhook.js init --provider sqlite
 ```
 
 It refuses to overwrite an existing `skyhook.config.json`.
+
+## Opening the desktop window
+
+`skyhook app` starts the server and opens the GUI in a window with no browser chrome — Edge's or
+Chrome's `--app=` mode, whichever is installed. Nothing is installed for this: the window is the
+GUI `skyhook serve` already serves, in a window that is only that page.
+
+```bash
+node bin/skyhook.js app              # free loopback port, e.g. http://127.0.0.1:51923
+node bin/skyhook.js app --port 4173  # a port you know, if something else expects it
+```
+
+The port defaults to a free one so two projects on one machine never fight over 4173. Ctrl+C stops
+the server and releases the session lock in `.skyhook/`; only one app session runs per data
+directory, and a second one is refused naming the pid that holds it. A machine with neither browser
+falls back to the default one — same server, with tabs and an address bar.
+
+`skyhook serve` is unchanged, and remains the way to reach the GUI from a Pi or a peer: the browser
+surface is still supported, not a fallback.
 
 ## Scheduling on a timer (systemd)
 

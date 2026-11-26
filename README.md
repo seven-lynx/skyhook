@@ -127,6 +127,7 @@ Env fallbacks: `FLARESOLVERR_ENABLED=1`, `FLARESOLVERR_EXE`, `FLARESOLVERR_URL`,
 | `init` | Scaffold `skyhook.config.json`, `config/`, `seeders/`, `.skyhook/` |
 | `tui` | Interactive terminal menu |
 | `serve` | HTTP JSON API + web GUI (`--port` 4173, `--host` 127.0.0.1) |
+| `app` | Open the GUI in a chromeless app-mode window (`--port` 0 = free port, Edge/Chrome `--app=`) |
 
 Run `node bin/skyhook.js help <command>` for a command's flags.
 
