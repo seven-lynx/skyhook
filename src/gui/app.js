@@ -339,8 +339,12 @@ function renderSeeders() {
   if (badge) badge.textContent = state.seeders.length;
   const tbody = $("#seederBody");
   tbody.innerHTML = "";
+  // Roving tabindex: one tab stop for the whole table, arrows inside it (see wireRowFocus).
+  const roveSource = rowFocusSource || (rows[0] && rows[0].source);
   for (const s of rows) {
     const tr = document.createElement("tr");
+    tr.dataset.source = s.source;
+    tr.tabIndex = s.source === roveSource ? 0 : -1;
     const statusCls = s.lastStatus === "ok" ? "ok" : s.lastStatus ? "err" : "";
     const result = resultText(s.lastResult);
     const isRunning = runningSet.has(s.source);
@@ -1013,6 +1017,202 @@ let logPageState = {
   followLog: true,
 };
 
+/* ── pane mechanics ──────────────────────────────────────────────────────── */
+
+/* Pane sizes are the only shell state worth persisting: three integers, clamped on read so a
+ * value a stale session wrote can never leave a pane unusable. They are written on :root, never
+ * on #workbench, because a collapse rule re-declares the same variable on the grid container —
+ * an inline value there would win and the pane could never collapse. */
+const PANES = {
+  nav:  { css: "--nav-w",  key: "skyhook.navW",  min: 140, max: 420, def: 220, axis: "x" },
+  insp: { css: "--insp-w", key: "skyhook.inspW", min: 240, max: 560, def: 300, axis: "x" },
+  dock: { css: "--dock-h", key: "skyhook.dockH", min: 120, max: 480, def: 220, axis: "y" },
+};
+const PANE_LABEL = { nav: "navigator", insp: "inspector", dock: "log dock" };
+
+/* A dock taller than two fifths of the window leaves no work surface on a short screen. */
+function paneMax(name) {
+  return name === "dock"
+    ? Math.min(PANES.dock.max, Math.round(window.innerHeight * 0.4))
+    : PANES[name].max;
+}
+
+function clampPane(name, value) {
+  const p = PANES[name];
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return p.def;
+  return Math.min(paneMax(name), Math.max(p.min, n));
+}
+
+function currentPaneSize(name) {
+  const raw = document.documentElement.style.getPropertyValue(PANES[name].css);
+  return clampPane(name, parseFloat(raw) || PANES[name].def);
+}
+
+function setPaneSize(name, value, persist = false) {
+  const p = PANES[name];
+  const n = clampPane(name, value);
+  const wb = $("#workbench");
+  if (!wb) return n;
+  document.documentElement.style.setProperty(p.css, n + "px");
+  const split = wb.querySelector('.splitter[data-pane="' + name + '"]');
+  if (split) {
+    split.setAttribute("aria-valuenow", String(n));
+    split.setAttribute("aria-valuemin", String(p.min));
+    split.setAttribute("aria-valuemax", String(paneMax(name)));
+  }
+  if (persist) localStorage.setItem(p.key, String(n));
+  return n;
+}
+
+function restorePaneSizes() {
+  for (const name of Object.keys(PANES)) {
+    const stored = localStorage.getItem(PANES[name].key);
+    setPaneSize(name, stored == null ? PANES[name].def : stored);
+  }
+}
+
+/* The pointer's position is the size, so a drag cannot jump by the grab offset: nav is measured
+ * from the rail's edge, the inspector from the window's right, the dock from the status bar. */
+function paneSizeFromPointer(name, ev) {
+  const wb = $("#workbench");
+  if (!wb) return PANES[name].def;
+  const rect = wb.getBoundingClientRect();
+  const cs = getComputedStyle(wb);
+  const px = (v) => parseFloat(cs.getPropertyValue(v)) || 0;
+  if (name === "nav") return ev.clientX - rect.left - px("--rail-w");
+  if (name === "insp") return rect.right - ev.clientX;
+  return rect.bottom - ev.clientY - px("--status-h");
+}
+
+/* F6 walks the regions in visual order and skips whatever a collapse or a breakpoint hides. */
+function focusNextRegion(dir) {
+  const regions = ["rail", "nav", "work", "insp", "dock"]
+    .map((id) => document.getElementById(id))
+    .filter((el) => el && el.offsetParent !== null);
+  if (!regions.length) return;
+  const current = regions.find((el) => el.contains(document.activeElement));
+  const from = current ? regions.indexOf(current) : (dir > 0 ? -1 : 0);
+  regions[(from + dir + regions.length) % regions.length].focus();
+}
+
+function wirePanes() {
+  const wb = $("#workbench");
+  if (!wb) return;
+  restorePaneSizes();
+
+  wb.querySelectorAll(".splitter").forEach((split) => {
+    const name = split.dataset.pane;
+    const p = PANES[name];
+    if (!p) return;
+    let dragging = false;
+
+    split.addEventListener("pointerdown", (ev) => {
+      dragging = true;
+      split.setPointerCapture(ev.pointerId);
+      document.body.classList.add("resizing");
+      document.body.style.cursor = p.axis === "x" ? "col-resize" : "row-resize";
+    });
+    split.addEventListener("pointermove", (ev) => {
+      if (dragging) setPaneSize(name, paneSizeFromPointer(name, ev));
+    });
+    const stop = (ev) => {
+      if (!dragging) return;
+      dragging = false;
+      if (split.hasPointerCapture(ev.pointerId)) split.releasePointerCapture(ev.pointerId);
+      document.body.classList.remove("resizing");
+      document.body.style.cursor = "";
+      setPaneSize(name, currentPaneSize(name), true);
+    };
+    split.addEventListener("pointerup", stop);
+    split.addEventListener("pointercancel", stop);
+    split.addEventListener("dblclick", () => setPaneSize(name, p.def, true));
+
+    // A separator only a pointer can move is not reachable by keyboard at all.
+    split.addEventListener("keydown", (ev) => {
+      const now = currentPaneSize(name);
+      const step = ev.shiftKey ? 48 : 16;
+      let next = null;
+      if (p.axis === "x" && ev.key === "ArrowLeft") next = now - step;
+      if (p.axis === "x" && ev.key === "ArrowRight") next = now + step;
+      if (p.axis === "y" && ev.key === "ArrowUp") next = now - step;
+      if (p.axis === "y" && ev.key === "ArrowDown") next = now + step;
+      if (ev.key === "Home") next = p.def;
+      if (next == null) return;
+      ev.preventDefault();
+      setPaneSize(name, next, true);
+    });
+  });
+
+
+  // Collapse toggles. The dock's own attribute is its open/collapsed state (W5 owns its body);
+  // nav and inspector share `data-collapsed` as a whitespace-separated list.
+  $$(".pane-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.pane;
+      const open = btn.getAttribute("aria-expanded") !== "true";
+      btn.setAttribute("aria-expanded", String(open));
+      const label = (open ? "Collapse " : "Expand ") + (PANE_LABEL[name] || name);
+      btn.title = label;
+      const sr = btn.querySelector(".sr-only");
+      if (sr) sr.textContent = label;
+      if (name === "dock") {
+        wb.dataset.dock = open ? "open" : "collapsed";
+      } else {
+        const collapsed = new Set((wb.dataset.collapsed || "").split(/\s+/).filter(Boolean));
+        if (open) collapsed.delete(name); else collapsed.add(name);
+        if (collapsed.size) wb.dataset.collapsed = [...collapsed].join(" ");
+        else delete wb.dataset.collapsed;
+      }
+      // Focus must not die inside the pane that just went away.
+      const pane = document.getElementById(name);
+      if (!open && pane && pane.contains(document.activeElement)) $("#work").focus();
+    });
+  });
+
+  // A restored size can be too tall for a window that shrank since it was stored.
+  window.addEventListener("resize", () => {
+    for (const name of Object.keys(PANES)) setPaneSize(name, currentPaneSize(name));
+  });
+}
+
+
+/* Row focus is a roving tabindex: one row of the seeder table is Tab-reachable and the arrows
+ * move inside it. Selection is W3's job — this decides only where focus lands and how it leaves. */
+let rowFocusSource = null;
+
+function roveTo(tr) {
+  const tbody = $("#seederBody");
+  if (!tbody || !tr) return;
+  for (const row of tbody.rows) row.tabIndex = row === tr ? 0 : -1;
+  rowFocusSource = tr.dataset.source || null;
+}
+
+function wireRowFocus() {
+  const tbody = $("#seederBody");
+  if (!tbody) return;
+  tbody.addEventListener("focusin", (ev) => {
+    const tr = ev.target.closest("tr");
+    if (tr && tr.parentElement === tbody) roveTo(tr);
+  });
+  tbody.addEventListener("keydown", (ev) => {
+    const tr = ev.target.closest("tr");
+    if (!tr || tr.parentElement !== tbody) return;
+    const rows = [...tbody.rows];
+    const at = rows.indexOf(tr);
+    let next = null;
+    if (ev.key === "ArrowDown") next = rows[Math.min(at + 1, rows.length - 1)];
+    else if (ev.key === "ArrowUp") next = rows[Math.max(at - 1, 0)];
+    else if (ev.key === "Home") next = rows[0];
+    else if (ev.key === "End") next = rows[rows.length - 1];
+    if (!next) return;
+    ev.preventDefault();
+    roveTo(next);
+    next.focus();
+  });
+}
+
+
 function openLogPage(source) {
   logPageState.source = source;
   const runningSources = state.running.map((r) => r.source);
@@ -1551,8 +1751,12 @@ function bind() {
     });
   });
 
+  wirePanes();
+  wireRowFocus();
+
   // Keyboard shortcuts (skip when typing in a form).
   document.addEventListener("keydown", (e) => {
+    if (e.key === "F6") { e.preventDefault(); focusNextRegion(e.shiftKey ? -1 : 1); return; }
     if (e.target.matches("input, textarea, select")) return;
     if (e.key === "/") { e.preventDefault(); if ($("#filter")) $("#filter").focus(); }
     else if (e.key === "r" && !e.metaKey && !e.ctrlKey) refreshAll();
