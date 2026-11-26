@@ -8,8 +8,6 @@ Skyhook is a Node CLI and installable web GUI for turning the open web into a
 curated, tagged, searchable link collection. It runs on your hardware, writes to
 your database, and needs no cloud service in between.
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/seven-lynx/skyhook)
-
 ```
 discover ──▶ enrich ──▶ stage ──▶ curate ──▶ tag ──▶ push ──▶ your database
 ```
@@ -208,6 +206,16 @@ bottom nav, accessibility pass), PWA icons from the new logo, curation
 clear/prune fix, plus the v0.2.x pipeline: offline LLM tagging worker,
 `pull`/`upload`, targeted gap-filling tasks, config-driven pipeline, Postgres
 adapter, and the multi-node control plane.
+
+## Questions about the code
+
+[docs/README.md](docs/README.md) says what each document binds;
+[DeepWiki](https://deepwiki.com/seven-lynx/skyhook) answers the other
+kind of question - where a stage lives, why the discovery chain
+short-circuits, how a storage adapter maps columns - with links back
+to the files.
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/seven-lynx/skyhook)
 
 ## License
 
