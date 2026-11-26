@@ -105,13 +105,14 @@ start without it. The `desktop` job in `.github/workflows/ci.yml` runs the same 
 on a tag only, never on a pull request.
 
 The installer is **unsigned**: Authenticode is the one part of a desktop release that
-cannot be code, and the certificate route is still an open ruling (`PLAN.md` §6 item
-11), so Windows will call it an unrecognised app. The app it installs still runs only
-the runtime it shipped — never the `node` on `PATH` — which is what
-`desktop/sidecar.json` and `test/desktop-guard.test.mjs` exist to keep true.
+cannot be code, and it waits on a certificate, so Windows will call it an unrecognised
+app until one is bought and wired into `bundle.windows.signCommand`. The route is chosen
+in the plan tree; what a reader of this file needs is the consequence — *More info* →
+*Run anyway*, and the app runs only the runtime it shipped, never the `node` on `PATH`,
+which is what `desktop/sidecar.json` and `test/desktop-guard.test.mjs` exist to keep true.
 
 What an installed build ships is pinned in `desktop/sidecar.json`: the `node.exe`
-20.x release that becomes the sidecar, its artifact and its checksum.
+24.x release that becomes the sidecar, its artifact and its checksum.
 `test/desktop-guard.test.mjs` fails when that major stops matching the one
 `.github/workflows/ci.yml` tests on, and it guards the two other ways a desktop
 build could drift — a `src/core`, `src/engine` or `src/adapters` import in
@@ -157,8 +158,15 @@ git tag -a v0.4.2 -m "v0.4.2 — what the release changes"
 git push origin v0.4.2
 ```
 
-The version lives in two places, and both must agree before the tag: `package.json` and the
-README **Status** line.
+Release history is `CHANGELOG.md`, newest first: the release's own section is written in
+the same commit as the version bump, and the README **Status** paragraph is rewritten
+from it rather than the other way round.
+
+The version lives in three places, and all must agree before the tag: `package.json`,
+the README **Status** line, and — once the desktop track ships — the bundle `version` in
+`src-tauri/tauri.conf.json`. Nothing compares the third one, so it is set by hand or the
+app's updater compares the wrong number. The `CHANGELOG.md` entry for the version is
+written in the same commit.
 
 Then prove the tag from outside the working copy, because the consumer installs the published
 tree and not this checkout:

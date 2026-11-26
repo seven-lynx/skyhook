@@ -139,8 +139,10 @@ function majorOf(version) {
 /**
  * Every Node major `ci.yml` tests on.
  *
- * `node-version:` takes one value or a matrix list, and the workflow is the only
- * place the tested runtime is recorded — so it is read, never restated here.
+ * `node-version:` takes one value, and a matrix leg is written as
+ * `matrix: node: [22, 24]` with `node-version: ${{ matrix.node }}` — which has
+ * no number in it at all, so the matrix list is read separately. The workflow is
+ * the only place the tested runtime is recorded, so it is read, never restated.
  */
 function ciNodeMajors(yaml) {
   const majors = [];
@@ -150,7 +152,13 @@ function ciNodeMajors(yaml) {
       if (major !== null) majors.push(major);
     }
   }
-  return majors;
+  for (const match of yaml.matchAll(/^\s*node:\s*\[([^\]]+)\]/gm)) {
+    for (const raw of match[1].split(",")) {
+      const major = majorOf(raw.replace(/["'\s]/g, ""));
+      if (major !== null) majors.push(major);
+    }
+  }
+  return [...new Set(majors)];
 }
 
 /**
