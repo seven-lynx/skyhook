@@ -15,6 +15,12 @@
 //! * Nothing is stored twice. The URL, the root and the child handle live in one
 //!   `Session`, because a window reload must reuse the running server and Quit
 //!   must leave no `node` behind at the `.app-session.lock`.
+//!
+//! The shell is also the scheduler on Windows: the sidecar's child ticks the due
+//! set while the app runs (`desktop/schedule.js`), so there is no systemd unit and
+//! no registered OS task. The only thing Windows is told is where the exe lives —
+//! the *Start with Windows* check item, a per-user `Run` entry the autostart plugin
+//! writes and reads back, so the menu holds no second copy of that fact.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -24,9 +30,10 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -350,15 +357,63 @@ fn open_failure(app: &AppHandle, reason: &str) -> Result<(), String> {
 }
 
 /// The app menu, shared by the window and the tray.
+///
+/// *Start with Windows* is a check item whose mark is read from the OS's own Run
+/// entry, so an install where the entry exists shows it — nothing here remembers
+/// the answer.
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let data = MenuItem::with_id(app, "open-data", "Open data folder", true, None::<&str>)?;
     let log = MenuItem::with_id(app, "open-log", "Open latest log", true, None::<&str>)?;
     let run = MenuItem::with_id(app, "run-due", "Run due now", true, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "Start with Windows",
+        true,
+        autostart_enabled(app),
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, Some("CmdOrCtrl+Q"))?;
     Menu::with_items(
         app,
-        &[&data, &log, &run, &PredefinedMenuItem::separator(app)?, &quit],
+        &[
+            &data,
+            &log,
+            &run,
+            &autostart,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
     )
+}
+
+/// Whether this user's launch entry exists — read from the plugin, never stored.
+fn autostart_enabled(app: &AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+/// Re-state the check mark on both menus that carry it, after a toggle.
+///
+/// The item is built twice (the window's menu bar and the tray's), so both are
+/// walked: a mark that disagreed with the Run entry would be the only copy of that
+/// fact anywhere, which is exactly what reading the OS avoids.
+fn sync_autostart_checks(app: &AppHandle, checked: bool) {
+    let mut menus: Vec<Menu<tauri::Wry>> = Vec::new();
+    if let Some(menu) = app.menu() {
+        menus.push(menu);
+    }
+    if let Some(menu) = app.tray_by_id("skyhook").and_then(|tray| tray.menu()) {
+        menus.push(menu);
+    }
+    for menu in menus {
+        for item in menu.items().unwrap_or_default() {
+            if item.id().as_ref() == "autostart" {
+                if let Some(check) = item.as_check_menuitem() {
+                    let _ = check.set_checked(checked);
+                }
+            }
+        }
+    }
 }
 
 /// Menu ids are the contract between this function and `build_menu`.
@@ -389,6 +444,18 @@ fn on_menu(app: &AppHandle, id: &str) {
             },
             None => eprintln!("run due: no session yet"),
         },
+        // A per-user Run entry, written and read by the plugin: the OS keeps this
+        // fact, so a reinstall or a manual edit of the registry shows through.
+        "autostart" => {
+            let autolaunch = app.autolaunch();
+            let wanted = !autolaunch.is_enabled().unwrap_or(false);
+            let result = if wanted { autolaunch.enable() } else { autolaunch.disable() };
+            match result {
+                Ok(()) => sync_autostart_checks(app, wanted),
+                // The mark is left as it was: the entry did not move, so neither does it.
+                Err(err) => eprintln!("start with windows: {err}"),
+            }
+        }
         "quit" => {
             kill_sidecar(app);
             app.exit(0);
@@ -439,10 +506,13 @@ fn main() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .menu(|app| build_menu(app))
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .manage(Session::default())
         .setup(|app| {
             let handle = app.handle().clone();
+            // Menus are built here, not by `Builder::menu`: the autostart item reads
+            // the plugin's state, and plugin state exists by the time `setup` runs.
+            build_menu(&handle)?.set_as_app_menu()?;
             install_tray(&handle)?;
             let token = launch_token();
             {

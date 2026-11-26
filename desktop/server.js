@@ -28,8 +28,17 @@
  * (on Windows `SIGTERM` is a `TerminateProcess`, not a signal a handler sees).
  * The flag is opt-in because a child spawned with `stdio: "ignore"` reads stdin
  * as `/dev/null` and would stop the instant it started.
+ *
+ * This process is also the scheduler on Windows: `./schedule.js` asks the server
+ * what is due and starts it, so the app owns automatic runs without systemd or an
+ * OS task (`PLAN.md` §6 item 9). It starts here, next to the listener it talks to,
+ * and stops before that listener does — the one ordering that cannot leave a tick
+ * posting to a closing server. `--tick-ms` exists for the live proof and for
+ * nothing else; the default is a minute.
  */
 import { resolve } from "path";
+
+import { startSchedule } from "./schedule.js";
 
 const argv = process.argv.slice(2);
 
@@ -51,13 +60,15 @@ async function main() {
   const { startAppSession } = await import("../src/interfaces/app-session.js");
 
   let session = null;
+  let schedule = null;
   let stopping = null;
 
-  // One shutdown path: stop the listener and drop the lock, then exit. A second
-  // call (SIGTERM racing a closed stdin) reuses the same promise.
+  // One shutdown path: stop the timer, stop the listener, drop the lock, then
+  // exit. A second call (SIGTERM racing a closed stdin) reuses the same promise.
   const stop = (code) => {
     if (!stopping) {
       stopping = (async () => {
+        schedule?.stop();
         try {
           await session?.close();
         } catch (err) {
@@ -78,6 +89,18 @@ async function main() {
   }
 
   announce({ baseUrl: session.baseUrl, port: session.port, root: process.cwd() });
+
+  // The first tick runs at launch rather than at the first interval, so an app
+  // opened after a weekend catches up at once; `tick()` logs its own failures.
+  // The token is the one the shell handed this process — the same credential the
+  // window carries — because a desktop install's own POSTs are gated like any other.
+  const tickMs = Math.max(250, Number(argValue("--tick-ms")) || 60_000);
+  schedule = startSchedule({
+    baseUrl: session.baseUrl,
+    token: process.env.SKYHOOK_REMOTE_TOKEN ?? null,
+    intervalMs: tickMs,
+  });
+  schedule.tick();
 
   process.on("SIGTERM", () => stop(0));
   process.on("SIGINT", () => stop(0));

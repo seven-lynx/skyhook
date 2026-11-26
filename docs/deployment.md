@@ -93,7 +93,8 @@ What an installed build ships is pinned in `desktop/sidecar.json`: the `node.exe
 `test/desktop-guard.test.mjs` fails when that major stops matching the one
 `.github/workflows/ci.yml` tests on, and it guards the two other ways a desktop
 build could drift — a `src/core`, `src/engine` or `src/adapters` import in
-`desktop/`, and a capability that grants the window more than `core` + `opener`.
+`desktop/`, and a capability that grants the window more than `core` + `opener` +
+`autostart`.
 
 The window is not a browser tab, and the shared renderer is told so by the flag the
 shell injects (`window.__SKYHOOK_DESKTOP__`) rather than by a user-agent guess: the
@@ -101,6 +102,16 @@ API-base prompt is removed, so a base URL a browser session left in `localStorag
 cannot redirect the window away from the server the shell spawned, the PWA manifest
 link is not offered to a webview that cannot install it, and an `http(s)` link opens
 in the system browser instead of navigating the window off the dashboard.
+
+The app is also the scheduler on Windows. While it runs, the sidecar's child asks
+its own server what is due once a minute and starts it: no systemd timer, no
+registered OS task, and no second copy of the cadence rules — `/api/due` is the
+same selector the *Run due now* menu item uses. A seeder whose run is still in
+flight is skipped, because `last_run_at` is written when a run *ends* and the due
+selector would otherwise offer it again. *Start with Windows* — in the app menu and
+the tray — writes a per-user `Run` entry, not a service, and the check mark is read
+back from that entry, so the toggle survives a restart without anything being
+stored twice. `emit-timer` stays the Linux path, untouched.
 
 State lives in the app data directory the shell passes to the sidecar
 (`--root`), which is `%APPDATA%\com.sevenlynx.skyhook` on Windows — not the
