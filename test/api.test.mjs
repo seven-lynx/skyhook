@@ -187,6 +187,28 @@ test("api: routes answer, unknown paths 404, a POST needs the shared token", asy
     const alive = await fetch(`${base}/api/health`);
     assert.equal(alive.status, 200);
 
+    // #24: the preflight names every header the token gate reads. Without `Authorization`
+    // here a browser page on another origin is refused by its own CORS check, so a GUI
+    // pointed at a peer (`apiBase()`) could never POST even holding the right token.
+    const preflight = await fetch(`${base}/api/run`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://other.example",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization",
+      },
+    });
+    assert.equal(preflight.status, 204);
+    const allowedHeaders = preflight.headers.get("access-control-allow-headers") || "";
+    assert.match(allowedHeaders, /authorization/i);
+    assert.match(allowedHeaders, /x-skyhook-token/i);
+
+    // #38: a trailing slash is not a different route, and the trim is a loop rather than a
+    // right-anchored regex. The loop's value is cost — a test cannot time that — so what is
+    // asserted here is that both shapes still get an answer instead of stalling.
+    assert.equal((await fetch(`${base}/api/health//`)).status, 200);
+    assert.equal((await fetch(`${base}/api${"/".repeat(400)}`)).status, 404);
+
     // G3: the header references a 96 px derivative, and the static handler
     // serves it — the 3.2 MB master must not be on the first-paint path.
     const logo = await fetch(`${base}/icons/logo-96.png`);
@@ -280,6 +302,102 @@ test("api: an open bind without a token is refused, and a loopback one is not", 
     }
   } finally {
     loadConfig({ file: tokenFile, reload: true });
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});
+
+// #31: a seeder that is running is not also due. `isDue` reads `last_run_at`, which `recordRun`
+// writes when a run *ends*, so a seeder in flight still answered "due" — and every client
+// (the console, the desktop timer) subtracted `/api/running` itself to compensate. The fixture
+// seeder sleeps, so the run is observably in flight while the three due answers are read.
+test("api: a running seeder is not due, and a second run request reports it", async () => {
+  // The first test removed the temp dir, so the whole fixture is rebuilt here rather than
+  // shared — the same shape the two tests above use.
+  mkdirSync(seedersDir, { recursive: true });
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(seedersDir, "seed-slow.js"), `/**
+ * seed-slow.js \u2014 Slow seeder
+ * Category: CATEGORY.SCIENCE \u2192 SUBCATEGORY.SPACE_ASTRONOMY
+ * Access: RSS feed
+ * Description: Holds the run registry for the duration of one test.
+ */
+setTimeout(() => {}, 6000);
+`);
+  writeFileSync(configFile, JSON.stringify({
+    dataDir: stateDir,
+    seedersDir,
+    manifestFile: join(stateDir, "seeders-manifest.json"),
+    descriptionsFile: join(stateDir, "seeders-descriptions.json"),
+    stateDb: join(stateDir, "seeder-state.db"),
+    logDir: join(stateDir, "logs"),
+    stagedDir: join(stateDir, "staged"),
+    settingsFile: join(stateDir, "settings.json"),
+    remote: { token: "test-token", peers: [] },
+  }, null, 2) + "\n");
+  loadConfig({ file: configFile, reload: true });
+
+  // Imported after the config is repointed: the engine resolves paths per call, but the DB it
+  // opens on first use must be the temp one, never the repo's `.skyhook/`.
+  const { enableSeeder } = await import("../src/engine/seeder-engine.js");
+  assert.equal(enableSeeder("slow", "daily")?.cadence, "daily", "a scheduled seeder has a cadence");
+
+  const { startServer } = await import("../src/interfaces/api-server.js");
+  const server = startServer(0);
+  const auth = { "Content-Type": "application/json", Authorization: "Bearer test-token" };
+  /** Resolve once `fn()` is truthy, or throw — a bounded poll, never a bare sleep. */
+  const poll = async (fn, ms = 8000) => {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      const value = await fn();
+      if (value) return value;
+      if (Date.now() > deadline) throw new Error(`condition not met within ${ms} ms`);
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  };
+
+  try {
+    await new Promise((r) => server.once("listening", r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+
+    // A scheduled seeder with no history is due: the assertion below only means something
+    // because this one started true.
+    const before = await (await fetch(`${base}/api/due`)).json();
+    assert.deepEqual(before.map((s) => s.source), ["slow"]);
+
+    const asked = await fetch(`${base}/api/run`, {
+      method: "POST", headers: auth, body: JSON.stringify({ sources: ["slow"] }),
+    });
+    assert.equal(asked.status, 200);
+    assert.deepEqual((await asked.json()).started, ["slow"]);
+
+    // `runPool` awaits FlareSolverr before it spawns, so the child registers a moment after
+    // the response — bounded poll, not a guess.
+    await poll(async () => {
+      const body = await (await fetch(`${base}/api/running`)).json();
+      return body.running.some((r) => r.source === "slow");
+    });
+
+    assert.deepEqual(await (await fetch(`${base}/api/due`)).json(), [], "/api/due: in flight is not due");
+    const status = await (await fetch(`${base}/api/status`)).json();
+    assert.deepEqual(status.dueList.map((s) => s.source), [], "/api/status.dueList agrees");
+    assert.deepEqual(status.running.map((r) => r.source), ["slow"], "…while still naming what runs");
+    assert.equal((await (await fetch(`${base}/api/health`)).json()).due, 0);
+
+    // A client that never asked `/api/due` — a curl, the console's Run button — is told, not
+    // obeyed: the same source in the same second is one child, not two.
+    const again = await fetch(`${base}/api/run`, {
+      method: "POST", headers: auth, body: JSON.stringify({ sources: ["slow"] }),
+    });
+    const answer = await again.json();
+    assert.deepEqual(answer.started, [], "no second child for a source in flight");
+    assert.deepEqual(answer.skippedRunning, ["slow"]);
+
+    // Stop it, so the child cannot outlive the test — and so the last poll proves the registry
+    // empties (the `finally` below would otherwise leave a sleeping child behind).
+    await fetch(`${base}/api/stop`, { method: "POST", headers: auth, body: JSON.stringify({ source: "slow" }) });
+    await poll(async () => (await (await fetch(`${base}/api/running`)).json()).running.length === 0);
+  } finally {
+    await new Promise((r) => server.close(r));
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

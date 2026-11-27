@@ -21,6 +21,12 @@ non-loopback bind with no token is refused at startup instead of warned about.
 With no token and the default bind, the API is reachable from this machine only —
 fine for a single-box install, not for a LAN or the internet.
 
+A browser page on another origin sends a preflight first, and the answer allows
+`Content-Type`, `Authorization` and `x-skyhook-token` — so a GUI pointed at a peer
+(`apiBase()`) can POST with either credential. CORS is still `*` with no per-origin
+allow-list: the token is the only thing standing between a foreign page and a
+mutating route, and GETs are open to it.
+
 ## Request bodies
 
 `POST` bodies are JSON. A body over 1 MB answers `413 { error: "request body too
@@ -33,14 +39,14 @@ JSON" }` — neither hangs the request, and the listener keeps serving.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/health` | `{ ok, seeders, scheduled, due, errors }` |
-| GET | `/api/status` | Summary + due list |
+| GET | `/api/health` | `{ ok, seeders, scheduled, due, errors }` — `due` excludes a running seeder |
+| GET | `/api/status` | Summary + due list (`dueList` and `running` both exclude/include as their names say) |
 | GET | `/api/seeders` | All seeders (`?filter=`, `?tier=news\|evergreen`, `?scheduled=1`) |
 | GET | `/api/seeders/:source` | One seeder |
 | GET | `/api/categories` | Category + subcategory list |
-| GET | `/api/due` | Seeders due now |
+| GET | `/api/due` | Seeders due now; a seeder already running is not due |
 | GET | `/api/history/:source` | Recent runs |
-| POST | `/api/run` | `{ sources: [], parallel? }` |
+| POST | `/api/run` | `{ sources: [], parallel? }` → `{ started, skippedRunning, forwarded, … }` |
 | POST | `/api/schedule` | `{ source, cadence?, isNews?, maxAgeDays?, node? }` |
 | POST | `/api/enable` | `{ source, cadence? }` |
 | POST | `/api/disable` | `{ source }` |

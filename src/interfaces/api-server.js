@@ -33,10 +33,13 @@ import { listCache, pruneStaged, clearDiscovery, clearStaged } from "../core/dat
 import { countMissingSync, getTasks } from "../adapters/tagging/tasks.js";
 import { detectModels, ensureModelLoaded } from "../adapters/tagging/index.js";
 
+// The preflight has to name every header `:151-158` accepts, not just the one a JSON body
+// needs: the GUI attaches `Authorization` whenever it has a token and `apiBase()` may point it
+// at a peer, so a browser on another origin was refused before the token gate ever ran (#24).
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type,Authorization,x-skyhook-token",
 };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -139,10 +142,31 @@ export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
     );
   }
   const db = openState();
+  // Sources this process has accepted but not yet registered in the engine's `activeRuns`:
+  // `runPool` awaits FlareSolverr before it spawns, so two requests inside that window would
+  // both see an idle source. Cleared when the batch settles.
+  const starting = new Set();
+  /**
+   * The seeders a caller may start now: due by cadence, and not already in flight.
+   *
+   * `isDue` reads `last_run_at`, which `recordRun` writes when a run *ends*, so a seeder
+   * mid-run still answers "due". Every route that offers work filters through here and
+   * `/api/run` refuses what this excludes; the console and the desktop timer used to
+   * re-derive "running" themselves to compensate (#31).
+   */
+  const dueSeeders = (idx = buildIndex(), running = listRunning()) => {
+    const live = new Set(running.map((r) => r.source));
+    return idx.filter((s) => isDue(s, getState(db, s.source)) && !live.has(s.source) && !starting.has(s.source));
+  };
   const server = createServer(async (req, res) => {
     if (req.method === "OPTIONS") { res.writeHead(204, CORS); res.end(); return; }
     const url = new URL(req.url, `http://localhost:${port}`);
-    const path = url.pathname.replace(/\/+$/, "") || "/";
+    // A trailing slash is not a different route. Trim it with a loop, never `/\/+$/`: that
+    // pattern restarts its scan at every position of a `"//…"` path, and this string is the
+    // client's (`src/core/remote.js:65-70` made the same move for the same reason).
+    let path = url.pathname;
+    while (path.endsWith("/")) path = path.slice(0, -1);
+    if (!path) path = "/";
     const method = req.method;
 
     try {
@@ -159,26 +183,26 @@ export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
 
       if (method === "GET" && path === "/api/health") {
         const idx = buildIndex();
-        const due = idx.filter((s) => isDue(s, getState(db, s.source)));
+        const due = dueSeeders(idx);
         const errors = idx.filter((s) => { const st = getState(db, s.source); return st && st.last_status && st.last_status !== "ok"; });
         return send(res, 200, { ok: true, seeders: idx.length, scheduled: idx.filter((s) => s.scheduled).length, due: due.length, errors: errors.length });
       }
 
       if (method === "GET" && path === "/api/status") {
         const idx = buildIndex();
-        const due = idx.filter((s) => isDue(s, getState(db, s.source)));
+        const running = listRunning();
+        const due = dueSeeders(idx, running);
         return send(res, 200, {
           total: idx.length,
           scheduled: idx.filter((s) => s.scheduled).length,
           due: due.length,
           dueList: due.slice(0, 200).map((s) => seederView(s, getState(db, s.source))),
-          running: listRunning(),
+          running,
         });
       }
 
       if (method === "GET" && path === "/api/due") {
-        const idx = buildIndex();
-        return send(res, 200, idx.filter((s) => isDue(s, getState(db, s.source))).map((s) => seederView(s, getState(db, s.source))));
+        return send(res, 200, dueSeeders().map((s) => seederView(s, getState(db, s.source))));
       }
 
       if (method === "GET" && path === "/api/seeders") {
@@ -234,7 +258,13 @@ export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
           forceHeadless: !!body.forceHeadless,
           noCache: !!body.noCache,
         };
-        const { local, remote } = routeSeeders(selected);
+        // A source already in flight is not a second start: `last_run_at` is written when a run
+        // ends, so any client that did not ask `/api/due` — a curl, the console's own Run button
+        // — would fork a second child for the same source (#31). Reported, not refused: the rest
+        // of the batch still runs, and a caller that sent only running sources gets `started: []`.
+        const live = new Set([...listRunning().map((r) => r.source), ...starting]);
+        const skippedRunning = selected.filter((s) => live.has(s.source)).map((s) => s.source);
+        const { local, remote } = routeSeeders(selected.filter((s) => !live.has(s.source)));
         const remoteResults = [];
         for (const [peerId, seeders] of remote) {
           const peer = peerFor(peerId);
@@ -246,11 +276,15 @@ export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
           }
         }
         if (local.length) {
-          runPool(local, opts).catch((err) => console.error("run error:", err.message));
+          for (const s of local) starting.add(s.source);
+          runPool(local, opts)
+            .catch((err) => console.error("run error:", err.message))
+            .finally(() => { for (const s of local) starting.delete(s.source); });
         }
         return send(res, 200, {
           ok: true,
           started: local.map((s) => s.source),
+          skippedRunning,
           forwarded: [...remote.keys()],
           remoteResults,
           concurrency,
