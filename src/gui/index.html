@@ -62,6 +62,14 @@
           <span class="brand-sub" id="apiLabel">connecting…</span>
         </span>
       </a>
+      <!-- W6: the palette's door. `Ctrl/Cmd+K` is the shortcut; this is what makes it discoverable
+           on a touch screen, where there is no keyboard to learn it from. -->
+      <button id="paletteBtn" class="cmdk" type="button" aria-keyshortcuts="Control+K Meta+K"
+              title="Command palette (Ctrl/Cmd+K)" aria-haspopup="dialog">
+        <svg class="ic" aria-hidden="true"><use href="#ic-search"/></svg>
+        <span class="cmdk-label">Search seeders, views and actions…</span>
+        <kbd>Ctrl K</kbd>
+      </button>
       <div class="bar-right">
         <button id="refreshBtn" class="btn-ghost btn-sm" type="button" aria-label="Refresh">
           <svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg>
@@ -101,7 +109,7 @@
       </a>
     </nav>
 
-    <!-- ── navigator (a section list until a section has a tree) ────────── -->
+    <!-- ── navigator (the section's own outline; the rail switches sections) ── -->
     <section class="pane navigator" id="nav" aria-label="Navigator" tabindex="-1">
       <div class="pane-head">
         <span class="pane-title" id="navTitle">Sections</span>
@@ -111,7 +119,8 @@
         </button>
       </div>
       <div class="pane-body">
-        <nav class="navlist" aria-label="All sections">
+        <nav class="navtree" id="navTree" aria-label="Section outline" hidden></nav>
+        <nav class="navlist" id="navList" aria-label="All sections">
           <a class="navlist-item" href="#/" data-route="dashboard">Dashboard</a>
           <a class="navlist-item" href="#/seeders" data-route="seeders">Seeders</a>
           <a class="navlist-item" href="#/pipeline" data-route="pipeline">Pipeline</a>
@@ -163,25 +172,11 @@
       <section id="panel-seeders" class="surface" data-route="seeders" aria-label="Seeders">
         <div class="toolbar">
           <input id="filter" class="filter" type="search" placeholder="Filter source / name / category…" autocomplete="off" aria-label="Filter seeders" />
-          <select id="tierFilter" aria-label="Tier filter">
-            <option value="">All tiers</option>
-            <option value="news">News</option>
-            <option value="evergreen">Evergreen</option>
-          </select>
-          <select id="schedFilter" aria-label="Schedule filter">
-            <option value="">Scheduled + manual</option>
-            <option value="1">Scheduled only</option>
-            <option value="0">Manual only</option>
-          </select>
-          <select id="statusFilter" aria-label="Status filter">
-            <option value="">Any status</option>
-            <option value="due">Due</option>
-            <option value="errors">Errors</option>
-          </select>
           <button id="filterSheetBtn" class="btn btn-sm filter-sheet-btn" type="button" aria-label="More filters">
             <svg class="ic" aria-hidden="true"><use href="#ic-filter"/></svg>
             <span>More filters</span>
           </button>
+          <div id="activeFilters" class="filter-chips" role="group" aria-label="Active filters"></div>
           <span class="toolbar-meta" id="countLabel" aria-live="polite"></span>
           <button id="newSeederBtn" class="btn-primary btn-sm" type="button" style="margin-left: auto;">
             <svg class="ic" aria-hidden="true"><use href="#ic-plus"/></svg>
@@ -380,15 +375,25 @@
           <span class="sr-only">Expand log dock</span>
         </button>
       </div>
+      <div class="pane-body dock-body" id="dockBody" tabindex="0" aria-live="polite">
+        <p class="pane-note">Run a seeder, or pick a tab, to tail its output here.</p>
+      </div>
     </section>
 
     <!-- ── status bar ──────────────────────────────────────────────────── -->
     <footer class="status" id="statusbar">
+      <span class="status-item" id="statusEndpoint" title="API endpoint">…</span>
+      <span class="status-sep"></span>
       <span class="status-item"><b id="seederCountBadge">…</b> seeders</span>
+      <span class="status-sep"></span>
+      <span class="status-item" id="statusDue">0 due</span>
+      <span class="status-sep"></span>
+      <span class="status-item" id="statusNode">local</span>
       <span class="status-sep"></span>
       <span class="status-item" id="statusRoute">dashboard</span>
       <span class="status-right">
-        <span class="status-item"><code>g</code> then <code>s</code> to jump</span>
+        <span class="status-item" id="statusSync">synced —</span>
+        <span class="status-item"><kbd>Ctrl K</kbd> palette · <code>g</code> then <code>s</code> to jump</span>
       </span>
     </footer>
 
@@ -436,6 +441,28 @@
 
   <!-- ── modals (one container; populated by JS) ──────────────────────── -->
   <div id="modalRoot"></div>
+
+  <!-- ── command palette (W6) ──────────────────────────────────────────────
+       One input owns the focus; `aria-activedescendant` on it names the selected option, the
+       standard combobox/listbox shape. Rows are rebuilt on every keystroke, so what is on screen
+       always comes from the `state.seeders` the last poll wrote. -->
+  <div id="palette" role="dialog" aria-modal="true" aria-label="Command palette" data-open="false">
+    <div class="pal-panel">
+      <div class="pal-input">
+        <svg class="ic" aria-hidden="true"><use href="#ic-search"/></svg>
+        <input id="palInput" type="text" role="combobox" aria-expanded="true" aria-controls="palList"
+               aria-autocomplete="list" aria-label="Search seeders, views and actions"
+               autocomplete="off" spellcheck="false" placeholder="Search seeders, views and actions…" />
+        <kbd>esc</kbd>
+      </div>
+      <div id="palList" class="pal-list" role="listbox" aria-label="Commands"></div>
+      <div class="pal-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span><kbd>↵</kbd> run</span>
+        <span><kbd>esc</kbd> close</span>
+      </div>
+    </div>
+  </div>
 
   <!-- ── toast region ──────────────────────────────────────────────────── -->
   <div id="toastRegion" class="toast-region" role="region" aria-live="polite" aria-label="Notifications"></div>

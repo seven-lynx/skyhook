@@ -36,15 +36,24 @@ const GAP_LABELS = {
   quality: "Missing quality", attributes: "Missing attributes",
 };
 
+const EMPTY_FILTERS = { tier: "", sched: "", status: "", category: null, subcategory: null };
+
 const state = {
-  seeders: [], running: [], batch: null, pipe: null,
+  seeders: [], running: [], batch: null, pipe: null, cache: null,
   sortKey: "source", sortDir: 1, selected: new Set(),
   apiBase: localStorage.getItem("skyhook.apiBase") || "",
   live: null, _liveWired: false, logSources: [], followLog: true, userTab: null,
   historySource: null, wasRunning: false, categories: [],
   infoSource: null, taggingGaps: null, tagTasks: [],
+  // W5: the status bar's "synced" is this console's last successful poll, and the dock's
+  // open/closed state lives on `#workbench[data-dock]` — this is the only copy of the former.
+  lastRefreshAt: 0,
   // W3: what the inspector shows. Client state, not a route — a reload forgets the pick.
   focus: null, inspRuns: null, inspStaged: null, inspRunAt: null, inspSeq: 0,
+  // W4: the tier/schedule/status selects live in the filter sheet now, so their values are state
+  // rather than DOM, and the navigator tree writes `category`/`subcategory`. Not persisted on
+  // purpose: a reload that forgets a filter it can no longer show is the safer default.
+  filters: { ...EMPTY_FILTERS },
   route: { name: "dashboard", params: {} },
   nodeId: "local",
 };
@@ -269,61 +278,87 @@ function applyNodeVisibility() {
 }
 function handleRouteChange() {
   const r = parseRoute();
+  // W5: `#/log/:source` is a dock deep link on the desktop, not a section — the work surface keeps
+  // what it was already showing and the rail keeps its place. At 720 px and below there is no dock
+  // at all (`styles.css` hides it), so the route stays a surface there, exactly as before.
+  const deepLink = r.name === "log" && !isPhone();
   // A pick belongs to the section that offered it: a row chosen in Seeders must not sit behind
   // the Pipeline's back. The log dock is what survives a section change (W5), not the inspector.
-  if (r.name !== state.route.name) clearFocus();
-  state.route = r;
-  $$(".surface").forEach((p) => p.classList.toggle("active", p.dataset.route === r.name));
-  $$(".rail-item, .navlist-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === r.name));
+  // A palette closed here has done its job or lost its route — a poll calls this function too, so
+  // closing unconditionally would shut the palette mid-keystroke.
+  if (r.name !== state.route.name && !deepLink) {
+    clearFocus();
+    closePalette();
+  }
+  if (!deepLink) state.route = r;
+  const route = state.route;
+  $$(".surface").forEach((p) => p.classList.toggle("active", p.dataset.route === route.name));
+  $$(".rail-item, .navlist-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === route.name));
+  renderNav();
   renderInspector();
   // The pane head names the section; a log route names its source instead.
   const workTitle = $("#workTitle");
-  if (workTitle) workTitle.textContent = r.name === "log" ? (r.params.source || "log") : ROUTE_TITLES[r.name] || r.name;
-  const statusRoute = $("#statusRoute");
-  if (statusRoute) statusRoute.textContent = r.name;
-  if (r.name === "timer" && !isPiNode()) { navigate("#/"); return; }
-  if (r.name === "dashboard") renderDashboard();
-  if (r.name === "seeders") renderSeeders();
-  if (r.name === "pipeline") renderPipeline();
-  if (r.name === "stats") renderAnalytics();
-  if (r.name === "curation") renderCuration();
-  if (r.name === "settings") renderSettings();
-  if (r.name === "timer") renderTimer();
+  if (workTitle) workTitle.textContent = route.name === "log" ? (r.params.source || "log") : ROUTE_TITLES[route.name] || route.name;
+  if (route.name === "timer" && !isPiNode()) { navigate("#/"); return; }
+  if (route.name === "dashboard") renderDashboard();
+  if (route.name === "seeders") renderSeeders();
+  if (route.name === "pipeline") renderPipeline();
+  if (route.name === "stats") renderAnalytics();
+  if (route.name === "curation") renderCuration();
+  if (route.name === "settings") renderSettings();
+  if (route.name === "timer") renderTimer();
   if (r.name === "log") {
     // If no specific source, fall back to the first running seeder (or the
     // most recent log source) so the mobile "Logs" nav item always lands.
     const src = r.params.source || (state.running[0] && state.running[0].source) || logPageState.source;
-    openLogPage(src);
+    // Only a source the route has not asked for yet reopens it: `refreshAll` runs this on every
+    // poll, and a tab the user picked must survive the poll that follows it.
+    if (src !== logPageState.routeSource) openLogPage(src);
+    // Repainting an already-open dock would fetch its tail a second time per tick.
+    if (deepLink && $("#workbench").dataset.dock !== "open") setDockOpen(true);
   }
-  if (r.name !== "log") closeLogPage();
+  syncLogPolling();
+  renderStatus();
 }
 
 async function loadSeeders()    { state.seeders = await get("/api/seeders?limit=5000"); }
 async function loadRunning()    { const r = await get("/api/running").catch(() => ({ running: [] })); state.running = r.running || []; state.batch = r.batch || null; }
 async function loadPipeline()   { state.pipe = await get("/api/pipeline").catch(() => null); }
 
-function filtered() {
-  const f     = $("#filter").value.trim().toLowerCase();
-  const tier  = $("#tierFilter").value;
-  const sched = $("#schedFilter").value;
-  const status = $("#statusFilter").value;
-  let rows = state.seeders;
+/* One predicate for the table and the navigator. `over` lets the tree ask "how many rows would
+ * this node leave?" without touching the live filter: an omitted key falls back to state.filters,
+ * an explicit value (including "" / null) replaces it. */
+function matchesFilters(s, over = {}) {
+  const input = $("#filter");
+  const f = (over.text !== undefined ? over.text : (input ? input.value : "")).trim().toLowerCase();
+  const tier = over.tier !== undefined ? over.tier : state.filters.tier;
+  const sched = over.sched !== undefined ? over.sched : state.filters.sched;
+  const status = over.status !== undefined ? over.status : state.filters.status;
+  const category = over.category !== undefined ? over.category : state.filters.category;
+  const subcategory = over.subcategory !== undefined ? over.subcategory : state.filters.subcategory;
   if (f) {
-    rows = rows.filter((s) =>
+    const hit =
       (s.source || "").toLowerCase().includes(f) ||
       (s.script || "").toLowerCase().includes(f) ||
       (s.displayName || "").toLowerCase().includes(f) ||
       (s.categoryLabel || "").toLowerCase().includes(f) ||
-      (s.subcategoryLabel || "").toLowerCase().includes(f));
+      (s.subcategoryLabel || "").toLowerCase().includes(f);
+    if (!hit) return false;
   }
-  if (tier === "news")      rows = rows.filter((s) => s.isNews);
-  if (tier === "evergreen") rows = rows.filter((s) => !s.isNews);
-  if (sched === "1")        rows = rows.filter((s) => s.scheduled);
-  if (sched === "0")        rows = rows.filter((s) => !s.scheduled);
-  if (status === "due")     rows = rows.filter(isDueClient);
-  if (status === "errors")  rows = rows.filter(isErrorStatus);
-  return rows;
+  if (tier === "news" && !s.isNews) return false;
+  if (tier === "evergreen" && s.isNews) return false;
+  if (sched === "1" && !s.scheduled) return false;
+  if (sched === "0" && s.scheduled) return false;
+  if (status === "due" && !isDueClient(s)) return false;
+  if (status === "errors" && !isErrorStatus(s)) return false;
+  // `null` is "no filter", "" is a real bucket (a seeder filed under no category), so the two
+  // cannot share a falsy test.
+  if (category !== null && (s.category || "") !== category) return false;
+  if (subcategory !== null && (s.subcategory || "") !== subcategory) return false;
+  return true;
 }
+function filtered() { return state.seeders.filter((s) => matchesFilters(s)); }
+const countWith = (over) => state.seeders.filter((s) => matchesFilters(s, over)).length;
 function sorted(rows) {
   const k = state.sortKey;
   return [...rows].sort((a, b) => {
@@ -341,8 +376,6 @@ function renderSeeders() {
   const countLabel = $("#countLabel");
   if (countLabel) countLabel.textContent = rows.length + " / " + state.seeders.length;
   const runningSet = new Set(state.running.map((r) => r.source));
-  const badge = $("#seederCountBadge");
-  if (badge) badge.textContent = state.seeders.length;
   const tbody = $("#seederBody");
   tbody.innerHTML = "";
   // Roving tabindex: one tab stop for the whole table, arrows inside it (see wireRowFocus).
@@ -409,6 +442,7 @@ function renderSeeders() {
   }
 
   updateBulkBar();
+  renderNav();
 }
 function updateBulkBar() {
   const checkAll = $("#checkAll");
@@ -461,6 +495,212 @@ function runRow(label, r, isHeartbeat) {
   return html + '</div>';
 }
 
+/* ── navigator (W4) ──────────────────────────────────────────────────────
+ * The pane holds the current section's own outline, not a second copy of the section list: the
+ * rail switches sections, this says what is inside the one you are on. Every node is a <button>,
+ * an <a>, or a non-clickable row — never a clickable <div>.
+ *
+ * What is expanded is *derived*, not stored: no pick renders the pillars, a picked pillar renders
+ * its subcategories, a picked subcategory renders its seeders. The 10/30 s poll repaints this pane,
+ * so a stored open/closed flag would collapse under the user's hands mid-click. */
+const NAV_TITLES = { dashboard: "Due now", seeders: "Categories", pipeline: "Jobs", curation: "Sources" };
+
+const humanLabel = (n) =>
+  String(n || "uncategorised").replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const dotFor = (s) => "dot" + (s.lastStatus === "ok" ? " ok" : s.lastStatus ? " err" : "");
+
+function navRow({ label, count, attrs = "", title = "", pressed = null, indent = false, leaf = false, dot = "", current = false }) {
+  const cls = "nav-node" + (indent ? " sub" : "") + (leaf ? " leaf" : "") + (pressed ? " on" : "");
+  return '<button type="button" class="' + cls + '" ' + attrs +
+    (title ? ' title="' + esc(title) + '"' : "") +
+    // A toggle says its state even when it is off: a bare button that sometimes has aria-pressed
+    // reads as "not a toggle" half the time.
+    (pressed === null ? "" : ' aria-pressed="' + (pressed ? "true" : "false") + '"') +
+    (current ? ' aria-current="true"' : "") + ">" +
+    (dot ? '<span class="' + dot + '" aria-hidden="true"></span>' : "") +
+    '<span class="nav-label">' + esc(label) + "</span>" +
+    (count == null ? "" : '<span class="nav-count">' + count + "</span>") +
+    "</button>";
+}
+
+const byLabel = (a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
+
+/* The tree is built from the rows the table already holds, so its counts and its leaves can never
+ * disagree with the table; `state.categories` only lends nicer labels where a seeder has none. */
+function seederTree() {
+  const cats = new Map();
+  for (const s of state.seeders) {
+    const cat = s.category || "";
+    if (!cats.has(cat)) cats.set(cat, { name: cat, label: s.categoryLabel || humanLabel(cat), subs: new Map() });
+    const node = cats.get(cat);
+    const sub = s.subcategory || "";
+    if (!node.subs.has(sub)) node.subs.set(sub, { name: sub, label: s.subcategoryLabel || humanLabel(sub), rows: [] });
+    node.subs.get(sub).rows.push(s);
+  }
+  return [...cats.values()].sort(byLabel);
+}
+
+function renderNav() {
+  const tree = $("#navTree");
+  const list = $("#navList");
+  if (!tree || !list) return;
+  const route = state.route.name;
+  const title = $("#navTitle");
+  if (title) title.textContent = NAV_TITLES[route] || "Sections";
+  renderFilterChips();
+  const html =
+    route === "seeders" ? navSeeders() :
+    route === "curation" ? navCuration() :
+    route === "pipeline" ? navPipeline() :
+    route === "dashboard" ? navDue() : "";
+  tree.innerHTML = html;
+  // A section with an outline hides the flat list — the rail is the section switcher — and a
+  // section without one keeps it, so the pane is never empty.
+  tree.hidden = !html;
+  list.hidden = Boolean(html);
+}
+
+function navSeeders() {
+  const f = state.filters;
+  const quick = [
+    { key: "all", label: "All seeders", over: { tier: "", status: "" }, on: !f.tier && !f.status },
+    { key: "due", label: "Due now", over: { status: "due" }, on: f.status === "due" },
+    { key: "errors", label: "Errors", over: { status: "errors" }, on: f.status === "errors" },
+    { key: "news", label: "News tier", over: { tier: "news" }, on: f.tier === "news" },
+    { key: "evergreen", label: "Evergreen tier", over: { tier: "evergreen" }, on: f.tier === "evergreen" },
+  ];
+  let html = '<div class="nav-group">Filter</div>' + quick.map((q) =>
+    navRow({ label: q.label, count: countWith(q.over), attrs: 'data-nav-quick="' + q.key + '"', pressed: q.on })).join("");
+
+  html += '<div class="nav-group">Categories</div>';
+  const pillars = seederTree();
+  if (!pillars.length) return html + '<p class="nav-empty">No seeders yet.</p>';
+  for (const p of pillars) {
+    const n = countWith({ category: p.name, subcategory: null });
+    if (!n && p.name !== f.category) continue;          // a pillar with nothing in it is noise
+    html += navRow({
+      label: p.label, count: n, title: p.label,
+      attrs: 'data-nav-cat="' + esc(p.name) + '"', pressed: f.category === p.name,
+    });
+    if (p.name !== f.category) continue;
+    for (const sub of [...p.subs.values()].sort(byLabel)) {
+      const sn = countWith({ category: p.name, subcategory: sub.name });
+      if (!sn) continue;
+      html += navRow({
+        label: sub.label, count: sn, indent: true,
+        attrs: 'data-nav-sub="' + esc(sub.name) + '"', pressed: f.subcategory === sub.name,
+      });
+      if (f.subcategory !== sub.name) continue;
+      // Leaves are the rows the table is actually showing for this node — the tier/status/text
+      // filters still apply, so a leaf never names a row the table has hidden.
+      const leaves = sub.rows
+        .filter((s) => matchesFilters(s, { category: p.name, subcategory: sub.name }))
+        .sort((a, b) => a.source.localeCompare(b.source));
+      for (const s of leaves) {
+        html += navRow({
+          label: s.source, leaf: true, dot: dotFor(s), current: s.source === state.focus,
+          attrs: 'data-nav-pick="' + esc(s.source) + '"',
+        });
+      }
+    }
+  }
+  return html;
+}
+
+function navCuration() {
+  const staged = state.cache && Array.isArray(state.cache.staged) ? state.cache.staged : [];
+  if (!staged.length) return "";
+  const rows = staged.reduce((n, f) => n + (Number(f.count) || 0), 0);
+  return '<div class="nav-group">Staged · ' + rows.toLocaleString() + " rows</div>" +
+    staged.map((f) => {
+      const source = f.originalSource || f.source;
+      return navRow({
+        label: source, count: Number(f.count) || 0,
+        attrs: 'data-nav-curate="' + esc(source) + '"', title: "Jump to " + source,
+      });
+    }).join("");
+}
+
+function navPipeline() {
+  const jobs = state.pipe && Array.isArray(state.pipe.jobs) ? state.pipe.jobs : [];
+  if (!jobs.length) return "";
+  return '<div class="nav-group">Jobs</div>' + jobs.map((j) => navRow({
+    label: j.label || j.key || "job",
+    dot: "dot" + (j.status === "running" ? " live" : j.status === "ok" ? " ok" : j.status ? " err" : ""),
+    attrs: 'data-nav-job="' + esc(j.key || j.label || "") + '"', title: "Jump to this job",
+  })).join("");
+}
+
+function navDue() {
+  const due = state.seeders.filter(isDueClient)
+    .sort((a, b) => String(a.nextRunAt || "").localeCompare(String(b.nextRunAt || "")));
+  if (!due.length) return '<div class="nav-group">Due now</div><p class="nav-empty">Nothing due.</p>';
+  return '<div class="nav-group">Due now · ' + due.length + "</div>" +
+    due.slice(0, 20).map((s) =>
+      '<a class="nav-node" href="#/log/' + encodeURIComponent(s.source) + '" title="Open the log">' +
+        '<span class="nav-label">' + esc(s.source) + "</span>" +
+        '<span class="nav-count">' + esc(fmtIn(s.nextRunAt)) + "</span></a>").join("") +
+    (due.length > 20 ? '<p class="nav-empty">+' + (due.length - 20) + " more</p>" : "");
+}
+
+/* A filter the toolbar no longer shows still has to be visible somewhere, or it is a trap: the
+ * chips are both the record and the way off. */
+const FILTER_KEYS = ["tier", "sched", "status", "category", "subcategory"];
+/* tier/sched/status are "off" at "", while category/subcategory are "off" at null — an empty
+ * string is the bucket a seeder with no category lands in. */
+const isNavKey = (k) => k === "category" || k === "subcategory";
+const filterOn = (k) => (isNavKey(k) ? state.filters[k] !== null : Boolean(state.filters[k]));
+const chipValue = (k, v) => {
+  if (k === "sched") return v === "1" ? "scheduled" : "manual";
+  if (isNavKey(k)) return v === "" ? "uncategorised" : v;
+  return v;
+};
+
+function renderFilterChips() {
+  const el = $("#activeFilters");
+  if (!el) return;
+  const chips = state.route.name === "seeders"
+    ? FILTER_KEYS.filter(filterOn).map((k) =>
+        '<button type="button" class="filter-chip" data-clearfilter="' + k + '" aria-label="Remove the ' + k + ' filter">' +
+          esc(k + ": " + chipValue(k, state.filters[k])) + '<span aria-hidden="true"> ×</span></button>')
+    : [];
+  el.innerHTML = chips.join("");
+  el.hidden = chips.length === 0;
+}
+
+function setQuick(key) {
+  const f = state.filters;
+  if (key === "all") { f.tier = ""; f.status = ""; }
+  else if (key === "due" || key === "errors") f.status = f.status === key ? "" : key;
+  else f.tier = f.tier === key ? "" : key;
+  renderSeeders();
+}
+
+function toggleNav(key, value) {
+  const f = state.filters;
+  if (f[key] === value) f[key] = null;
+  else { f[key] = value; if (key === "category") f.subcategory = null; }
+  renderSeeders();
+}
+
+function clearFilter(key) {
+  state.filters[key] = key === "category" || key === "subcategory" ? null : "";
+  if (key === "category") state.filters.subcategory = null;
+  renderSeeders();
+}
+
+/* A navigator row for a list that is already on screen: bring it into view and let the work
+ * surface say "this one" for a moment. No new route and no new fetch. */
+function scrollToRow(containerId, attr, value) {
+  const root = document.getElementById(containerId);
+  if (!root) return;
+  const row = [...root.querySelectorAll("[" + attr + "]")].find((el) => el.getAttribute(attr) === value);
+  if (!row) return;
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.classList.add("flash");
+  setTimeout(() => row.classList.remove("flash"), 1200);
+}
+
 function renderDashboard() {
   const total = state.seeders.length;
   const scheduled = state.seeders.filter((s) => s.scheduled).length;
@@ -476,10 +716,10 @@ function renderDashboard() {
     if (!card) return;
     e.preventDefault();
     const t = card.dataset.jump;
-    if (t === "scheduled") $("#schedFilter").value = "1";
-    else if (t === "due") $("#statusFilter").value = "due";
-    else if (t === "errors") $("#statusFilter").value = "errors";
-    else { $("#schedFilter").value = ""; $("#statusFilter").value = ""; }
+    if (t === "scheduled") state.filters.sched = "1";
+    else if (t === "due") state.filters.status = "due";
+    else if (t === "errors") state.filters.status = "errors";
+    else { state.filters.sched = ""; state.filters.status = ""; }
     navigate("#/seeders");
   };
 
@@ -537,6 +777,7 @@ function renderDashboard() {
   }
 
   renderBatchProgress();
+  renderNav();
 }
 
 function renderBatchProgress() {
@@ -603,7 +844,7 @@ async function renderPipeline() {
   if (jobsEl) {
     jobsEl.innerHTML = jobs.length
       ? jobs.map((j) =>
-          '<div class="job-row">' +
+          '<div class="job-row" data-job="' + esc(j.key || j.label || "") + '">' +
             '<span class="job-status ' + esc(j.status || "idle") + '"></span>' +
             '<span>' + esc(j.label || j.key) + '</span>' +
           '</div>').join("")
@@ -613,6 +854,7 @@ async function renderPipeline() {
   if (state.taggingGaps) $("#taggingGaps").innerHTML = gapCards(state.taggingGaps);
   renderPipelineStatus(p);
   await renderTaggingTasks();
+  renderNav();
 }
 
 function renderPipelineStatus(p) {
@@ -836,6 +1078,7 @@ async function renderAnalytics() {
 async function renderCuration() {
   try {
     const c = await get("/api/cache");
+    state.cache = c;
     const stageRows = (c.staged || []).reduce((n, f) => n + f.count, 0);
     const body = $("#curationBody");
 
@@ -843,7 +1086,7 @@ async function renderCuration() {
       ? '<div class="curate-section">' +
           '<h2 class="h-section">Staged (' + c.staged.length + ' sources, ' + stageRows.toLocaleString() + ' rows)</h2>' +
           (c.staged || []).map((f) =>
-            '<div class="curate-row">' +
+            '<div class="curate-row" data-curation-source="' + esc(f.originalSource || f.source) + '">' +
               '<div class="info">' +
                 '<div class="name">' + esc(f.originalSource !== f.source ? f.originalSource : f.source) + '</div>' +
                 (f.originalSource !== f.source ? '<div class="meta">file: ' + esc(f.source) + '</div>' : "") +
@@ -872,6 +1115,7 @@ async function renderCuration() {
       : '';
 
     body.innerHTML = stagedSection + discoverySection;
+    renderNav();
   } catch (err) {
     $("#curationBody").innerHTML = '<p class="muted">' + esc(err.message) + '</p>';
   }
@@ -946,6 +1190,7 @@ async function renderSettings() {
       });
     }
     wireLiveToggle();
+    renderNav();
   } catch (err) {
     body.innerHTML = '<p class="muted">' + esc(err.message) + '</p>';
   }
@@ -1023,9 +1268,63 @@ let logPageState = {
   source: null,
   sources: [],
   active: null,
+  // What the *route* last asked for, which is not the same thing as `source`: a tab click moves the
+  // tail without touching the hash, so a refresh must not read the route as "go back to that one".
+  routeSource: null,
   pollTimer: null,
   followLog: true,
 };
+
+/* ── the dock and the status bar ─────────────────────────────────────────── */
+
+/* The same log is rendered twice — the log surface (the phone keeps it) and the dock (the desktop
+ * has no surface for a log). Two host lists and one fetch per tick: `renderLogBody` writes both, so
+ * an open dock on any section is still exactly one tail every 2 s, not one per host. */
+const LOG_TAB_HOSTS = ["logTabs", "dockTabs"];
+const LOG_BODY_HOSTS = ["logBody", "dockBody"];
+
+/* Both regions are `display: none` at 720 px and below (`styles.css`, the phone block), so the one
+ * viewport question this file asks is whether the phone shell is what is on screen. */
+const isPhone = () => !window.matchMedia("(min-width: 721px)").matches;
+
+/* The open state lives on `#workbench[data-dock]` and nowhere else. This writes the attribute and
+ * the button that controls it together, because a toggle that disagrees with the grid is worse than
+ * a dock that will not open — and `#dock` is opened by code (a deep link, a run starting) as often
+ * as by the button. */
+function setDockOpen(open) {
+  const wb = $("#workbench");
+  if (!wb) return;
+  wb.dataset.dock = open ? "open" : "collapsed";
+  const btn = $$(".pane-btn").find((b) => b.dataset.pane === "dock");
+  if (btn) {
+    btn.setAttribute("aria-expanded", String(open));
+    const label = (open ? "Collapse " : "Expand ") + PANE_LABEL.dock;
+    btn.title = label;
+    const sr = btn.querySelector(".sr-only");
+    if (sr) sr.textContent = label;
+  }
+  // A dock that was shut while a source was selected has no lines to show until it is told to ask.
+  if (open) {
+    renderLogPageHead();
+    renderLogTabs();
+    renderLogBody();
+  }
+  syncLogPolling();
+}
+
+/* One tail, started in one place. The timer runs while there is a source AND something on screen is
+ * showing it — the log surface (phone) or the open dock (any section, which is what W5 changes).
+ * `startLogPagePolling` returns early when a timer exists, so calling this freely cannot stack one. */
+function syncLogPolling() {
+  const wb = $("#workbench");
+  const dockOpen = !!wb && wb.dataset.dock === "open";
+  if (logPageState.source && (state.route.name === "log" || dockOpen)) {
+    startLogPagePolling();
+  } else if (logPageState.pollTimer) {
+    clearInterval(logPageState.pollTimer);
+    logPageState.pollTimer = null;
+  }
+}
 
 /* ── pane mechanics ──────────────────────────────────────────────────────── */
 
@@ -1155,20 +1454,21 @@ function wirePanes() {
   });
 
 
-  // Collapse toggles. The dock's own attribute is its open/collapsed state (W5 owns its body);
-  // nav and inspector share `data-collapsed` as a whitespace-separated list.
+  // Collapse toggles. The dock has its own state (`#workbench[data-dock]`), written only through
+  // `setDockOpen` so the button and the grid can never disagree; nav and inspector share
+  // `data-collapsed` as a whitespace-separated list.
   $$(".pane-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const name = btn.dataset.pane;
       const open = btn.getAttribute("aria-expanded") !== "true";
-      btn.setAttribute("aria-expanded", String(open));
-      const label = (open ? "Collapse " : "Expand ") + (PANE_LABEL[name] || name);
-      btn.title = label;
-      const sr = btn.querySelector(".sr-only");
-      if (sr) sr.textContent = label;
       if (name === "dock") {
-        wb.dataset.dock = open ? "open" : "collapsed";
+        setDockOpen(open);
       } else {
+        btn.setAttribute("aria-expanded", String(open));
+        const label = (open ? "Collapse " : "Expand ") + (PANE_LABEL[name] || name);
+        btn.title = label;
+        const sr = btn.querySelector(".sr-only");
+        if (sr) sr.textContent = label;
         const collapsed = new Set((wb.dataset.collapsed || "").split(/\s+/).filter(Boolean));
         if (open) collapsed.delete(name); else collapsed.add(name);
         if (collapsed.size) wb.dataset.collapsed = [...collapsed].join(" ");
@@ -1384,6 +1684,7 @@ function wireInspector() {
 
 function openLogPage(source) {
   logPageState.source = source;
+  logPageState.routeSource = source || null;
   const runningSources = state.running.map((r) => r.source);
   const sources = [...new Set([source].concat(runningSources))].filter(Boolean);
   logPageState.sources = sources;
@@ -1391,12 +1692,7 @@ function openLogPage(source) {
   renderLogPageHead();
   renderLogTabs();
   renderLogBody();
-  if (source) startLogPagePolling();
-  else if (logPageState.pollTimer) { clearInterval(logPageState.pollTimer); logPageState.pollTimer = null; }
-}
-
-function closeLogPage() {
-  if (logPageState.pollTimer) { clearInterval(logPageState.pollTimer); logPageState.pollTimer = null; }
+  syncLogPolling();
 }
 
 function renderLogPageHead() {
@@ -1417,29 +1713,42 @@ function renderLogPageHead() {
   const stopBtn = $("#logStopBtn");
   if (runBtn) runBtn.disabled = !!running || !logPageState.source;
   if (stopBtn) stopBtn.disabled = !running;
+  // The dock head says the same thing in one phrase: what is tailing, and for how long, because the
+  // elapsed number is the only evidence a run is still alive rather than merely unfinished.
+  const note = $("#dockNote");
+  if (note) {
+    if (!logPageState.source) note.textContent = "no log open";
+    else if (running) note.textContent = "live · " + fmtElapsed(running.elapsedMs);
+    else note.textContent = logPageState.sources.length + (logPageState.sources.length === 1 ? " log" : " logs");
+    note.toggleAttribute("data-live", !!running);
+  }
 }
 
 function renderLogTabs() {
-  const container = $("#logTabs");
-  if (!container) return;
-  const runningSet = new Set(state.running.map((r) => r.source));
-  container.innerHTML = logPageState.sources.map((src) => {
-    const run = runningSet.has(src);
+  const running = new Map(state.running.map((r) => [r.source, r]));
+  const html = logPageState.sources.map((src) => {
+    const run = running.get(src);
     const isActive = src === logPageState.active;
-    return '<button class="log-tab ' + (isActive ? "active" : "") + ' ' + (run ? "live" : "") + '" data-logtab="' + esc(src) + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '">' +
+    const cls = ["log-tab", isActive && "active", run && "live"].filter(Boolean).join(" ");
+    return '<button class="' + cls + '" data-logtab="' + esc(src) + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '">' +
       '<span class="spin-pulse" aria-hidden="true"></span>' +
       '<span>' + esc(src) + '</span>' +
+      (run ? '<span class="time">' + esc(fmtElapsed(run.elapsedMs)) + '</span>' : "") +
     '</button>';
   }).join("");
+  for (const id of LOG_TAB_HOSTS) {
+    const container = $("#" + id);
+    if (container) container.innerHTML = html;
+  }
 }
 
 let logRenderSeq = 0;
 async function renderLogBody() {
   const seq = ++logRenderSeq;
-  const body = $("#logBody");
-  if (!body) return;
+  const bodies = LOG_BODY_HOSTS.map((id) => $("#" + id)).filter(Boolean);
+  if (!bodies.length) return;
   if (!logPageState.sources.length) {
-    body.innerHTML = '<p class="log-empty">No sources.</p>';
+    for (const b of bodies) b.innerHTML = '<p class="log-empty">No sources.</p>';
     return;
   }
   const sourcesToShow = [logPageState.active].filter(Boolean);
@@ -1458,10 +1767,15 @@ async function renderLogBody() {
         '<pre class="log-lines">' + (lines.length ? esc(lines.join("\n")) : '<span class="log-empty">(no output yet)</span>') + '</pre>' +
       '</div>');
   }
+  // The fetch happened once; each host keeps its own follow position, because the person may be
+  // reading in the dock while the surface sits scrolled somewhere else.
   if (seq !== logRenderSeq) return;
-  const prevScroll = body.scrollTop;
-  body.innerHTML = blocks.join("");
-  body.scrollTop = logPageState.followLog ? body.scrollHeight : prevScroll;
+  const html = blocks.join("");
+  for (const b of bodies) {
+    const prevScroll = b.scrollTop;
+    b.innerHTML = html;
+    b.scrollTop = logPageState.followLog ? b.scrollHeight : prevScroll;
+  }
 }
 
 // The log page refreshes the visible tab only: `renderLogBody` fetches one
@@ -1717,8 +2031,19 @@ async function refreshAll() {
   try {
     await Promise.all([loadSeeders(), loadRunning(), loadPipeline(), loadSettings()]);
     offlineFails = 0;
+    state.lastRefreshAt = Date.now();
     $("#apiLabel").textContent = "api → " + apiBase();
     $("#apiLabel").classList.remove("offline");
+    // A run that starts while the dock is shut would stream where nobody can see it, so the
+    // idle -> running edge opens the dock and picks that source. Nothing closes it: a dock the user
+    // opened is theirs, and a page load starts collapsed (`index.html`).
+    const isRunning = state.running.length > 0;
+    if (isRunning && !state.wasRunning && !isPhone()) {
+      if (!logPageState.source) openLogPage(state.running[0].source);
+      setDockOpen(true);
+    }
+    state.wasRunning = isRunning;
+    renderStatus();
     // Don't re-render the Settings panel during auto-refresh — it tears down
     // the live toggle and resets the checkbox state.
     if (state.route.name !== "settings") handleRouteChange();
@@ -1726,7 +2051,45 @@ async function refreshAll() {
     offlineFails++;
     $("#apiLabel").textContent = "offline — " + err.message;
     $("#apiLabel").classList.add("offline");
+    renderStatus();
     if (offlineFails === 3) toast("Cannot reach API: " + err.message, "err");
+  }
+}
+
+/* The status bar is rebuilt from `state` whole, never edited field by field: every value it shows
+ * is one a poll just refreshed, so one function is what keeps them from disagreeing. "synced" is
+ * this console's last successful poll — no route returns a sync timestamp, and the fleet's own last
+ * run is the dashboard's business, not a footer's. */
+const hhmmss = (ms) => {
+  const d = new Date(ms);
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
+};
+
+function renderStatus() {
+  const base = apiBase();
+  const endpoint = $("#statusEndpoint");
+  if (endpoint) {
+    endpoint.textContent = base.replace(/^https?:\/\//, "");
+    endpoint.title = "API " + base;
+  }
+  const badge = $("#seederCountBadge");
+  if (badge) badge.textContent = String(state.seeders.length);
+  const due = state.seeders.filter(isDueClient).length;
+  const dueEl = $("#statusDue");
+  if (dueEl) {
+    dueEl.textContent = due + " due";
+    dueEl.classList.toggle("due", due > 0);
+  }
+  const nodeEl = $("#statusNode");
+  if (nodeEl) nodeEl.textContent = state.nodeId || "local";
+  const routeEl = $("#statusRoute");
+  if (routeEl) routeEl.textContent = state.route.name;
+  const syncEl = $("#statusSync");
+  if (syncEl) {
+    syncEl.textContent = state.lastRefreshAt ? "synced " + hhmmss(state.lastRefreshAt) : "synced —";
+    // Twice the idle interval means the poll has stopped landing: a timestamp that still looks
+    // fresh would be the lie, so it changes colour instead of ticking.
+    syncEl.classList.toggle("stale", !state.lastRefreshAt || Date.now() - state.lastRefreshAt > 2 * POLL_IDLE_MS);
   }
 }
 
@@ -1739,12 +2102,27 @@ function bind() {
 
   const filterEl = $("#filter");
   if (filterEl) filterEl.addEventListener("input", debounce(renderSeeders, 80));
-  const tierEl = $("#tierFilter");
-  if (tierEl) tierEl.addEventListener("change", renderSeeders);
-  const schedEl = $("#schedFilter");
-  if (schedEl) schedEl.addEventListener("change", renderSeeders);
-  const statusEl = $("#statusFilter");
-  if (statusEl) statusEl.addEventListener("change", renderSeeders);
+
+  // The navigator and the chips are delegated: renderNav/renderSeeders repaint them on every poll,
+  // so a listener bound to a node would be thrown away with the node. A row with no `data-nav-*`
+  // (the due-now links) is an anchor and navigates itself.
+  const navEl = $("#navTree");
+  if (navEl) navEl.addEventListener("click", (e) => {
+    const node = e.target.closest("button");
+    if (!node) return;
+    const d = node.dataset;
+    if (d.navQuick) return setQuick(d.navQuick);
+    if (d.navCat !== undefined) return toggleNav("category", d.navCat);
+    if (d.navSub !== undefined) return toggleNav("subcategory", d.navSub);
+    if (d.navPick) return setFocus(d.navPick);
+    if (d.navCurate) return scrollToRow("curationBody", "data-curation-source", d.navCurate);
+    if (d.navJob) return scrollToRow("pipelineJobs", "data-job", d.navJob);
+  });
+  const chipsEl = $("#activeFilters");
+  if (chipsEl) chipsEl.addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-clearfilter]");
+    if (chip) clearFilter(chip.dataset.clearfilter);
+  });
 
   $$("#seederTable th[data-sort]").forEach((th) =>
     th.addEventListener("click", () => {
@@ -1810,12 +2188,7 @@ function bind() {
   const ns = $("#newSeederBtn");
   if (ns) ns.addEventListener("click", openBuildModal);
   const rd = $("#runDueBtn");
-  if (rd) rd.addEventListener("click", () => {
-    const sources = ($("#forceDue") && $("#forceDue").checked
-      ? state.seeders.filter((s) => s.scheduled)
-      : state.seeders.filter(isDueClient)).map((s) => s.source);
-    runSources(sources);
-  });
+  if (rd) rd.addEventListener("click", () => runDue());
   const et = $("#emitTimerBtn");
   if (et) et.addEventListener("click", writeTimer);
 
@@ -1851,18 +2224,7 @@ function bind() {
   if (lmb) lmb.addEventListener("click", loadSelectedModel);
 
   const pb = $("#pruneBtn");
-  if (pb) pb.addEventListener("click", async () => {
-    try {
-      const filter = {};
-      const src = $("#curateSource") && $("#curateSource").value.trim();
-      const before = $("#curateBefore") && $("#curateBefore").value;
-      if (src) filter.source = src;
-      if (before) filter.before = before;
-      const r = await post("/api/cache/prune", { filter });
-      toast("Deleted " + r.deleted + " URL(s) (kept " + r.kept + ").", "ok");
-      renderCuration();
-    } catch (err) { toast(err.message, "err"); }
-  });
+  if (pb) pb.addEventListener("click", () => pruneStaged());
   const cr = $("#curateRefreshBtn");
   if (cr) cr.addEventListener("click", renderCuration);
   const cb = $("#curationBody");
@@ -1891,57 +2253,94 @@ function bind() {
   if (ls) ls.addEventListener("click", () => logPageState.source && stopRuns(logPageState.source));
   const lsc = $("#logScheduleBtn");
   if (lsc) lsc.addEventListener("click", () => logPageState.source && openSchedule(logPageState.source));
-  const lt = $("#logTabs");
-  if (lt) lt.addEventListener("click", (e) => {
-    const tab = e.target.closest("[data-logtab]");
-    if (!tab) return;
-    logPageState.active = tab.dataset.logtab;
-    logPageState.followLog = true;
-    $$("#logTabs .log-tab").forEach((b) => b.classList.toggle("active", b.dataset.logtab === logPageState.active));
-    renderLogBody();
-  });
-  const lb2 = $("#logBody");
-  if (lb2) lb2.addEventListener("scroll", () => {
-    const b = $("#logBody");
-    logPageState.followLog = b.scrollHeight - b.scrollTop - b.clientHeight < 40;
-  });
+  // The same tabs exist twice — the log surface (which the phone keeps) and the dock (the desktop's
+  // only log) — so one delegation per host keeps both live without either owning the other.
+  for (const id of LOG_TAB_HOSTS) {
+    const host = $("#" + id);
+    if (!host) continue;
+    host.addEventListener("click", (e) => {
+      const tab = e.target.closest("[data-logtab]");
+      if (!tab) return;
+      // The head, the Run button and the tail all read `source`; only `active` used to move, so a
+      // clicked tab streamed one source's lines under another source's name.
+      logPageState.source = tab.dataset.logtab;
+      logPageState.active = tab.dataset.logtab;
+      logPageState.followLog = true;
+      renderLogPageHead();
+      renderLogTabs();
+      renderLogBody();
+      syncLogPolling();
+    });
+  }
+  // Following is per host: scrolling the dock must not stop the surface from following, and the
+  // flag is shared, so the last scroll wins — which is the pane the person is actually reading.
+  for (const id of LOG_BODY_HOSTS) {
+    const b = $("#" + id);
+    if (!b) continue;
+    b.addEventListener("scroll", () => {
+      logPageState.followLog = b.scrollHeight - b.scrollTop - b.clientHeight < 40;
+    });
+  }
 
   const wt = $("#writeTimerBtn");
   if (wt) wt.addEventListener("click", writeTimer);
 
+  // The sheet is the only place tier/schedule/status are set now, so it must open on what is
+  // already applied — and offer the way off. Applying a blank form used to reset them silently.
+  const modalSelect = (id, current, opts) =>
+    '<select id="' + id + '">' + opts.map(([v, label]) =>
+      '<option value="' + esc(v) + '"' + (v === current ? " selected" : "") + ">" + esc(label) + "</option>").join("") +
+    "</select>";
   const fs = $("#filterSheetBtn");
   if (fs) fs.addEventListener("click", () => {
+    const f = state.filters;
     openModal((modal) => {
       const body = document.createElement("div");
       body.className = "modal-body";
       body.innerHTML =
         '<div class="field"><label for="modalTier">Tier</label>' +
-          '<select id="modalTier"><option value="">All tiers</option><option value="news">News</option><option value="evergreen">Evergreen</option></select>' +
+          modalSelect("modalTier", f.tier, [["", "All tiers"], ["news", "News"], ["evergreen", "Evergreen"]]) +
         '</div>' +
         '<div class="field"><label for="modalSched">Schedule</label>' +
-          '<select id="modalSched"><option value="">Scheduled + manual</option><option value="1">Scheduled only</option><option value="0">Manual only</option></select>' +
+          modalSelect("modalSched", f.sched, [["", "Scheduled + manual"], ["1", "Scheduled only"], ["0", "Manual only"]]) +
         '</div>' +
         '<div class="field"><label for="modalStatus">Status</label>' +
-          '<select id="modalStatus"><option value="">Any status</option><option value="due">Due</option><option value="errors">Errors</option></select>' +
+          modalSelect("modalStatus", f.status, [["", "Any status"], ["due", "Due"], ["errors", "Errors"]]) +
         '</div>';
-      const apply = mkBtn("Apply", "btn-primary");
-      apply.addEventListener("click", () => {
-        $("#tierFilter").value = $("#modalTier").value;
-        $("#schedFilter").value = $("#modalSched").value;
-        $("#statusFilter").value = $("#modalStatus").value;
+      const clear = mkBtn("Clear all", "btn");
+      clear.addEventListener("click", () => {
+        Object.assign(state.filters, EMPTY_FILTERS);
         closeModal();
         renderSeeders();
       });
-      modalShell(modal, { title: "More filters", body, actions: [apply] });
+      const apply = mkBtn("Apply", "btn-primary");
+      apply.addEventListener("click", () => {
+        state.filters.tier = $("#modalTier").value;
+        state.filters.sched = $("#modalSched").value;
+        state.filters.status = $("#modalStatus").value;
+        closeModal();
+        renderSeeders();
+      });
+      modalShell(modal, { title: "More filters", body, actions: [clear, apply] });
     });
   });
 
   wirePanes();
   wireRowFocus();
   wireInspector();
+  wirePalette();
 
   // Keyboard shortcuts (skip when typing in a form).
   document.addEventListener("keydown", (e) => {
+    // Above the typing guard on purpose: any field can hold the focus when the palette is asked
+    // for — `#filter` most of the time — and `Ctrl/Cmd+K` is the one shortcut that must still work
+    // from inside a form. It toggles, because a second press is how a keyboard user backs out.
+    if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === "k") {
+      e.preventDefault();
+      if ($("#palette") && $("#palette").dataset.open === "true") closePalette();
+      else openPalette();
+      return;
+    }
     if (e.key === "F6") { e.preventDefault(); focusNextRegion(e.shiftKey ? -1 : 1); return; }
     if (e.target.matches("input, textarea, select")) return;
     if (e.key === "/") { e.preventDefault(); if ($("#filter")) $("#filter").focus(); }
@@ -1960,6 +2359,9 @@ function bind() {
   });
 
   window.addEventListener("hashchange", handleRouteChange);
+  // Crossing 720 px swaps the log between the dock and the surface, so what a route means changes
+  // with it and the route has to be read again. W7 owns the 1180 px sheet; this one is W5's.
+  window.matchMedia("(min-width: 721px)").addEventListener?.("change", handleRouteChange);
 }
 
 async function startPipeline(kind) {
@@ -1984,6 +2386,222 @@ async function writeTimer() {
     toast("Timer regenerated: " + (t.onCalendar || "none"), "ok");
     await renderTimer();
   } catch (err) { toast("Timer failed: " + err.message, "err"); }
+}
+
+/* One handler per heavy or destructive action, named rather than left inside a click listener:
+ * the palette and the button it mirrors have to reach the same code, or W6's "Enter reaches the
+ * handler the button does" is a claim about two copies that will drift. */
+function runDue() {
+  const force = !!($("#forceDue") && $("#forceDue").checked);
+  return runSources(state.seeders.filter(force ? (s) => s.scheduled : isDueClient).map((s) => s.source));
+}
+
+function pruneStaged(opts) {
+  const filter = {};
+  const srcEl = $("#curateSource"), beforeEl = $("#curateBefore");
+  const src = srcEl ? srcEl.value.trim() : "";
+  const before = beforeEl ? beforeEl.value : "";
+  if (src) filter.source = src;
+  if (before) filter.before = before;
+  // From the palette those two fields can be on another section — or empty, which prunes the whole
+  // staged set — so that path names what it is about to move to `.skyhook/trash/` first (D18).
+  if (opts && opts.confirm) {
+    const what = src ? "staged URLs from " + src : "every staged URL";
+    const when = before ? " staged before " + before : "";
+    if (!confirm("Prune " + what + when + "? Rows move to .skyhook/trash/ — they are not destroyed.")) {
+      return Promise.resolve();
+    }
+  }
+  return post("/api/cache/prune", { filter })
+    .then((r) => {
+      toast("Deleted " + r.deleted + " URL(s) (kept " + r.kept + ").", "ok");
+      renderCuration();
+    })
+    .catch((err) => toast(err.message, "err"));
+}
+
+/* ── command palette (W6) ────────────────────────────────────────────────────
+ * Three kinds of row behind one input: the sections `ROUTE_TITLES` names, five actions, and
+ * per-seeder rows once something is typed. It is not a `.modal` (D16) — the palette's focus never
+ * leaves its input, and `aria-activedescendant` is what moves, not a Tab cycle — so it owns
+ * `openPalette`/`closePalette` and leaves the nine dialogs `openModal` serves untouched.
+ * Rows are rebuilt per keystroke from `state.seeders`, so a poll that replaces the fleet cannot
+ * leave a row pointing at a seeder that is gone. */
+const PALETTE_CAP = 50;      // rows on screen at once: a wall of options is not a palette
+const PALETTE_SEEDERS = 8;   // seeders matched per keystroke, three rows each (D17)
+
+let paletteItems = [], paletteSel = 0, paletteReturnFocus = null;
+
+/* A prefix beats a hit inside the label, that beats a subsequence, and no match means no row.
+ * Case-folded: a source is `Lobsters` but nobody types the shift. */
+function fuzzyScore(query, text) {
+  const t = String(text || "").toLowerCase();
+  if (!query) return 1;
+  const at = t.indexOf(query);
+  if (at === 0) return 200 - Math.min(t.length, 100);
+  if (at > 0) return 120 - Math.min(at, 60);
+  let pos = 0, gaps = 0;
+  for (const ch of query) {
+    const hit = t.indexOf(ch, pos);
+    if (hit === -1) return 0;
+    gaps += hit - pos;
+    pos = hit + 1;
+  }
+  return Math.max(1, 60 - gaps);
+}
+
+function paletteCommands() {
+  const rows = [];
+  // `ROUTE_TITLES`' own order is the rail's; `timer` is a Pi node's section, and the rail hides it
+  // everywhere else, so the palette offers it exactly where the rail does.
+  for (const [name, label] of Object.entries(ROUTE_TITLES)) {
+    if (name === "timer" && !isPiNode()) continue;
+    rows.push({
+      group: "Views", label, hint: name,
+      run: () => navigate(name === "dashboard" ? "#/" : "#/" + name),
+    });
+  }
+  rows.push(
+    { group: "Actions", label: "Refresh everything", hint: "r", run: () => refreshAll() },
+    { group: "Actions", label: "Run due seeders", hint: "run due", run: () => runDue() },
+    { group: "Actions", label: "Prune staged URLs", hint: "curation", run: () => pruneStaged({ confirm: true }) },
+    { group: "Actions", label: "Push staged to storage", hint: "pipeline", run: () => startPipeline("push") },
+    { group: "Actions", label: "Regenerate the systemd timer", hint: "timer", run: () => writeTimer() },
+  );
+  return rows;
+}
+
+/** The rows for `query`, by section and then by how well each matched. */
+function paletteMatches(query) {
+  const q = query.trim().toLowerCase();
+  const rows = paletteCommands();
+  // Per-seeder rows appear only once something is typed (D17): an empty palette listing three
+  // rows for every seeder in a fleet of hundreds is a scroll, not a command list.
+  if (q) {
+    const hits = state.seeders
+      .map((s) => ({ s, score: Math.max(fuzzyScore(q, s.source), fuzzyScore(q, s.displayName)) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, PALETTE_SEEDERS);
+    for (const { s } of hits) {
+      // A display name is what the table shows, so it becomes the hint rather than a second label.
+      const note = s.displayName && s.displayName !== s.source ? s.displayName : "";
+      rows.push(
+        { group: "Seeders", label: "Log: " + s.source, hint: note || "open log",
+          run: () => navigate("#/log/" + encodeURIComponent(s.source)) },
+        { group: "Seeders", label: "Run: " + s.source, hint: note || "run now",
+          run: () => runSources([s.source]) },
+        { group: "Seeders", label: "Schedule: " + s.source, hint: note || "cadence",
+          run: () => openSchedule(s.source) },
+      );
+    }
+  }
+  const rank = { Views: 0, Actions: 1, Seeders: 2 };
+  return rows
+    .map((row, i) => ({ ...row, i, score: Math.max(fuzzyScore(q, row.label), fuzzyScore(q, row.hint)) }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => (rank[a.group] - rank[b.group]) || (b.score - a.score) || (a.i - b.i))
+    .slice(0, PALETTE_CAP);
+}
+
+function renderPalette() {
+  const list = $("#palList"), input = $("#palInput");
+  if (!list || !input) return;
+  if (!paletteItems.length) {
+    list.innerHTML = '<p class="pal-empty">Nothing matches.</p>';
+    input.removeAttribute("aria-activedescendant");
+    return;
+  }
+  let html = "", group = null;
+  paletteItems.forEach((row, i) => {
+    if (row.group !== group) {
+      if (group) html += "</div>";
+      group = row.group;
+      html += '<div class="pal-sec" role="group" aria-label="' + esc(group) + '">' +
+        '<span class="pal-sec-label" aria-hidden="true">' + esc(group) + "</span>";
+    }
+    html += '<button type="button" role="option" tabindex="-1" id="pal-opt-' + i + '"' +
+      ' class="pal-item' + (i === paletteSel ? " sel" : "") + '"' +
+      ' aria-selected="' + (i === paletteSel ? "true" : "false") + '" data-pal="' + i + '">' +
+      '<span class="pal-label">' + esc(row.label) + "</span>" +
+      (row.hint ? '<span class="pal-hint">' + esc(row.hint) + "</span>" : "") +
+      "</button>";
+  });
+  if (group) html += "</div>";
+  list.innerHTML = html;
+  input.setAttribute("aria-activedescendant", "pal-opt-" + paletteSel);
+  const selected = $("#pal-opt-" + paletteSel);
+  if (selected && selected.scrollIntoView) selected.scrollIntoView({ block: "nearest" });
+}
+
+function openPalette() {
+  const layer = $("#palette");
+  if (!layer) return;
+  // Two traps and one Escape key would fight: a sheet closes first, the palette never stacks on it.
+  closeModal();
+  if (layer.dataset.open === "true") { $("#palInput").focus(); return; }
+  paletteReturnFocus = document.activeElement;
+  paletteSel = 0;
+  $("#palInput").value = "";
+  paletteItems = paletteMatches("");
+  layer.dataset.open = "true";
+  renderPalette();
+  $("#palInput").focus();
+}
+
+function closePalette() {
+  const layer = $("#palette");
+  if (!layer || layer.dataset.open !== "true") return;
+  layer.dataset.open = "false";
+  // Only back into something still on screen: Enter may have just replaced the surface the focus
+  // came from, and focusing a detached node silently drops the caret on `<body>`.
+  if (paletteReturnFocus && paletteReturnFocus.isConnected && paletteReturnFocus.focus) {
+    paletteReturnFocus.focus();
+  }
+  paletteReturnFocus = null;
+}
+
+function paletteRun() {
+  const row = paletteItems[paletteSel];
+  if (!row) return;
+  closePalette();
+  row.run();
+}
+
+function paletteMove(delta) {
+  if (!paletteItems.length) return;
+  paletteSel = (paletteSel + delta + paletteItems.length) % paletteItems.length;
+  renderPalette();
+}
+
+function wirePalette() {
+  const layer = $("#palette"), btn = $("#paletteBtn"), input = $("#palInput"), list = $("#palList");
+  if (!layer || !input || !list) return;
+  if (btn) btn.addEventListener("click", openPalette);
+  input.addEventListener("input", () => {
+    paletteSel = 0;
+    paletteItems = paletteMatches(input.value);
+    renderPalette();
+  });
+  // The input is the palette's only tab stop by design (D16), so every key that moves the
+  // selection is handled here — a `Tab` would otherwise leave the list the arrow keys drive.
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); paletteMove(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); paletteMove(-1); }
+    else if (e.key === "Home") { e.preventDefault(); paletteSel = 0; renderPalette(); }
+    else if (e.key === "End") { e.preventDefault(); paletteSel = Math.max(0, paletteItems.length - 1); renderPalette(); }
+    else if (e.key === "Enter") { e.preventDefault(); paletteRun(); }
+    else if (e.key === "Escape") { e.preventDefault(); closePalette(); }
+    else if (e.key === "Tab") { e.preventDefault(); }
+  });
+  // Delegated on the list, not per row: every keystroke rewrites the rows.
+  list.addEventListener("click", (e) => {
+    const opt = e.target.closest("[data-pal]");
+    if (!opt) return;
+    paletteSel = Number(opt.dataset.pal) || 0;
+    paletteRun();
+  });
+  layer.addEventListener("click", (e) => { if (e.target === layer) closePalette(); });
 }
 
 /* The affordances a window cannot honour, removed rather than hidden so nothing in
