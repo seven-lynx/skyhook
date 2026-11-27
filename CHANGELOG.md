@@ -27,6 +27,9 @@ once the desktop track ships — a signed installer.
 
 ### Fixed
 
+- A pushed `v*` tag now starts the CI workflow that builds the desktop installer.
+  `ci.yml`'s `on.push` listed branches only, so the tag-only `desktop` job — guarded
+  to `refs/tags/v` — could never fire and a release attached no artifacts (#35).
 - `tag --requeue-untagged` now converges. A URL the model answers with no
   surviving tag is recorded as `:no-tags` instead of being offered again on
   every pass, so the tail reaches zero instead of re-buying the same URLs.

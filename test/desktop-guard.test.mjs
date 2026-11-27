@@ -235,6 +235,23 @@ function scheduleWiring({ serverJs, scheduleJs, mainRs, capability }) {
 }
 
 /**
+ * Whether a workflow is *started* by a version-tag push — its `on:` header, read
+ * before the first `jobs:` line.
+ *
+ * A different question from the `if:` guard: `desktop` is guarded to `refs/tags/v`,
+ * but a push carries its tags only when `on.push` names them, so a header with
+ * `branches` alone leaves that job unreachable while the guard still reads correct
+ * (#35). Only the header counts — a `tags:` inside a step's `with:` starts nothing.
+ */
+function tagTriggered(yaml) {
+  const header = String(yaml).split(/^jobs:\s*$/m)[0] ?? "";
+  return (
+    /^\s*push:\s*$/m.test(header)
+    && (/^\s*tags:\s*\[[^\]]*\bv/m.test(header) || /^\s*tags:\s*\n\s*-\s*["']?v/m.test(header))
+  );
+}
+
+/**
  * The halves of "a fresh checkout produces an installer", read from the five files that
  * carry them: the pin, the bundle config, the npm script that wraps the build, the
  * wrapper itself, and the workflow that builds it on CI.
@@ -243,8 +260,9 @@ function scheduleWiring({ serverJs, scheduleJs, mainRs, capability }) {
  * here — so what is asserted is that each piece is wired to the next: the runtime present
  * under the name `externalBin` requires, the sidecar script shipped as a resource (an
  * installed window has no checkout to fall back to), the fetch running before `tauri
- * build`, the release build refusing the machine's own Node, and the CI job guarded to a
- * tag so the installer never becomes a pull-request gate.
+ * build`, the release build refusing the machine's own Node, the CI job guarded to a
+ * tag so the installer never becomes a pull-request gate, and that tag push actually
+ * starting the workflow.
  */
 function distWiring({ pin, tauriConf, packageJson, distScript, stageScript, ciYaml, mainRs }) {
   const bundle = tauriConf.bundle ?? {};
@@ -267,6 +285,7 @@ function distWiring({ pin, tauriConf, packageJson, distScript, stageScript, ciYa
     tagOnlyJob:
       ciYaml.includes("windows-latest")
       && /if:\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/.test(ciYaml),
+    tagTrigger: tagTriggered(ciYaml),
   };
 }
 
@@ -372,6 +391,24 @@ test("guard: the pin rule reads a version and spots the drift", () => {
 
   // The "Done means" case: a sidecar pinned to 22 while CI stays on 20.
   assert.equal([20].includes(majorOf("22.0.0")), false);
+});
+
+test("guard: the trigger rule reads the on: header, not the job body", () => {
+  assert.equal(tagTriggered("on:\n  push:\n    branches: [main]\n    tags: [\"v*\"]\njobs:\n"), true);
+  assert.equal(tagTriggered("on:\n  push:\n    tags:\n      - \"v*\"\njobs:\n"), true);
+
+  // The defect #35 was: branches named, tags not — so a guarded job never started.
+  assert.equal(tagTriggered("on:\n  push:\n    branches: [main]\njobs:\n"), false);
+  // A `tags:` inside a step's `with:` starts nothing, so only the header is read.
+  assert.equal(
+    tagTriggered(
+      "on:\n  push:\n    branches: [main]\njobs:\n  x:\n    steps:\n      - with:\n          tags: [\"v*\"]\n",
+    ),
+    false,
+  );
+
+  // The workflow itself, which the installer family above depends on.
+  assert.equal(tagTriggered(readFileSync(ciWorkflow, "utf8")), true, "ci.yml starts on a version tag");
 });
 
 test("guard: the shell's token reaches the sidecar and the window", () => {
@@ -560,8 +597,9 @@ test("guard: a fresh checkout carries every piece the installer build needs", ()
       bundledRuntime: true,
       plainPaths: true,
       tagOnlyJob: true,
+      tagTrigger: true,
     },
-    "the bundle carries its runtime and the app that runtime runs, and the CI job is a tag job",
+    "the bundle carries its runtime and the app that runtime runs, and the CI job is a tag job a tag push starts",
   );
 });
 
@@ -634,6 +672,13 @@ test("guard: the dist rule refuses a build that would ship a runtime it cannot r
   );
   assert.notEqual(noGuard, base.ciYaml, "ci.yml still guards the desktop job");
   assert.equal(wiring({ ciYaml: noGuard }).tagOnlyJob, false);
+
+  // 9. The guard stays but the workflow never starts on a tag, so the job above is
+  // unreachable and a release builds nothing — the state ci.yml was in until #35.
+  const noTrigger = base.ciYaml.replace(/^\s*tags: \[.*\]\s*$/m, "");
+  assert.notEqual(noTrigger, base.ciYaml, "ci.yml still triggers on a version tag");
+  assert.equal(wiring({ ciYaml: noTrigger }).tagTrigger, false);
+  assert.equal(wiring({ ciYaml: noTrigger }).tagOnlyJob, true, "the guard alone would still pass");
 });
 
 /**

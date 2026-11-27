@@ -170,10 +170,12 @@ Release history is `CHANGELOG.md`, newest first: the release's own section is wr
 the same commit as the version bump, and the README **Status** paragraph is rewritten
 from it rather than the other way round.
 
-A release that ships the desktop app carries four assets, and the tag produces them: the tag-only
-`desktop` job in `.github/workflows/ci.yml` builds on `windows-latest` with the signing key from CI
-secrets, and attaches `Skyhook_<version>_x64-setup.exe`, its `.nsis.zip`, that zip's `.sig`, and
-`latest.json` to the Release. An installed copy polls
+A release that ships the desktop app carries four assets, and the tag produces them: `on.push` in
+`.github/workflows/ci.yml` names `tags: ["v*"]`, so pushing the tag starts the tag-only `desktop`
+job, which builds on `windows-latest` with the signing key from CI secrets and attaches
+`Skyhook_<version>_x64-setup.exe`, its `.nsis.zip`, that zip's `.sig`, and `latest.json` to the
+Release. Without that `tags` filter a tag push runs no workflow at all, so the job's `refs/tags/v`
+guard had nothing to guard and a release attached nothing (#35). An installed copy polls
 `releases/latest/download/latest.json`, so a Release without those four strands everyone who
 installed the previous version — build and sign first, upload second, announce last.
 

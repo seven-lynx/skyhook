@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # A tag push runs nothing unless `push` names the tags (#35): `desktop` below is
+    # guarded to `refs/tags/v`, so without this line that job had no reachable trigger
+    # and a release built no installer at all.
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
