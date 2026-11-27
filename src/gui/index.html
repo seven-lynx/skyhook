@@ -54,7 +54,7 @@
   <!-- Workbench shell: command bar, rail, navigator, work surface, inspector, log dock, status. -->
   <div class="workbench" id="workbench" data-dock="collapsed">
     <!-- ── command bar ─────────────────────────────────────────────────── -->
-    <header class="bar" role="banner">
+    <header class="bar" role="banner" aria-label="Command bar">
       <a href="#/" class="brand" aria-label="Skyhook — go to dashboard">
         <span class="brand-logo"><img src="/icons/logo-96.png" alt="" width="32" height="32" /></span>
         <span class="brand-text">
@@ -71,6 +71,13 @@
         <kbd>Ctrl K</kbd>
       </button>
       <div class="bar-right">
+        <!-- W7: the tablet sheet's door. Only visible while the inspector is a sheet (721-1180 px),
+             where a pick is not the only reason to want it. -->
+        <button id="inspSheetBtn" class="btn-ghost btn-sm insp-sheet-btn" type="button"
+                aria-controls="insp" aria-expanded="false" aria-label="Inspector">
+          <svg class="ic" aria-hidden="true"><use href="#ic-info"/></svg>
+          <span class="sr-only">Inspector</span>
+        </button>
         <button id="refreshBtn" class="btn-ghost btn-sm" type="button" aria-label="Refresh">
           <svg class="ic" aria-hidden="true"><use href="#ic-refresh"/></svg>
           <span class="sr-only">Refresh</span>
@@ -133,7 +140,7 @@
     </section>
 
     <!-- ── work surface ────────────────────────────────────────────────── -->
-    <main class="pane work" id="work" tabindex="-1">
+    <main class="pane work" id="work" aria-label="Work surface" tabindex="-1">
       <div class="pane-head">
         <span class="pane-title" id="workTitle">Dashboard</span>
         <span class="pane-meta" id="workMeta"></span>
@@ -380,8 +387,13 @@
       </div>
     </section>
 
+    <!-- W7: the inspector sheet's scrim. Decoration with a click: never a tab stop, `aria-hidden`,
+         and Escape is the keyboard's way out. `data-open`, not `hidden` — a `display` of ours has
+         beaten the UA's `[hidden]` twice already. -->
+    <div class="insp-scrim" id="inspScrim" data-open="false" aria-hidden="true"></div>
+
     <!-- ── status bar ──────────────────────────────────────────────────── -->
-    <footer class="status" id="statusbar">
+    <footer class="status" id="statusbar" aria-label="Status">
       <span class="status-item" id="statusEndpoint" title="API endpoint">…</span>
       <span class="status-sep"></span>
       <span class="status-item"><b id="seederCountBadge">…</b> seeders</span>
