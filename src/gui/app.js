@@ -152,6 +152,17 @@ function isDueClient(s) {
   if (!isFinite(ms)) return false;
   return Date.now() - new Date(s.lastRunAt).getTime() >= ms;
 }
+/**
+ * What this console may start: due by cadence, and not already in flight.
+ *
+ * The server applies both halves (`/api/due` excludes a run in flight, #31) and the console mirrors
+ * them because its list is rebuilt from `/api/seeders`, not from `/api/due`. A row that is running
+ * stays visible in the running panel; offering it a Run button only produces `skippedRunning`.
+ */
+function dueNowClient() {
+  const live = new Set((state.running || []).map((r) => r.source));
+  return state.seeders.filter((s) => isDueClient(s) && !live.has(s.source));
+}
 function isErrorStatus(s) {
   return s.lastStatus && s.lastStatus !== "ok" && s.lastRunAt;
 }
@@ -632,7 +643,7 @@ function navPipeline() {
 }
 
 function navDue() {
-  const due = state.seeders.filter(isDueClient)
+  const due = dueNowClient()
     .sort((a, b) => String(a.nextRunAt || "").localeCompare(String(b.nextRunAt || "")));
   if (!due.length) return '<div class="nav-group">Due now</div><p class="nav-empty">Nothing due.</p>';
   return '<div class="nav-group">Due now · ' + due.length + "</div>" +
@@ -704,7 +715,7 @@ function scrollToRow(containerId, attr, value) {
 function renderDashboard() {
   const total = state.seeders.length;
   const scheduled = state.seeders.filter((s) => s.scheduled).length;
-  const due = state.seeders.filter(isDueClient).length;
+  const due = dueNowClient().length;
   const errors = state.seeders.filter(isErrorStatus).length;
   $("#dashStats").innerHTML =
     '<a class="stat" href="#/seeders" data-jump="all"><span class="stat-num">' + total + '</span><span class="stat-label">seeders</span></a>' +
@@ -740,7 +751,7 @@ function renderDashboard() {
   if (items.length) {
     runningEl.innerHTML = items.join("");
   } else {
-    runningEl.innerHTML = '<p class="muted" style="padding: var(--space-3);">Nothing running.</p>';
+    runningEl.innerHTML = '<p class="empty">Nothing running.</p>';
   }
 
   const failEl = $("#failList");
@@ -757,10 +768,10 @@ function renderDashboard() {
         '</button>' +
       '</div>').join("");
   } else {
-    failEl.innerHTML = '<p class="muted" style="padding: var(--space-3);">No failures. ✓</p>';
+    failEl.innerHTML = '<p class="empty">No failures. ✓</p>';
   }
 
-  const dueNow = state.seeders.filter(isDueClient);
+  const dueNow = dueNowClient();
   const dueEl = $("#dueList");
   if (dueNow.length) {
     dueEl.innerHTML = dueNow.slice(0, 60).map((s) =>
@@ -773,7 +784,7 @@ function renderDashboard() {
         '</button>' +
       '</div>').join("");
   } else {
-    dueEl.innerHTML = '<p class="muted" style="padding: var(--space-3);">Nothing due right now.</p>';
+    dueEl.innerHTML = '<p class="empty">Nothing due right now.</p>';
   }
 
   renderBatchProgress();
@@ -1156,7 +1167,7 @@ async function renderSettings() {
         '<span class="hint">Which platform Skyhook should probe for models and load models from.</span>' +
       '</div>' +
       '<h2 class="h-section">Remote control</h2>' +
-      '<p><button class="btn ' + ((s.node && s.node.allowRemote) ? "btn-danger" : "btn-primary") + '" id="toggleRemoteBtn" type="button">' +
+      '<p><button class="btn ' + ((s.node && s.node.allowRemote) ? "btn-danger" : "btn-primary") + '" id="toggleRemoteBtn" type="button" data-remote-on="' + ((s.node && s.node.allowRemote) ? "1" : "0") + '">' +
         ((s.node && s.node.allowRemote) ? "Turn off remote control" : "Turn on remote control (worker)") +
       '</button></p>' +
       apiEndpoint +
@@ -1166,12 +1177,10 @@ async function renderSettings() {
         '<span class="toggle-track"></span>' +
         '<span class="muted">Refresh the dashboard: 10 s while a run is active, 30 s when idle</span>' +
       '</label>';
-    // Wire remote-toggle button (once per render — delegation here is fine since
-    // the button is inside the body and we rebind each time).
-    body.addEventListener("click", (e) => {
-      const t = e.target.closest("#toggleRemoteBtn");
-      if (t) toggleRemote(!!(s.node && s.node.allowRemote));
-    });
+    // The remote toggle is delegated in `bind()`, not bound here: `#settingsBody` is a static node
+    // whose children are repainted on every visit and after every toggle, so a listener added in
+    // this function accumulated one copy per visit — several POSTs from one click, each with the
+    // state its own render saw (#40). The button carries the state it was drawn with.
     const apiInput = $("#apiBase");
     if (apiInput) apiInput.addEventListener("change", () => {
       state.apiBase = apiInput.value.trim();
@@ -2167,7 +2176,7 @@ function renderStatus() {
   }
   const badge = $("#seederCountBadge");
   if (badge) badge.textContent = String(state.seeders.length);
-  const due = state.seeders.filter(isDueClient).length;
+  const due = dueNowClient().length;
   const dueEl = $("#statusDue");
   if (dueEl) {
     dueEl.textContent = due + " due";
@@ -2215,6 +2224,15 @@ function bind() {
   if (chipsEl) chipsEl.addEventListener("click", (e) => {
     const chip = e.target.closest("[data-clearfilter]");
     if (chip) clearFilter(chip.dataset.clearfilter);
+  });
+
+  // Bound once, for the same reason the navigator is: `renderSettings` repaints `#settingsBody` on
+  // every visit and after every toggle, so a listener inside it survived as one copy per render
+  // (#40). The button carries the state it was drawn with, so the handler needs no closure.
+  const settingsEl = $("#settingsBody");
+  if (settingsEl) settingsEl.addEventListener("click", (e) => {
+    const btn = e.target.closest("#toggleRemoteBtn");
+    if (btn) toggleRemote(btn.dataset.remoteOn === "1");
   });
 
   $$("#seederTable th[data-sort]").forEach((th) =>
