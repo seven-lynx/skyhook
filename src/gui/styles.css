@@ -601,6 +601,9 @@ body.resizing { user-select: none; }
 .dock-tabs .log-tab.active { border-bottom-color: var(--brand); }
 .dock-tabs .log-tab.live { border-bottom-color: var(--live); color: var(--text); }
 .dock-tabs .log-tab .time { color: var(--live); }
+/* The head's phrase is the same fact as the tab's underline, so it carries the same colour — an
+ * unstyled `data-live` would be a hook nothing honours. */
+#dockNote[data-live] { color: var(--live); }
 
 /* ── status bar ─────────────────────────────────────────────────────────── */
 
