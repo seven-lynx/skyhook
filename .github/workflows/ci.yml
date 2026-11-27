@@ -10,6 +10,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only by default; the release job asks for the one write it needs (#37).
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -34,6 +38,9 @@ jobs:
   desktop:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
+    # `gh release create` / `upload` below write the Release; nothing else needs more than read.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

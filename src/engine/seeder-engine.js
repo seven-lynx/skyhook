@@ -752,7 +752,8 @@ function slugifySource(s) {
     .replace(/^https?:\/\//, "")
     .replace(/^www\./, "")
     .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
   return t.slice(0, 60) || null;
 }
 
@@ -762,13 +763,14 @@ function escapeRegex(s) {
 
 function decodeHtmlMeta(s) {
   return String(s ?? "")
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&nbsp;/g, " ")
-    .replace(/&#\d+;|&#x[0-9a-f]+;/gi, " ");
+    .replace(/&#\d+;|&#x[0-9a-f]+;/gi, " ")
+    // `&amp;` last: unescaping the escape character first decodes `&amp;lt;` twice (#37).
+    .replace(/&amp;/g, "&");
 }
 
 /** Categories + subcategories for the "new seeder" form (single source of truth). */

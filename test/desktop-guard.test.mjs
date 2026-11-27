@@ -252,6 +252,26 @@ function tagTriggered(yaml) {
 }
 
 /**
+ * Whether the workflow's token permissions are scoped: read-only at the root, and the one
+ * write inside the job that creates and fills the Release.
+ *
+ * `actions/missing-workflow-permissions` (#37) asks for an explicit block; the half that
+ * matters is the pair, because a root `contents: read` alone would break the tag-time
+ * `gh release create` and no pull-request run would ever say so. Read by indentation —
+ * two spaces for a workflow key, four for a job key — so the header and the job body can be
+ * told apart without a YAML parser this repo does not have.
+ */
+function permissionsScoped(ciYaml) {
+  const text = String(ciYaml);
+  const header = text.split(/^jobs:\s*$/m)[0] ?? "";
+  const desktopAt = text.search(/^\s{2}desktop:\s*$/m);
+  const desktop = desktopAt >= 0 ? text.slice(desktopAt) : "";
+  const workflowReadOnly = /^permissions:\s*\n\s{2}contents:\s*read\s*$/m.test(header);
+  const releaseWrites = /^\s{4}permissions:\s*\n\s{6}contents:\s*write\s*$/m.test(desktop);
+  return workflowReadOnly && releaseWrites;
+}
+
+/**
  * The halves of "a fresh checkout produces an installer", read from the five files that
  * carry them: the pin, the bundle config, the npm script that wraps the build, the
  * wrapper itself, and the workflow that builds it on CI.
@@ -286,6 +306,7 @@ function distWiring({ pin, tauriConf, packageJson, distScript, stageScript, ciYa
       ciYaml.includes("windows-latest")
       && /if:\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/.test(ciYaml),
     tagTrigger: tagTriggered(ciYaml),
+    permissionsScoped: permissionsScoped(ciYaml),
   };
 }
 
@@ -598,8 +619,9 @@ test("guard: a fresh checkout carries every piece the installer build needs", ()
       plainPaths: true,
       tagOnlyJob: true,
       tagTrigger: true,
+      permissionsScoped: true,
     },
-    "the bundle carries its runtime and the app that runtime runs, and the CI job is a tag job a tag push starts",
+    "the bundle carries its runtime and the app that runtime runs, the CI job is a tag job a tag push starts, and its permissions are scoped",
   );
 });
 
@@ -679,6 +701,20 @@ test("guard: the dist rule refuses a build that would ship a runtime it cannot r
   assert.notEqual(noTrigger, base.ciYaml, "ci.yml still triggers on a version tag");
   assert.equal(wiring({ ciYaml: noTrigger }).tagTrigger, false);
   assert.equal(wiring({ ciYaml: noTrigger }).tagOnlyJob, true, "the guard alone would still pass");
+
+  // 10. The root token is left implicit, so every job inherits whatever the repository default is.
+  const noRootPermissions = base.ciYaml.replace(/^permissions:\r?\n  contents: read\r?\n/m, "");
+  assert.notEqual(noRootPermissions, base.ciYaml, "ci.yml still scopes the workflow token");
+  assert.equal(wiring({ ciYaml: noRootPermissions }).permissionsScoped, false);
+
+  // 11. The release job inherits the read-only root, so `gh release create` fails at tag time —
+  // a run no pull request ever performs.
+  const noReleaseWrite = base.ciYaml.replace(
+    /^(    permissions:\r?\n      contents: )write$/m,
+    "$1read",
+  );
+  assert.notEqual(noReleaseWrite, base.ciYaml, "the desktop job still asks for the Release write");
+  assert.equal(wiring({ ciYaml: noReleaseWrite }).permissionsScoped, false);
 });
 
 /**

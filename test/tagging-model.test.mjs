@@ -42,7 +42,7 @@ test("a listed but unloaded model is loaded before the pass", async () => {
     assert.equal(result.ok, true);
     assert.equal(result.loaded, true);
     assert.equal(loads.length, 1, "exactly one load, not one per batch");
-    assert.match(loads[0], new RegExp(LISTED.replace(/[.]/g, "\\.")));
+    assert.ok(loads[0].includes(`"${LISTED}"`), "the load request names the model it resolved");
   } finally { globalThis.fetch = original; }
 });
 
@@ -74,7 +74,7 @@ test("an unlisted model is refused with the ids the provider has", async () => {
     assert.equal(result.ok, false);
     assert.deepEqual(result.listed, [LISTED]);
     assert.match(result.error, /llama-that-is-not-there/);
-    assert.match(result.error, new RegExp(LISTED.replace(/[.]/g, "\\.")), "the message names what it has");
+    assert.ok(result.error.includes(LISTED), "the message names what it has");
   } finally { globalThis.fetch = original; }
 });
 

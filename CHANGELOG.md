@@ -27,6 +27,12 @@ once the desktop track ships — a signed installer.
 
 ### Fixed
 
+- Feed and page text is hardened where CodeQL reported it (#37): a feed title or
+  description is stripped until no tag remains, an HTML entity decodes once
+  (`&amp;lt;` stays the text `&lt;` instead of becoming `<`), a peer URL loses
+  its trailing slashes without a backtracking regex, and the `tagging` job's
+  console line takes its task name as an argument rather than as a format
+  string.
 - A pushed `v*` tag now starts the CI workflow that builds the desktop installer.
   `ci.yml`'s `on.push` listed branches only, so the tag-only `desktop` job — guarded
   to `refs/tags/v` — could never fire and a release attached no artifacts (#35).

@@ -909,6 +909,24 @@ function _normUrl(raw) {
 }
 
 /**
+ * Strip HTML tags from a feed's title or description.
+ *
+ * One pass is not a strip: `<scr<script>ipt>` loses only the inner tag and leaves `<script>`
+ * behind, which is `js/incomplete-multi-character-sanitization` (#37). Repeating until the text
+ * stops changing removes every nesting the input can build, and these fields are short — a
+ * description is sliced to 500 characters.
+ */
+function stripTags(value) {
+  let text = String(value ?? "");
+  let previous;
+  do {
+    previous = text;
+    text = text.replace(/<[^>]*>/g, "");
+  } while (text !== previous);
+  return text;
+}
+
+/**
  * Parse RSS/Atom feed text into { url, feedTitle, feedDesc, feedDate } entries.
  * Returns empty array if text is neither RSS nor Atom.
  */
@@ -937,13 +955,13 @@ function _parseFeedXml(text, feedUrl, articlePathRegex, skipPaths, siteSuffixReg
     const atomTitle = block.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     const cdataTitle = block.match(/<title[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/title>/i);
     let feedTitle = cdataTitle?.[1]?.trim() ?? atomTitle?.[1]?.trim() ?? null;
-    if (feedTitle) feedTitle = feedTitle.replace(/<[^>]+>/g, "").replace(siteSuffixRegex, "").trim();
+    if (feedTitle) feedTitle = stripTags(feedTitle).replace(siteSuffixRegex, "").trim();
 
     const atomDesc = block.match(/<description[^>]*>([\s\S]*?)<\/description>/i);
     const cdataDesc = block.match(/<description[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/description>/i);
     const rawDesc = cdataDesc?.[1] ?? atomDesc?.[1] ?? null;
     let feedDesc = null;
-    if (rawDesc) feedDesc = rawDesc.replace(/<[^>]+>/g, "").trim().slice(0, 500);
+    if (rawDesc) feedDesc = stripTags(rawDesc).trim().slice(0, 500);
 
     const atomDate = block.match(/<published[^>]*>([^<]+)<\/published>/i) ??
       block.match(/<updated[^>]*>([^<]+)<\/updated>/i);
@@ -1066,7 +1084,7 @@ async function _discoverWpApi({ siteDomain, articlePathRegex, skipPaths, UA }) {
           feedDesc: (() => {
             const excerpt = typeof post.excerpt === "object" ? post.excerpt?.rendered : null;
             if (!excerpt) return null;
-            return excerpt.replace(/<[^>]+>/g, "").trim().slice(0, 500);
+            return stripTags(excerpt).trim().slice(0, 500);
           })(),
           feedDate: post.date ?? null,
         });
@@ -1143,9 +1161,12 @@ async function _discoverArchivePages({ siteDomain, articlePathRegex, skipPaths, 
         let am;
         while ((am = anchorRe.exec(html)) !== null) {
           const raw = am[1];
-          if (!raw || raw === "/" || raw.startsWith("#") || raw.startsWith("javascript:")) continue;
+          if (!raw || raw === "/") continue;
           try {
             const u = new URL(raw, `https://${siteDomain}`);
+            // A scheme allow-list, not a `javascript:` prefix test: `new URL` resolves the scheme
+            // for us, and anything that is not http(s) has no business here (#37).
+            if (u.protocol !== "https:" && u.protocol !== "http:") continue;
             u.hash = "";
             const link = u.toString();
             if (seenUrls.has(link)) continue;
@@ -2135,7 +2156,7 @@ export async function seedRssWithFallbacks(config) {
         const atomTitle = block.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
         const cdataTitle = block.match(/<title[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/title>/i);
         feedTitle = cdataTitle?.[1]?.trim() ?? atomTitle?.[1]?.trim() ?? null;
-        if (feedTitle) feedTitle = feedTitle.replace(/<[^>]+>/g, "").replace(siteSuffixRegex, "").trim();
+        if (feedTitle) feedTitle = stripTags(feedTitle).replace(siteSuffixRegex, "").trim();
 
         // Extract description from feed
         let feedDesc = null;
@@ -2143,7 +2164,7 @@ export async function seedRssWithFallbacks(config) {
         const cdataDesc = block.match(/<description[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/description>/i);
         const rawDesc = cdataDesc?.[1] ?? atomDesc?.[1] ?? null;
         if (rawDesc) {
-          feedDesc = rawDesc.replace(/<[^>]+>/g, "").trim().slice(0, 500);
+          feedDesc = stripTags(rawDesc).trim().slice(0, 500);
         }
 
         // Extract published date from feed
