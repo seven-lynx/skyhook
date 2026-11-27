@@ -62,7 +62,10 @@ node bin/skyhook.js init --provider sqlite
 
 > **Not on npm.** Skyhook is distributed as a GitHub dependency — the `skyhook`
 > name on npm belongs to an unrelated project. Install via clone, or add
-> `github:seven-lynx/skyhook#v0.4.3` as a dependency.
+> `github:seven-lynx/skyhook#v0.4.3` as a dependency. **On npm 12** add
+> `--allow-git=all` to that install and then run
+> `npm install-scripts approve better-sqlite3`, because npm 12 blocks git fetches
+> and unapproved native builds by default; npm 11 and earlier need neither.
 
 ## Requirements
 

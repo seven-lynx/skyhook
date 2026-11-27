@@ -189,9 +189,14 @@ Then prove the tag from outside the working copy, because the consumer installs 
 tree and not this checkout:
 
 ```bash
-npm i github:seven-lynx/skyhook#v0.4.3   # in a scratch directory
-npm ls skyhook --depth=0                 # prints the resolved version
+npm i github:seven-lynx/skyhook#v0.4.3 --allow-git=all   # in a scratch directory
+npm install-scripts approve better-sqlite3               # npm 12 blocks native builds otherwise
+npm ls skyhook --depth=0                                 # prints the resolved version
 ```
+
+npm 12 refuses git dependencies and unapproved install scripts by default, so the first line fails
+with `EALLOWGIT` without the flag, and `better-sqlite3` — pinned to a prebuilt-aware `12.x` — stays
+unbuilt without the second. On npm 11 or earlier neither step is needed.
 
 A change to the upload or tagging path is documented in [pipeline.md](pipeline.md) and
 [tagging.md](tagging.md) before it is tagged. The README Status paragraph describes the release
