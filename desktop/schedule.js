@@ -13,10 +13,12 @@
  * wakes up. One loopback round trip a minute answers all three with no bookkeeping
  * kept on this side.
  *
- * The gate on `/api/running` is not politeness. `runPool()` records `last_run_at`
- * only when a seeder *finishes* (`src/engine/seeder-engine.js:655`), so a seeder
- * that is still running stays in `/api/due`; posting it again every minute would
- * start a second child for the same source.
+ * The gate on `/api/running` used to live here: `runPool()` records `last_run_at`
+ * only when a seeder *finishes*, so a seeder still running stayed in `/api/due`, and
+ * posting it again every minute would start a second child. That rule belongs to the
+ * selector, not to each client (#31): `/api/due` now excludes a run in flight and
+ * `/api/run` answers `skippedRunning`, so the tick makes one round trip and no client
+ * can fork a duplicate.
  */
 import { request as httpRequest } from "http";
 
@@ -99,18 +101,17 @@ export function startSchedule({
     if (busy) return { skipped: "busy" };
     busy = true;
     try {
-      const running = await request("GET", "/api/running");
-      const active = (running?.running ?? []).map((row) => row.source);
-      if (active.length) return { skipped: "running", active };
-
       const due = await request("GET", "/api/due");
       const sources = (Array.isArray(due) ? due : []).map((row) => row.source).filter(Boolean);
       if (!sources.length) return { skipped: "idle" };
       // A shutdown between the two requests must not start a run in a closing server.
       if (stopped) return { skipped: "stopped" };
 
-      const started = await request("POST", "/api/run", { sources });
-      const names = Array.isArray(started?.started) ? started.started : sources;
+      const answer = await request("POST", "/api/run", { sources });
+      const skipped = Array.isArray(answer?.skippedRunning) ? answer.skippedRunning : [];
+      if (skipped.length) log(`schedule: already running ${skipped.join(", ")}`);
+      const names = Array.isArray(answer?.started) ? answer.started : sources;
+      if (!names.length) return { skipped: "running", active: skipped };
       log(`schedule: started ${names.join(", ")}`);
       return { started: names };
     } catch (err) {
