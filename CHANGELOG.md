@@ -12,8 +12,6 @@ once the desktop track ships — a signed installer.
 
 ### Added
 
-- `.env.example` — the tracked list of every environment key `.env` may set,
-  with no values in it, and a test that fails if one ever appears.
 - A desktop application (Tauri + a bundled Node sidecar) on the desktop track,
   not yet released: it ships in `v0.5.0`.
 - In-place updates for the desktop app: it checks `latest.json` on the Release once
@@ -22,8 +20,26 @@ once the desktop track ships — a signed installer.
   Building the installer now needs `TAURI_SIGNING_PRIVATE_KEY` and
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; `npm run desktop:dist` also writes
   `latest.json` beside the artifacts.
+
+## [0.4.3]
+
+### Added
+
+- The web GUI is an operator workbench: a section rail with a per-section
+  navigator, a draggable pane layout (splitters, collapse to a head strip, `F6`
+  cycles regions), a selection-driven inspector that charts the source's recent
+  runs and offers the common actions, a log dock that follows the live run with
+  an elapsed timer, and a status bar. Above 720 px a `#/log/:source` link is the
+  dock's deep link; between 721 and 1180 px the inspector becomes a sheet.
+- `Ctrl/Cmd+K` opens a command palette over views, actions and seeders, with the
+  same confirm-and-run path as the buttons.
+- `.env.example` — the tracked list of every environment key `.env` may set,
+  with no values in it, and a test that fails if one ever appears.
 - `tag --reask-no-tags` — put the rows the model answered with no tag back to
   the model, once, after the prompt or vocabulary changed.
+- Focus rings, named landmarks and a contrast pass bring the console to WCAG AA
+  (26 measured pairs), and icons carry one base size so an unsized `<svg>` can no
+  longer take over the row it sits in.
 
 ### Fixed
 
@@ -44,6 +60,7 @@ once the desktop track ships — a signed installer.
   quantisation suffix (`…@q4_k_m`) resolves on its base id, and an id the
   provider does not have is refused with the ids it does have, rather than
   failing mid-run.
+- A dashboard row's result text renders a double-encoded minus as a minus.
 
 ### Changed
 

@@ -29,8 +29,9 @@ discover ──▶ enrich ──▶ stage ──▶ curate ──▶ tag ──�
   quality, attributes).
 - **Push** — write results into your database through a pluggable adapter:
   Supabase, Postgres, SQLite, or offline JSONL staging.
-- **Manage** — a CLI, terminal UI, and web GUI for listing seeders, scheduling
-  them, and watching runs live.
+- **Manage** — a CLI, terminal UI, and a web GUI workbench (section rail and
+  navigator, draggable panes, an inspector, a live log dock, `Ctrl/Cmd+K`) for
+  listing seeders, scheduling them, and watching runs live.
 - **Analyse** — totals and percentages by seeder, category, subcategory, and
   language.
 - **Multi-node** — run seeders on a Pi and a PC, toggle the Pi into a worker,
@@ -61,7 +62,7 @@ node bin/skyhook.js init --provider sqlite
 
 > **Not on npm.** Skyhook is distributed as a GitHub dependency — the `skyhook`
 > name on npm belongs to an unrelated project. Install via clone, or add
-> `github:seven-lynx/skyhook#v0.4.2` as a dependency.
+> `github:seven-lynx/skyhook#v0.4.3` as a dependency.
 
 ## Requirements
 
@@ -185,14 +186,18 @@ test/                   # smoke tests (node --test)
 
 ## Status
 
-**v0.4.2** — the upload path is lossless and idempotent: every emitted value is
-mapped through `tagging.enums` (booleans included), all three upload loops page by
-`rowid` keyset instead of `LIMIT/OFFSET` (an offset over a predicate the loop itself
-clears used to upload about half the backlog), `url_tags.source` is one configured
-value, the staged-row existence check is batched, and `tag --retry-failed` /
-`tag --requeue-untagged` plus two GUI buttons make stranded rows reachable without
-deleting resume markers. One canonical pass now fills tags, attributes and quality
-from a single model response, and the task prompts quote the same vocabulary.
+**v0.4.3** — the operator console is a workbench: a section rail with a
+per-section navigator, draggable panes (splitters, collapse to a head strip, `F6`
+cycles regions), a selection-driven inspector charting the source's recent runs, a
+log dock that follows the live run with an elapsed timer, a status bar, and
+`Ctrl/Cmd+K` command palette — at WCAG AA contrast, with the inspector a sheet on a
+tablet. `tag --requeue-untagged` converges instead of re-picking the same URLs
+every pass, `tag` resolves the configured model against what the provider lists
+before the first batch, and `tag --reask-no-tags` is the way back for rows the
+model answered with no tag. Feed and page text is hardened where CodeQL reported
+it, a pushed `v*` tag now starts the workflow that builds the desktop installer,
+and the repo ships `.env.example`. The bundled runtime and CI move to Node 24 LTS
+(CI also tests 22; `engines.node` is `>= 22`).
 
 **v0.3.7** — the pipeline reports distinct tagged URLs (not the raw tag-row
 count); the dashboard shows the LLM worker once with a task label
