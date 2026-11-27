@@ -36,8 +36,10 @@ const GAP_LABELS = {
   quality: "Missing quality", attributes: "Missing attributes",
 };
 
+const EMPTY_FILTERS = { tier: "", sched: "", status: "", category: null, subcategory: null };
+
 const state = {
-  seeders: [], running: [], batch: null, pipe: null,
+  seeders: [], running: [], batch: null, pipe: null, cache: null,
   sortKey: "source", sortDir: 1, selected: new Set(),
   apiBase: localStorage.getItem("skyhook.apiBase") || "",
   live: null, _liveWired: false, logSources: [], followLog: true, userTab: null,
@@ -45,6 +47,10 @@ const state = {
   infoSource: null, taggingGaps: null, tagTasks: [],
   // W3: what the inspector shows. Client state, not a route — a reload forgets the pick.
   focus: null, inspRuns: null, inspStaged: null, inspRunAt: null, inspSeq: 0,
+  // W4: the tier/schedule/status selects live in the filter sheet now, so their values are state
+  // rather than DOM, and the navigator tree writes `category`/`subcategory`. Not persisted on
+  // purpose: a reload that forgets a filter it can no longer show is the safer default.
+  filters: { ...EMPTY_FILTERS },
   route: { name: "dashboard", params: {} },
   nodeId: "local",
 };
@@ -275,6 +281,7 @@ function handleRouteChange() {
   state.route = r;
   $$(".surface").forEach((p) => p.classList.toggle("active", p.dataset.route === r.name));
   $$(".rail-item, .navlist-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === r.name));
+  renderNav();
   renderInspector();
   // The pane head names the section; a log route names its source instead.
   const workTitle = $("#workTitle");
@@ -302,28 +309,40 @@ async function loadSeeders()    { state.seeders = await get("/api/seeders?limit=
 async function loadRunning()    { const r = await get("/api/running").catch(() => ({ running: [] })); state.running = r.running || []; state.batch = r.batch || null; }
 async function loadPipeline()   { state.pipe = await get("/api/pipeline").catch(() => null); }
 
-function filtered() {
-  const f     = $("#filter").value.trim().toLowerCase();
-  const tier  = $("#tierFilter").value;
-  const sched = $("#schedFilter").value;
-  const status = $("#statusFilter").value;
-  let rows = state.seeders;
+/* One predicate for the table and the navigator. `over` lets the tree ask "how many rows would
+ * this node leave?" without touching the live filter: an omitted key falls back to state.filters,
+ * an explicit value (including "" / null) replaces it. */
+function matchesFilters(s, over = {}) {
+  const input = $("#filter");
+  const f = (over.text !== undefined ? over.text : (input ? input.value : "")).trim().toLowerCase();
+  const tier = over.tier !== undefined ? over.tier : state.filters.tier;
+  const sched = over.sched !== undefined ? over.sched : state.filters.sched;
+  const status = over.status !== undefined ? over.status : state.filters.status;
+  const category = over.category !== undefined ? over.category : state.filters.category;
+  const subcategory = over.subcategory !== undefined ? over.subcategory : state.filters.subcategory;
   if (f) {
-    rows = rows.filter((s) =>
+    const hit =
       (s.source || "").toLowerCase().includes(f) ||
       (s.script || "").toLowerCase().includes(f) ||
       (s.displayName || "").toLowerCase().includes(f) ||
       (s.categoryLabel || "").toLowerCase().includes(f) ||
-      (s.subcategoryLabel || "").toLowerCase().includes(f));
+      (s.subcategoryLabel || "").toLowerCase().includes(f);
+    if (!hit) return false;
   }
-  if (tier === "news")      rows = rows.filter((s) => s.isNews);
-  if (tier === "evergreen") rows = rows.filter((s) => !s.isNews);
-  if (sched === "1")        rows = rows.filter((s) => s.scheduled);
-  if (sched === "0")        rows = rows.filter((s) => !s.scheduled);
-  if (status === "due")     rows = rows.filter(isDueClient);
-  if (status === "errors")  rows = rows.filter(isErrorStatus);
-  return rows;
+  if (tier === "news" && !s.isNews) return false;
+  if (tier === "evergreen" && s.isNews) return false;
+  if (sched === "1" && !s.scheduled) return false;
+  if (sched === "0" && s.scheduled) return false;
+  if (status === "due" && !isDueClient(s)) return false;
+  if (status === "errors" && !isErrorStatus(s)) return false;
+  // `null` is "no filter", "" is a real bucket (a seeder filed under no category), so the two
+  // cannot share a falsy test.
+  if (category !== null && (s.category || "") !== category) return false;
+  if (subcategory !== null && (s.subcategory || "") !== subcategory) return false;
+  return true;
 }
+function filtered() { return state.seeders.filter((s) => matchesFilters(s)); }
+const countWith = (over) => state.seeders.filter((s) => matchesFilters(s, over)).length;
 function sorted(rows) {
   const k = state.sortKey;
   return [...rows].sort((a, b) => {
@@ -409,6 +428,7 @@ function renderSeeders() {
   }
 
   updateBulkBar();
+  renderNav();
 }
 function updateBulkBar() {
   const checkAll = $("#checkAll");
@@ -461,6 +481,212 @@ function runRow(label, r, isHeartbeat) {
   return html + '</div>';
 }
 
+/* ── navigator (W4) ──────────────────────────────────────────────────────
+ * The pane holds the current section's own outline, not a second copy of the section list: the
+ * rail switches sections, this says what is inside the one you are on. Every node is a <button>,
+ * an <a>, or a non-clickable row — never a clickable <div>.
+ *
+ * What is expanded is *derived*, not stored: no pick renders the pillars, a picked pillar renders
+ * its subcategories, a picked subcategory renders its seeders. The 10/30 s poll repaints this pane,
+ * so a stored open/closed flag would collapse under the user's hands mid-click. */
+const NAV_TITLES = { dashboard: "Due now", seeders: "Categories", pipeline: "Jobs", curation: "Sources" };
+
+const humanLabel = (n) =>
+  String(n || "uncategorised").replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const dotFor = (s) => "dot" + (s.lastStatus === "ok" ? " ok" : s.lastStatus ? " err" : "");
+
+function navRow({ label, count, attrs = "", title = "", pressed = null, indent = false, leaf = false, dot = "", current = false }) {
+  const cls = "nav-node" + (indent ? " sub" : "") + (leaf ? " leaf" : "") + (pressed ? " on" : "");
+  return '<button type="button" class="' + cls + '" ' + attrs +
+    (title ? ' title="' + esc(title) + '"' : "") +
+    // A toggle says its state even when it is off: a bare button that sometimes has aria-pressed
+    // reads as "not a toggle" half the time.
+    (pressed === null ? "" : ' aria-pressed="' + (pressed ? "true" : "false") + '"') +
+    (current ? ' aria-current="true"' : "") + ">" +
+    (dot ? '<span class="' + dot + '" aria-hidden="true"></span>' : "") +
+    '<span class="nav-label">' + esc(label) + "</span>" +
+    (count == null ? "" : '<span class="nav-count">' + count + "</span>") +
+    "</button>";
+}
+
+const byLabel = (a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
+
+/* The tree is built from the rows the table already holds, so its counts and its leaves can never
+ * disagree with the table; `state.categories` only lends nicer labels where a seeder has none. */
+function seederTree() {
+  const cats = new Map();
+  for (const s of state.seeders) {
+    const cat = s.category || "";
+    if (!cats.has(cat)) cats.set(cat, { name: cat, label: s.categoryLabel || humanLabel(cat), subs: new Map() });
+    const node = cats.get(cat);
+    const sub = s.subcategory || "";
+    if (!node.subs.has(sub)) node.subs.set(sub, { name: sub, label: s.subcategoryLabel || humanLabel(sub), rows: [] });
+    node.subs.get(sub).rows.push(s);
+  }
+  return [...cats.values()].sort(byLabel);
+}
+
+function renderNav() {
+  const tree = $("#navTree");
+  const list = $("#navList");
+  if (!tree || !list) return;
+  const route = state.route.name;
+  const title = $("#navTitle");
+  if (title) title.textContent = NAV_TITLES[route] || "Sections";
+  renderFilterChips();
+  const html =
+    route === "seeders" ? navSeeders() :
+    route === "curation" ? navCuration() :
+    route === "pipeline" ? navPipeline() :
+    route === "dashboard" ? navDue() : "";
+  tree.innerHTML = html;
+  // A section with an outline hides the flat list — the rail is the section switcher — and a
+  // section without one keeps it, so the pane is never empty.
+  tree.hidden = !html;
+  list.hidden = Boolean(html);
+}
+
+function navSeeders() {
+  const f = state.filters;
+  const quick = [
+    { key: "all", label: "All seeders", over: { tier: "", status: "" }, on: !f.tier && !f.status },
+    { key: "due", label: "Due now", over: { status: "due" }, on: f.status === "due" },
+    { key: "errors", label: "Errors", over: { status: "errors" }, on: f.status === "errors" },
+    { key: "news", label: "News tier", over: { tier: "news" }, on: f.tier === "news" },
+    { key: "evergreen", label: "Evergreen tier", over: { tier: "evergreen" }, on: f.tier === "evergreen" },
+  ];
+  let html = '<div class="nav-group">Filter</div>' + quick.map((q) =>
+    navRow({ label: q.label, count: countWith(q.over), attrs: 'data-nav-quick="' + q.key + '"', pressed: q.on })).join("");
+
+  html += '<div class="nav-group">Categories</div>';
+  const pillars = seederTree();
+  if (!pillars.length) return html + '<p class="nav-empty">No seeders yet.</p>';
+  for (const p of pillars) {
+    const n = countWith({ category: p.name, subcategory: null });
+    if (!n && p.name !== f.category) continue;          // a pillar with nothing in it is noise
+    html += navRow({
+      label: p.label, count: n, title: p.label,
+      attrs: 'data-nav-cat="' + esc(p.name) + '"', pressed: f.category === p.name,
+    });
+    if (p.name !== f.category) continue;
+    for (const sub of [...p.subs.values()].sort(byLabel)) {
+      const sn = countWith({ category: p.name, subcategory: sub.name });
+      if (!sn) continue;
+      html += navRow({
+        label: sub.label, count: sn, indent: true,
+        attrs: 'data-nav-sub="' + esc(sub.name) + '"', pressed: f.subcategory === sub.name,
+      });
+      if (f.subcategory !== sub.name) continue;
+      // Leaves are the rows the table is actually showing for this node — the tier/status/text
+      // filters still apply, so a leaf never names a row the table has hidden.
+      const leaves = sub.rows
+        .filter((s) => matchesFilters(s, { category: p.name, subcategory: sub.name }))
+        .sort((a, b) => a.source.localeCompare(b.source));
+      for (const s of leaves) {
+        html += navRow({
+          label: s.source, leaf: true, dot: dotFor(s), current: s.source === state.focus,
+          attrs: 'data-nav-pick="' + esc(s.source) + '"',
+        });
+      }
+    }
+  }
+  return html;
+}
+
+function navCuration() {
+  const staged = state.cache && Array.isArray(state.cache.staged) ? state.cache.staged : [];
+  if (!staged.length) return "";
+  const rows = staged.reduce((n, f) => n + (Number(f.count) || 0), 0);
+  return '<div class="nav-group">Staged · ' + rows.toLocaleString() + " rows</div>" +
+    staged.map((f) => {
+      const source = f.originalSource || f.source;
+      return navRow({
+        label: source, count: Number(f.count) || 0,
+        attrs: 'data-nav-curate="' + esc(source) + '"', title: "Jump to " + source,
+      });
+    }).join("");
+}
+
+function navPipeline() {
+  const jobs = state.pipe && Array.isArray(state.pipe.jobs) ? state.pipe.jobs : [];
+  if (!jobs.length) return "";
+  return '<div class="nav-group">Jobs</div>' + jobs.map((j) => navRow({
+    label: j.label || j.key || "job",
+    dot: "dot" + (j.status === "running" ? " live" : j.status === "ok" ? " ok" : j.status ? " err" : ""),
+    attrs: 'data-nav-job="' + esc(j.key || j.label || "") + '"', title: "Jump to this job",
+  })).join("");
+}
+
+function navDue() {
+  const due = state.seeders.filter(isDueClient)
+    .sort((a, b) => String(a.nextRunAt || "").localeCompare(String(b.nextRunAt || "")));
+  if (!due.length) return '<div class="nav-group">Due now</div><p class="nav-empty">Nothing due.</p>';
+  return '<div class="nav-group">Due now · ' + due.length + "</div>" +
+    due.slice(0, 20).map((s) =>
+      '<a class="nav-node" href="#/log/' + encodeURIComponent(s.source) + '" title="Open the log">' +
+        '<span class="nav-label">' + esc(s.source) + "</span>" +
+        '<span class="nav-count">' + esc(fmtIn(s.nextRunAt)) + "</span></a>").join("") +
+    (due.length > 20 ? '<p class="nav-empty">+' + (due.length - 20) + " more</p>" : "");
+}
+
+/* A filter the toolbar no longer shows still has to be visible somewhere, or it is a trap: the
+ * chips are both the record and the way off. */
+const FILTER_KEYS = ["tier", "sched", "status", "category", "subcategory"];
+/* tier/sched/status are "off" at "", while category/subcategory are "off" at null — an empty
+ * string is the bucket a seeder with no category lands in. */
+const isNavKey = (k) => k === "category" || k === "subcategory";
+const filterOn = (k) => (isNavKey(k) ? state.filters[k] !== null : Boolean(state.filters[k]));
+const chipValue = (k, v) => {
+  if (k === "sched") return v === "1" ? "scheduled" : "manual";
+  if (isNavKey(k)) return v === "" ? "uncategorised" : v;
+  return v;
+};
+
+function renderFilterChips() {
+  const el = $("#activeFilters");
+  if (!el) return;
+  const chips = state.route.name === "seeders"
+    ? FILTER_KEYS.filter(filterOn).map((k) =>
+        '<button type="button" class="filter-chip" data-clearfilter="' + k + '" aria-label="Remove the ' + k + ' filter">' +
+          esc(k + ": " + chipValue(k, state.filters[k])) + '<span aria-hidden="true"> ×</span></button>')
+    : [];
+  el.innerHTML = chips.join("");
+  el.hidden = chips.length === 0;
+}
+
+function setQuick(key) {
+  const f = state.filters;
+  if (key === "all") { f.tier = ""; f.status = ""; }
+  else if (key === "due" || key === "errors") f.status = f.status === key ? "" : key;
+  else f.tier = f.tier === key ? "" : key;
+  renderSeeders();
+}
+
+function toggleNav(key, value) {
+  const f = state.filters;
+  if (f[key] === value) f[key] = null;
+  else { f[key] = value; if (key === "category") f.subcategory = null; }
+  renderSeeders();
+}
+
+function clearFilter(key) {
+  state.filters[key] = key === "category" || key === "subcategory" ? null : "";
+  if (key === "category") state.filters.subcategory = null;
+  renderSeeders();
+}
+
+/* A navigator row for a list that is already on screen: bring it into view and let the work
+ * surface say "this one" for a moment. No new route and no new fetch. */
+function scrollToRow(containerId, attr, value) {
+  const root = document.getElementById(containerId);
+  if (!root) return;
+  const row = [...root.querySelectorAll("[" + attr + "]")].find((el) => el.getAttribute(attr) === value);
+  if (!row) return;
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.classList.add("flash");
+  setTimeout(() => row.classList.remove("flash"), 1200);
+}
+
 function renderDashboard() {
   const total = state.seeders.length;
   const scheduled = state.seeders.filter((s) => s.scheduled).length;
@@ -476,10 +702,10 @@ function renderDashboard() {
     if (!card) return;
     e.preventDefault();
     const t = card.dataset.jump;
-    if (t === "scheduled") $("#schedFilter").value = "1";
-    else if (t === "due") $("#statusFilter").value = "due";
-    else if (t === "errors") $("#statusFilter").value = "errors";
-    else { $("#schedFilter").value = ""; $("#statusFilter").value = ""; }
+    if (t === "scheduled") state.filters.sched = "1";
+    else if (t === "due") state.filters.status = "due";
+    else if (t === "errors") state.filters.status = "errors";
+    else { state.filters.sched = ""; state.filters.status = ""; }
     navigate("#/seeders");
   };
 
@@ -537,6 +763,7 @@ function renderDashboard() {
   }
 
   renderBatchProgress();
+  renderNav();
 }
 
 function renderBatchProgress() {
@@ -603,7 +830,7 @@ async function renderPipeline() {
   if (jobsEl) {
     jobsEl.innerHTML = jobs.length
       ? jobs.map((j) =>
-          '<div class="job-row">' +
+          '<div class="job-row" data-job="' + esc(j.key || j.label || "") + '">' +
             '<span class="job-status ' + esc(j.status || "idle") + '"></span>' +
             '<span>' + esc(j.label || j.key) + '</span>' +
           '</div>').join("")
@@ -613,6 +840,7 @@ async function renderPipeline() {
   if (state.taggingGaps) $("#taggingGaps").innerHTML = gapCards(state.taggingGaps);
   renderPipelineStatus(p);
   await renderTaggingTasks();
+  renderNav();
 }
 
 function renderPipelineStatus(p) {
@@ -836,6 +1064,7 @@ async function renderAnalytics() {
 async function renderCuration() {
   try {
     const c = await get("/api/cache");
+    state.cache = c;
     const stageRows = (c.staged || []).reduce((n, f) => n + f.count, 0);
     const body = $("#curationBody");
 
@@ -843,7 +1072,7 @@ async function renderCuration() {
       ? '<div class="curate-section">' +
           '<h2 class="h-section">Staged (' + c.staged.length + ' sources, ' + stageRows.toLocaleString() + ' rows)</h2>' +
           (c.staged || []).map((f) =>
-            '<div class="curate-row">' +
+            '<div class="curate-row" data-curation-source="' + esc(f.originalSource || f.source) + '">' +
               '<div class="info">' +
                 '<div class="name">' + esc(f.originalSource !== f.source ? f.originalSource : f.source) + '</div>' +
                 (f.originalSource !== f.source ? '<div class="meta">file: ' + esc(f.source) + '</div>' : "") +
@@ -872,6 +1101,7 @@ async function renderCuration() {
       : '';
 
     body.innerHTML = stagedSection + discoverySection;
+    renderNav();
   } catch (err) {
     $("#curationBody").innerHTML = '<p class="muted">' + esc(err.message) + '</p>';
   }
@@ -946,6 +1176,7 @@ async function renderSettings() {
       });
     }
     wireLiveToggle();
+    renderNav();
   } catch (err) {
     body.innerHTML = '<p class="muted">' + esc(err.message) + '</p>';
   }
@@ -1739,12 +1970,27 @@ function bind() {
 
   const filterEl = $("#filter");
   if (filterEl) filterEl.addEventListener("input", debounce(renderSeeders, 80));
-  const tierEl = $("#tierFilter");
-  if (tierEl) tierEl.addEventListener("change", renderSeeders);
-  const schedEl = $("#schedFilter");
-  if (schedEl) schedEl.addEventListener("change", renderSeeders);
-  const statusEl = $("#statusFilter");
-  if (statusEl) statusEl.addEventListener("change", renderSeeders);
+
+  // The navigator and the chips are delegated: renderNav/renderSeeders repaint them on every poll,
+  // so a listener bound to a node would be thrown away with the node. A row with no `data-nav-*`
+  // (the due-now links) is an anchor and navigates itself.
+  const navEl = $("#navTree");
+  if (navEl) navEl.addEventListener("click", (e) => {
+    const node = e.target.closest("button");
+    if (!node) return;
+    const d = node.dataset;
+    if (d.navQuick) return setQuick(d.navQuick);
+    if (d.navCat !== undefined) return toggleNav("category", d.navCat);
+    if (d.navSub !== undefined) return toggleNav("subcategory", d.navSub);
+    if (d.navPick) return setFocus(d.navPick);
+    if (d.navCurate) return scrollToRow("curationBody", "data-curation-source", d.navCurate);
+    if (d.navJob) return scrollToRow("pipelineJobs", "data-job", d.navJob);
+  });
+  const chipsEl = $("#activeFilters");
+  if (chipsEl) chipsEl.addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-clearfilter]");
+    if (chip) clearFilter(chip.dataset.clearfilter);
+  });
 
   $$("#seederTable th[data-sort]").forEach((th) =>
     th.addEventListener("click", () => {
@@ -1909,30 +2155,43 @@ function bind() {
   const wt = $("#writeTimerBtn");
   if (wt) wt.addEventListener("click", writeTimer);
 
+  // The sheet is the only place tier/schedule/status are set now, so it must open on what is
+  // already applied — and offer the way off. Applying a blank form used to reset them silently.
+  const modalSelect = (id, current, opts) =>
+    '<select id="' + id + '">' + opts.map(([v, label]) =>
+      '<option value="' + esc(v) + '"' + (v === current ? " selected" : "") + ">" + esc(label) + "</option>").join("") +
+    "</select>";
   const fs = $("#filterSheetBtn");
   if (fs) fs.addEventListener("click", () => {
+    const f = state.filters;
     openModal((modal) => {
       const body = document.createElement("div");
       body.className = "modal-body";
       body.innerHTML =
         '<div class="field"><label for="modalTier">Tier</label>' +
-          '<select id="modalTier"><option value="">All tiers</option><option value="news">News</option><option value="evergreen">Evergreen</option></select>' +
+          modalSelect("modalTier", f.tier, [["", "All tiers"], ["news", "News"], ["evergreen", "Evergreen"]]) +
         '</div>' +
         '<div class="field"><label for="modalSched">Schedule</label>' +
-          '<select id="modalSched"><option value="">Scheduled + manual</option><option value="1">Scheduled only</option><option value="0">Manual only</option></select>' +
+          modalSelect("modalSched", f.sched, [["", "Scheduled + manual"], ["1", "Scheduled only"], ["0", "Manual only"]]) +
         '</div>' +
         '<div class="field"><label for="modalStatus">Status</label>' +
-          '<select id="modalStatus"><option value="">Any status</option><option value="due">Due</option><option value="errors">Errors</option></select>' +
+          modalSelect("modalStatus", f.status, [["", "Any status"], ["due", "Due"], ["errors", "Errors"]]) +
         '</div>';
-      const apply = mkBtn("Apply", "btn-primary");
-      apply.addEventListener("click", () => {
-        $("#tierFilter").value = $("#modalTier").value;
-        $("#schedFilter").value = $("#modalSched").value;
-        $("#statusFilter").value = $("#modalStatus").value;
+      const clear = mkBtn("Clear all", "btn");
+      clear.addEventListener("click", () => {
+        Object.assign(state.filters, EMPTY_FILTERS);
         closeModal();
         renderSeeders();
       });
-      modalShell(modal, { title: "More filters", body, actions: [apply] });
+      const apply = mkBtn("Apply", "btn-primary");
+      apply.addEventListener("click", () => {
+        state.filters.tier = $("#modalTier").value;
+        state.filters.sched = $("#modalSched").value;
+        state.filters.status = $("#modalStatus").value;
+        closeModal();
+        renderSeeders();
+      });
+      modalShell(modal, { title: "More filters", body, actions: [clear, apply] });
     });
   });
 

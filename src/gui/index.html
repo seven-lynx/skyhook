@@ -101,7 +101,7 @@
       </a>
     </nav>
 
-    <!-- ── navigator (a section list until a section has a tree) ────────── -->
+    <!-- ── navigator (the section's own outline; the rail switches sections) ── -->
     <section class="pane navigator" id="nav" aria-label="Navigator" tabindex="-1">
       <div class="pane-head">
         <span class="pane-title" id="navTitle">Sections</span>
@@ -111,7 +111,8 @@
         </button>
       </div>
       <div class="pane-body">
-        <nav class="navlist" aria-label="All sections">
+        <nav class="navtree" id="navTree" aria-label="Section outline" hidden></nav>
+        <nav class="navlist" id="navList" aria-label="All sections">
           <a class="navlist-item" href="#/" data-route="dashboard">Dashboard</a>
           <a class="navlist-item" href="#/seeders" data-route="seeders">Seeders</a>
           <a class="navlist-item" href="#/pipeline" data-route="pipeline">Pipeline</a>
@@ -163,25 +164,11 @@
       <section id="panel-seeders" class="surface" data-route="seeders" aria-label="Seeders">
         <div class="toolbar">
           <input id="filter" class="filter" type="search" placeholder="Filter source / name / category…" autocomplete="off" aria-label="Filter seeders" />
-          <select id="tierFilter" aria-label="Tier filter">
-            <option value="">All tiers</option>
-            <option value="news">News</option>
-            <option value="evergreen">Evergreen</option>
-          </select>
-          <select id="schedFilter" aria-label="Schedule filter">
-            <option value="">Scheduled + manual</option>
-            <option value="1">Scheduled only</option>
-            <option value="0">Manual only</option>
-          </select>
-          <select id="statusFilter" aria-label="Status filter">
-            <option value="">Any status</option>
-            <option value="due">Due</option>
-            <option value="errors">Errors</option>
-          </select>
           <button id="filterSheetBtn" class="btn btn-sm filter-sheet-btn" type="button" aria-label="More filters">
             <svg class="ic" aria-hidden="true"><use href="#ic-filter"/></svg>
             <span>More filters</span>
           </button>
+          <div id="activeFilters" class="filter-chips" role="group" aria-label="Active filters"></div>
           <span class="toolbar-meta" id="countLabel" aria-live="polite"></span>
           <button id="newSeederBtn" class="btn-primary btn-sm" type="button" style="margin-left: auto;">
             <svg class="ic" aria-hidden="true"><use href="#ic-plus"/></svg>
