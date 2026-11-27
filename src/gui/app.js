@@ -135,7 +135,7 @@ const fmtElapsed = (ms) => {
   const m = Math.floor(s / 60);
   return m + "m " + (s % 60) + "s";
 };
-const resultText = (r) => (r ? ("+" + (r.staged ?? 0) + " âˆ’" + (r.dead ?? 0)) : "");
+const resultText = (r) => (r ? ("+" + (r.staged ?? 0) + " −" + (r.dead ?? 0)) : "");
 const fmtEta = (ms) => {
   if (ms == null || !isFinite(ms)) return "—";
   const s = Math.max(0, Math.round(ms / 1000));
@@ -1287,6 +1287,11 @@ const LOG_BODY_HOSTS = ["logBody", "dockBody"];
  * viewport question this file asks is whether the phone shell is what is on screen. */
 const isPhone = () => !window.matchMedia("(min-width: 721px)").matches;
 
+/* The third breakpoint (D19): between 721 and 1180 px the inspector is a sheet over the work surface
+ * instead of a grid column. The same query the stylesheet's media block asks, so the two cannot
+ * disagree about which mode is on screen. */
+const isTablet = () => window.matchMedia("(min-width: 721px) and (max-width: 1180px)").matches;
+
 /* The open state lives on `#workbench[data-dock]` and nowhere else. This writes the attribute and
  * the button that controls it together, because a toggle that disagrees with the grid is worse than
  * a dock that will not open — and `#dock` is opened by code (a deep link, a run starting) as often
@@ -1324,6 +1329,82 @@ function syncLogPolling() {
     clearInterval(logPageState.pollTimer);
     logPageState.pollTimer = null;
   }
+}
+
+/* ── the inspector sheet (D19) ───────────────────────────────────────────── */
+
+/* The open state lives on `#workbench[data-insp-sheet]` and nowhere else, written here so the bar's
+ * button, the scrim and the pane cannot disagree — `setFocus` opens the sheet as often as a click
+ * does. Opening also lifts an `insp` collapse: a pane collapsed on a desktop would otherwise come
+ * back as a 26 px sheet with no room for the seeder it was opened for. */
+function setInspSheet(open) {
+  const wb = $("#workbench");
+  if (!wb) return;
+  const want = !!open && isTablet();
+  wb.dataset.inspSheet = want ? "open" : "closed";
+  const btn = $("#inspSheetBtn");
+  if (btn) btn.setAttribute("aria-expanded", String(want));
+  const scrim = $("#inspScrim");
+  if (scrim) scrim.dataset.open = String(want);
+  // On a tablet the pane's own head button means "is the sheet showing", because the sheet is the
+  // only way the pane is on screen; on a desktop it keeps meaning "is the column expanded".
+  const paneBtn = isTablet() ? $$(".pane-btn").find((b) => b.dataset.pane === "insp") : null;
+  if (paneBtn) {
+    paneBtn.setAttribute("aria-expanded", String(want));
+    const label = (want ? "Collapse " : "Expand ") + PANE_LABEL.insp;
+    paneBtn.title = label;
+    const sr = paneBtn.querySelector(".sr-only");
+    if (sr) sr.textContent = label;
+  }
+  if (!want) return;
+  const collapsed = new Set((wb.dataset.collapsed || "").split(/\s+/).filter(Boolean));
+  if (collapsed.delete("insp")) {
+    if (collapsed.size) wb.dataset.collapsed = [...collapsed].join(" ");
+    else delete wb.dataset.collapsed;
+  }
+}
+
+const isInspSheetOpen = () => {
+  const wb = $("#workbench");
+  return !!wb && wb.dataset.inspSheet === "open";
+};
+
+/* Open with the keyboard already inside the sheet — `#insp` is a `tabindex="-1"` region, so the rim
+ * lights up and Tab goes to its first control — and hand it back to the bar's button on close. */
+function toggleInspSheet() {
+  if (isInspSheetOpen()) { setInspSheet(false); return; }
+  setInspSheet(true);
+  // `offsetParent` is null for a `position: fixed` element, which is exactly what the open sheet is;
+  // a client rect is the question "is anything of it on screen".
+  const insp = $("#insp");
+  if (insp && insp.getClientRects().length) insp.focus();
+}
+
+function wireInspSheet() {
+  const btn = $("#inspSheetBtn");
+  if (btn) btn.addEventListener("click", toggleInspSheet);
+  const scrim = $("#inspScrim");
+  if (scrim) scrim.addEventListener("click", () => { setInspSheet(false); btnBackToBar(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !isInspSheetOpen()) return;
+    // One key, one layer: a modal and the palette own Escape while either is open.
+    if (activeModal) return;
+    const pal = $("#palette");
+    if (pal && pal.dataset.open === "true") return;
+    e.preventDefault();
+    setInspSheet(false);
+    btnBackToBar();
+  });
+  // 1180 is a width, so crossing it either way shuts the sheet: at 1181 the column is back, and at
+  // 720 the phone shell has no inspector at all. The 721 edge is W5's listener (the log moves).
+  window.matchMedia("(min-width: 1181px)").addEventListener?.("change", () => setInspSheet(false));
+}
+
+/* Closing the sheet leaves the focus nowhere, and nowhere means the body: hand it back to the door
+ * that opened it, but only while that door is on screen. */
+function btnBackToBar() {
+  const btn = $("#inspSheetBtn");
+  if (btn && btn.offsetParent !== null) btn.focus();
 }
 
 /* ── pane mechanics ──────────────────────────────────────────────────────── */
@@ -1394,11 +1475,13 @@ function paneSizeFromPointer(name, ev) {
   return rect.bottom - ev.clientY - px("--status-h");
 }
 
-/* F6 walks the regions in visual order and skips whatever a collapse or a breakpoint hides. */
+/* F6 walks the regions in visual order and skips whatever a collapse or a breakpoint hides. A
+ * client rect rather than `offsetParent`, because the tablet's inspector is `position: fixed` and
+ * `offsetParent` is null for every fixed element — the sheet would be invisible to F6. */
 function focusNextRegion(dir) {
   const regions = ["rail", "nav", "work", "insp", "dock"]
     .map((id) => document.getElementById(id))
-    .filter((el) => el && el.offsetParent !== null);
+    .filter((el) => el && el.getClientRects().length > 0);
   if (!regions.length) return;
   const current = regions.find((el) => el.contains(document.activeElement));
   const from = current ? regions.indexOf(current) : (dir > 0 ? -1 : 0);
@@ -1463,6 +1546,11 @@ function wirePanes() {
       const open = btn.getAttribute("aria-expanded") !== "true";
       if (name === "dock") {
         setDockOpen(open);
+      } else if (name === "insp" && isTablet()) {
+        // The inspector is a sheet here, not a column: its head button toggles the sheet, and
+        // `setInspSheet` writes this same button's `aria-expanded` (D19).
+        toggleInspSheet();
+        return;
       } else {
         btn.setAttribute("aria-expanded", String(open));
         const label = (open ? "Collapse " : "Expand ") + (PANE_LABEL[name] || name);
@@ -1545,6 +1633,9 @@ function focusedSeeder() {
 
 function setFocus(source) {
   if (!source) { clearFocus(); return; }
+  // A pick is the sheet's second door (D19), and it has to work on a repeat pick too: the row can
+  // still be the focused one while the sheet is closed.
+  setInspSheet(true);
   if (state.focus === source) return;
   // Re-rendering the table replaces the row the keyboard was on, so the new one takes focus back.
   const hadRow = document.activeElement && document.activeElement.tagName === "TR"
@@ -1563,6 +1654,8 @@ function setFocus(source) {
 }
 
 function clearFocus() {
+  // Nothing picked means nothing to inspect: the sheet goes even when the button opened it.
+  setInspSheet(false);
   if (!state.focus) return;
   state.focus = null;
   state.inspRuns = null;
@@ -2329,6 +2422,7 @@ function bind() {
   wireRowFocus();
   wireInspector();
   wirePalette();
+  wireInspSheet();
 
   // Keyboard shortcuts (skip when typing in a form).
   document.addEventListener("keydown", (e) => {

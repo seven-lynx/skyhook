@@ -8,8 +8,10 @@
  * accent for action and selection — so a red row means something.
  *
  * Mobile-first. Dark only, by design. No emoji icons; the HTML uses inline SVGs.
- * Every colour below was checked for contrast on 2026-11-25 (body 14.22, muted 6.04,
- * subtle 4.62, inverse-on-brand 14.98, field border 3.20) — change a hex, re-check it.
+ * Every text/background pair was measured on 2026-11-27 (W7) against the surface it is actually
+ * painted on: body 14.22, muted 6.04 on a pane head, subtle 4.62 on a pane head and 4.94 on the
+ * well, table header 5.67, inverse-on-brand 14.98, field border 3.20 — AA everywhere. Change a hex
+ * or a surface, re-check it (`probe-w7.mjs` prints the table).
  */
 
 /* ── 1. Tokens ───────────────────────────────────────────────────────────── */
@@ -88,11 +90,14 @@
    * means "running right now" — never decoration, never a hover, never a count. */
   --pane:          var(--bg);
   --pane-head:     var(--bg-elevated);
-  --well:          #07080a;
+  --well:          #07080a;   /* the work surface's graph paper, a step below --pane */
   --seam:          var(--border);
   --seam-strong:   var(--border-strong);
   --seam-light:    rgba(255, 255, 255, .045);
   --backlight:     var(--brand);
+  /* The rim a region wears while it holds the keyboard: the backlight diluted until it reads as a
+   * surface quality instead of a second selection colour. F6's outline stays the brand. */
+  --focus-edge:    rgba(207, 227, 239, .16);
   --live:          #ff7a29;
   --live-bg:       #3a1c0c;
   --live-border:   rgba(255, 122, 41, .35);
@@ -285,7 +290,7 @@ code, kbd {
 .dot.ok   { background: var(--ok); }
 .dot.warn { background: var(--warn); }
 .dot.err  { background: var(--err); }
-.dot.live { animation: pulse 1.6s ease-in-out infinite; }
+.dot.live { background: var(--live); animation: pulse 1.6s ease-in-out infinite; }
 
 
 @keyframes pulse {
@@ -657,14 +662,84 @@ body.resizing { user-select: none; }
  * colour would be a lie, so the timestamp says so instead. */
 #statusSync.stale { color: var(--warn); }
 
+/* ── identity: the well, the ticks, the held pane ───────────────────────── */
+
+/* The work surface is graph paper, not a void: a 12 px dot grid on --well, and whatever the section
+ * paints (tables, cards, fields) stays opaque on top of it, so the grid is what the gaps are made
+ * of. `background-color` and the dots are on the pane, never the scrolling body — a grid that
+ * scrolls with the content stops being a surface. */
+.work {
+  background-color: var(--well);
+  background-image: radial-gradient(circle, rgba(255, 255, 255, .055) 1px, transparent 1px);
+  background-size: 12px 12px;
+  background-position: 6px 6px;
+}
+
+/* A registration tick in the head's corner: 1 px of hairline says "this edge is a joint in a
+ * machine" without a shadow or a gradient. `::after` on a flex head is a flex item, so it lands
+ * after the head's own content without a positioning context. */
+.pane-head::after, .dock-head::after {
+  content: "";
+  width: 5px; height: 5px; flex: 0 0 auto;
+  align-self: flex-start; margin-top: 6px; margin-left: 2px;
+  border-left: 1px solid var(--border-strong);
+  border-top: 1px solid var(--border-strong);
+}
+/* A collapsed pane is a 26 px strip with no room for it: the tick would be clipped mid-stroke. */
+.workbench[data-collapsed~="nav"] #nav .pane-head::after,
+.workbench[data-collapsed~="insp"] #insp .pane-head::after { display: none; }
+
+/* The status bar is a pane head too, so the bottom of the chrome gets the same lit hairline the
+ * other three carry. */
+.status { box-shadow: inset 0 1px 0 var(--seam-light); }
+
+/* The sheet's scrim exists at every width and is shown only by the tablet block below; without a
+ * base `display` it would be an empty grid item whenever the sheet is closed. */
+.insp-scrim { display: none; }
+
+/* Focus is two facts, and they never read as one: the rim says which region holds the keyboard,
+ * while F6's outline (pane mechanics, above) says where the keyboard is. `:focus-within` rather
+ * than `:focus`, because the thing a person focused is a row inside the region, not the region. */
+#rail:focus-within, #nav:focus-within, #work:focus-within,
+#insp:focus-within, #dock:focus-within { box-shadow: inset 0 0 0 1px var(--focus-edge); }
+
 /* ── breakpoints ────────────────────────────────────────────────────────── */
 
-/* Under 1180 px the table needs the width more than the inspector does; W7 brings the
- * inspector back as a sheet over the work surface. */
-@media (max-width: 1180px) {
+/* The tablet sheet's door in the command bar. Hidden by default — the inspector is a column there —
+ * and `.bar`-scoped so this outranks `.btn-ghost`'s own `display` without an `!important`. */
+.bar .insp-sheet-btn { display: none; }
+
+/* Between 721 and 1180 px the table needs the width more than the inspector does, so the inspector
+ * leaves the grid and comes back as a sheet over the work surface (D19): the same pane, positioned
+ * out of the grid, opened by the bar's button or by picking a seeder, closed by its own head, the
+ * scrim or Escape. The grid keeps a zero-width inspector track, so nothing else moves when it opens. */
+@media (min-width: 721px) and (max-width: 1180px) {
   .workbench { grid-template-columns: var(--rail-w) var(--nav-w) minmax(0, 1fr) 0; }
   .workbench > .inspector { display: none; }
   .workbench > .splitter[data-pane="insp"] { display: none; }
+  .bar .insp-sheet-btn { display: inline-flex; }
+
+  /* `#insp` rather than `.inspector`: an id outweighs the `display: none` above without repeating
+   * the hide rule, so the sheet is the only state that puts the pane back. */
+  .workbench[data-insp-sheet="open"] #insp {
+    display: flex;
+    position: fixed; z-index: 60;
+    top: var(--bar-h); right: 0; bottom: 0;
+    width: min(340px, 82vw);
+    background: var(--pane);
+    border-left: 1px solid var(--seam-strong);
+    box-shadow: -24px 0 48px rgba(0, 0, 0, .55);
+  }
+  .workbench[data-insp-sheet="open"] #insp .pane-body { padding-bottom: var(--space-5); }
+
+  /* The scrim is decoration with a click: it never takes a tab stop, and Escape is the keyboard's
+   * way out. `data-open` rather than `hidden` — a `display` of ours has beaten the UA's `[hidden]`
+   * twice already (W4's `.navlist`, W6's palette). */
+  .insp-scrim[data-open="true"] {
+    display: block;
+    position: fixed; inset: var(--bar-h) 0 0 0; z-index: 59;
+    background: rgba(0, 0, 0, .45);
+  }
 }
 
 /* The phone has no panes: one scrolling surface and the bottom nav, as before. These rules
@@ -680,7 +755,9 @@ body.resizing { user-select: none; }
       "work"
       "bottomnav";
   }
-  .rail, .navigator, .inspector, .dock, .status, .splitter { display: none; }
+  .rail, .navigator, .inspector, .dock, .status, .splitter, .insp-scrim { display: none; }
+  /* D7: the phone keeps the flat shell it had. The well is a desktop surface. */
+  .work { background-image: none; }
 }
 
 
@@ -975,7 +1052,9 @@ thead th {
   font-size: var(--text-xs);
   letter-spacing: .1em;
   text-transform: uppercase;
-  color: var(--text-subtle);
+  /* --text-muted, not --text-subtle: a header cell sits on --bg-overlay, the lightest surface in the
+   * set, where subtle measures 4.34:1 — under AA for 10 px text (W7's contrast pass). */
+  color: var(--text-muted);
   border-bottom: 1px solid var(--border-strong);
   white-space: nowrap;
 }
@@ -1506,13 +1585,10 @@ td .row-link:hover { color: var(--brand); }
 
 /* ── 15. Log page ───────────────────────────────────────────────────────── */
 
-.log-page {
-  display: flex; flex-direction: column;
-  /* The work pane's height, minus the chrome above and below it: bar, status, the dock row
-   * (whatever height it has) and its own pane head. The dock replaces this page once W5 lands. */
-  height: calc(100dvh - var(--bar-h) - var(--status-h) - var(--dock-h) - var(--head-h));
-  margin: calc(-1 * var(--space-4));
-}
+/* The log surface is the phone's page: above 720 px a wide log is the dock's deep link (W5), so the
+ * full-height sizing lives in the phone block alone. It used to be a base rule subtracting
+ * `--dock-h`, which described a dock the surface can no longer be sharing the screen with. */
+.log-page { display: flex; flex-direction: column; margin: calc(-1 * var(--space-4)); }
 @media (max-width: 720px) {
   .log-page { height: calc(100dvh - var(--bar-h) - var(--bottomnav-h)); margin: calc(-1 * var(--space-4)) calc(-1 * var(--space-3)); }
 }
@@ -1807,6 +1883,11 @@ td .row-link:hover { color: var(--brand); }
 
 
 img, svg { display: block; max-width: 100%; }
+
+/* An icon's default size and stroke, so one added without a context rule is still an icon. Every
+ * context (`.btn .ic`, `.rail-item .ic`, …) is more specific and keeps its own numbers; without
+ * this the palette's search glyph rendered at the SVG default and swamped its row (#42). */
+.ic { width: 14px; height: 14px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.7; }
 
 ::selection { background: var(--brand); color: var(--text-inverse); }
 
