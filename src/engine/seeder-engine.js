@@ -745,15 +745,22 @@ export function writeTimer(seeders = buildIndex()) {
 
 // ── Seeder creation / deletion (GUI "new seeder" flow) ──────────────────────
 
+/**
+ * A URL or host as a seeder source name.
+ *
+ * The hyphen trim is two loops rather than `^-+|-+$` or `-+$`: a right-anchored run of one
+ * character retries at every position on a string that does not end in it, which is the
+ * quadratic shape `js/polynomial-redos` reports (#37).
+ */
 function slugifySource(s) {
-  const t = String(s || "")
+  let t = String(s || "")
     .toLowerCase()
     .trim()
     .replace(/^https?:\/\//, "")
     .replace(/^www\./, "")
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+/, "")
-    .replace(/-+$/, "");
+    .replace(/[^a-z0-9-]+/g, "-");
+  while (t.startsWith("-")) t = t.slice(1);
+  while (t.endsWith("-")) t = t.slice(0, -1);
   return t.slice(0, 60) || null;
 }
 
