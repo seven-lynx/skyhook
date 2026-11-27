@@ -113,6 +113,7 @@ const DEFAULTS = {
 };
 
 let _config = null;
+let _source = null; // { file, found } — what the last `loadConfig` looked for
 
 function deepMerge(base, over) {
   if (Array.isArray(over)) return over.slice();
@@ -134,7 +135,8 @@ export function loadConfig(opts = {}) {
   const cwd = opts.cwd || process.cwd();
   const file = opts.file || join(cwd, "skyhook.config.json");
   let user = {};
-  if (existsSync(file)) {
+  const found = existsSync(file);
+  if (found) {
     try {
       // A leading U+FEFF is an editor artefact (PowerShell 5.1 `Set-Content -Encoding utf8`,
       // VS Code "UTF-8 with BOM"), not user error: `JSON.parse` refuses it, so drop it first.
@@ -185,7 +187,20 @@ export function loadConfig(opts = {}) {
     merged.storage.connectionString || process.env.POSTGRES_URL || process.env.DATABASE_URL || null;
 
   _config = merged;
+  _source = { file, found };
   return _config;
+}
+
+/**
+ * Where the last `loadConfig` looked, and whether it found anything.
+ *
+ * `_config` alone cannot answer this: a missing file is legal (the defaults are the product), so
+ * the merged object looks the same either way. A caller that presents the config — `serve`'s
+ * banner — needs to be able to say "these are defaults, and here is the file I did not find"
+ * instead of answering with a half-built deck and no diagnostic (#49).
+ */
+export function configSource() {
+  return _source;
 }
 
 export function getConfig() {

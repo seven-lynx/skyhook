@@ -222,10 +222,13 @@ function scheduleWiring({ serverJs, scheduleJs, mainRs, capability }) {
     startsInSidecar: serverJs.includes("startSchedule({") && /schedule\??\.tick\(\)/.test(serverJs),
     stopsWithServer: /schedule\??\.stop\(\)/.test(serverJs),
     pollsDueSet:
-      scheduleJs.includes('"/api/running"')
-      && scheduleJs.includes('"/api/due"')
+      scheduleJs.includes('"/api/due"')
       && scheduleJs.includes('"/api/run"'),
-    neverOverlapsRun: scheduleJs.includes('skipped: "running"'),
+    // The second round trip is the workaround #31 removed: the selector owns "running" now,
+    // so a tick that asks `/api/running` again is one client re-deriving a rule it was given.
+    noRunningRoundTrip: !scheduleJs.includes('"/api/running"'),
+    // A source the server refused is reported, not retried on the next tick.
+    reportsRefusedRun: scheduleJs.includes('skipped: "running"'),
     autostartToggle:
       mainRs.includes('"Start with Windows"')
       && mainRs.includes("CheckMenuItem::with_id")
@@ -543,7 +546,8 @@ test("guard: the app is the scheduler, and Start with Windows is a Run entry", (
       startsInSidecar: true,
       stopsWithServer: true,
       pollsDueSet: true,
-      neverOverlapsRun: true,
+      noRunningRoundTrip: true,
+      reportsRefusedRun: true,
       autostartToggle: true,
       autostartAllowed: true,
     },
@@ -568,16 +572,20 @@ test("guard: the schedule rule refuses a shell that stopped owning the schedule"
   assert.notEqual(noStop, serverJs, "the stop path still stops the schedule");
   assert.equal(wiring({ serverJs: noStop }).stopsWithServer, false);
 
-  // 3. The tick stops gating on the run in flight: `/api/due` still lists it, so
-  // the next tick starts a second child for one source.
-  const noGate = scheduleJs.replace('return { skipped: "running", active };', "");
-  assert.notEqual(noGate, scheduleJs, "the tick still refuses a running seeder");
-  assert.equal(wiring({ scheduleJs: noGate }).neverOverlapsRun, false);
+  // 3. The tick stops naming a source the server refused, so a batch the route skipped is
+  // swallowed and the log says nothing.
+  const noRefusal = scheduleJs.replace('return { skipped: "running", active: skipped };', "");
+  assert.notEqual(noRefusal, scheduleJs, "the tick still reports a refused source");
+  assert.equal(wiring({ scheduleJs: noRefusal }).reportsRefusedRun, false);
 
-  // 4. The tick never asks what is running at all.
-  const noRunning = scheduleJs.replace('request("GET", "/api/running")', "");
-  assert.notEqual(noRunning, scheduleJs, "the tick still asks what is running");
-  assert.equal(wiring({ scheduleJs: noRunning }).pollsDueSet, false);
+  // 4. The tick never asks what is due at all.
+  const noDue = scheduleJs.replace('request("GET", "/api/due")', "");
+  assert.notEqual(noDue, scheduleJs, "the tick still asks what is due");
+  assert.equal(wiring({ scheduleJs: noDue }).pollsDueSet, false);
+
+  // 4b. The second round trip comes back, which is #31 reintroduced one client at a time.
+  const withRunning = `${scheduleJs}\nconst again = await request("GET", "/api/running");\n`;
+  assert.equal(wiring({ scheduleJs: withRunning }).noRunningRoundTrip, false);
 
   // 5. The check item is gone, so the Run entry is unreachable from the app.
   const noToggle = mainRs.replace('"Start with Windows"', "");

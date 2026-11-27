@@ -21,6 +21,20 @@ once the desktop track ships — a signed installer.
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; `npm run desktop:dist` also writes
   `latest.json` beside the artifacts.
 
+### Fixed
+
+- `GET /api/due`, `/api/status` and `/api/health` no longer report a seeder that is
+  already running as due, and `POST /api/run` answers `skippedRunning` instead of
+  starting a second child for it.
+- A browser page on another origin can POST with its token: the CORS preflight now
+  names `Authorization` and `x-skyhook-token`, not just `Content-Type`.
+- A request path ending in a long run of slashes is trimmed by a loop instead of a
+  right-anchored regex, so it cannot be made to backtrack quadratically.
+- `skyhook serve` warns on stderr when no `skyhook.config.json` sits beside the
+  working directory, naming that directory and the path it looked for. A run started
+  from the wrong `WorkingDirectory` used to boot on the defaults and answer with the
+  two built-in cards, with nothing in the log to say why.
+
 ## [0.4.3]
 
 ### Added

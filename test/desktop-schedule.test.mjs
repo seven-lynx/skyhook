@@ -3,10 +3,12 @@
  * the one-shot client it asks through.
  *
  * The desktop app owns automatic runs on Windows (`PLAN.md` §6 item 9), so the
- * failures that matter are quiet ones: a tick that starts a seeder which is still
- * running (a second child for one source, because `last_run_at` is written when a
- * run *ends*), a tick that starts nothing because one bad response killed the
- * loop, and a loop that outlives the server it talks to.
+ * failures that matter are quiet ones: a tick that starts nothing because one bad
+ * response killed the loop, a tick that overlaps the one before it, and a loop that
+ * outlives the server it talks to. "A seeder still running is not due" used to be
+ * enforced here against `/api/running`; it is the server's rule now — `/api/due`
+ * excludes a run in flight and `/api/run` answers `skippedRunning` (#31) — so the
+ * tick is one round trip and the duplicate cannot be created by any client.
  *
  * The tick's assertions run against an injected `request`, so they open no socket
  * and wait for nothing — the one exception is the test that the timer fires at
@@ -56,9 +58,8 @@ async function waitUntil(ready, ms = 2000) {
 
 test("schedule: one tick starts the due set, once", async () => {
   const { calls, request } = recorder({
-    "/api/running": { payload: { running: [] } },
     "/api/due": { payload: [{ source: "alpha" }, { source: "beta" }] },
-    "/api/run": { payload: { ok: true, started: ["alpha", "beta"] } },
+    "/api/run": { payload: { ok: true, started: ["alpha", "beta"], skippedRunning: [] } },
   });
   const logged = [];
   const schedule = startSchedule({ baseUrl: BASE, request, intervalMs: 1e6, log: (l) => logged.push(l) });
@@ -71,16 +72,15 @@ test("schedule: one tick starts the due set, once", async () => {
 
   assert.deepEqual(
     calls.map((call) => `${call.method} ${call.path}`),
-    ["GET /api/running", "GET /api/due", "POST /api/run"],
-    "one decision per tick: what is running, what is due, start it",
+    ["GET /api/due", "POST /api/run"],
+    "one decision per tick: what is due, start it",
   );
-  assert.deepEqual(calls[2].body, { sources: ["alpha", "beta"] });
+  assert.deepEqual(calls[1].body, { sources: ["alpha", "beta"] });
   assert.deepEqual(logged, ["schedule: started alpha, beta"]);
 });
 
 test("schedule: nothing due writes no run", async () => {
   const { calls, request } = recorder({
-    "/api/running": { payload: { running: [] } },
     "/api/due": { payload: [] },
   });
   const schedule = startSchedule({ baseUrl: BASE, request, intervalMs: 1e6, log: () => {} });
@@ -94,29 +94,30 @@ test("schedule: nothing due writes no run", async () => {
   assert.equal(calls.some((call) => call.path === "/api/run"), false);
 });
 
-test("schedule: a seeder still running is not started again", async () => {
+test("schedule: a seeder the server refused as already running is reported, not retried", async () => {
   const { calls, request } = recorder({
-    "/api/running": { payload: { running: [{ source: "alpha", elapsedMs: 1200 }] } },
     "/api/due": { payload: [{ source: "alpha" }] },
+    "/api/run": { payload: { ok: true, started: [], skippedRunning: ["alpha"] } },
   });
-  const schedule = startSchedule({ baseUrl: BASE, request, intervalMs: 1e6, log: () => {} });
+  const logged = [];
+  const schedule = startSchedule({ baseUrl: BASE, request, intervalMs: 1e6, log: (l) => logged.push(l) });
 
   try {
+    // The server owns the rule now; the tick's job is to say so once instead of
+    // reporting a start that did not happen.
     assert.deepEqual(await schedule.tick(), { skipped: "running", active: ["alpha"] });
   } finally {
     schedule.stop();
   }
 
-  // The reason this gate exists: `/api/due` would still list `alpha`.
-  assert.equal(calls.some((call) => call.path === "/api/due"), false);
-  assert.equal(calls.some((call) => call.path === "/api/run"), false);
+  assert.equal(calls.some((call) => call.path === "/api/running"), false, "no second round trip");
+  assert.deepEqual(logged, ["schedule: already running alpha"]);
 });
 
 test("schedule: a failed pass is logged and the next tick still runs", async () => {
   let attempt = 0;
   const { request } = recorder({
-    "/api/running": () => (++attempt === 1 ? new Error("connect ECONNREFUSED") : { payload: { running: [] } }),
-    "/api/due": { payload: [{ source: "alpha" }] },
+    "/api/due": () => (++attempt === 1 ? new Error("connect ECONNREFUSED") : { payload: [{ source: "alpha" }] }),
     "/api/run": { payload: { started: ["alpha"] } },
   });
   const logged = [];
@@ -136,7 +137,6 @@ test("schedule: a failed pass is logged and the next tick still runs", async () 
 
 test("schedule: the interval fires the tick, and stop() ends it", async () => {
   const { calls, request } = recorder({
-    "/api/running": { payload: { running: [] } },
     "/api/due": { payload: [] },
   });
   const schedule = startSchedule({ baseUrl: BASE, request, intervalMs: 10, log: () => {} });
@@ -156,8 +156,7 @@ test("schedule: a tick overlapping the previous one is skipped", async () => {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const { calls, request } = recorder({
-    "/api/running": () => gate.then(() => ({ payload: { running: [] } })),
-    "/api/due": { payload: [] },
+    "/api/due": () => gate.then(() => ({ payload: [] })),
   });
   const schedule = startSchedule({ baseUrl: BASE, request, intervalMs: 1e6, log: () => {} });
 
@@ -166,7 +165,7 @@ test("schedule: a tick overlapping the previous one is skipped", async () => {
     assert.deepEqual(await schedule.tick(), { skipped: "busy" });
     release();
     assert.deepEqual(await first, { skipped: "idle" });
-    assert.equal(calls.length, 2, "the overlapping tick issued nothing");
+    assert.equal(calls.length, 1, "the overlapping tick issued nothing");
   } finally {
     schedule.stop();
   }
