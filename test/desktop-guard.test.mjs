@@ -42,6 +42,7 @@ const tauriConfig = join(root, "src-tauri", "tauri.conf.json");
 const packageManifest = join(root, "package.json");
 const distWrapper = join(root, "scripts", "desktop-dist.mjs");
 const stageScript = join(root, "scripts", "stage-desktop-app.mjs");
+const latestJsonScript = join(root, "scripts", "latest-json.mjs");
 const guiApp = join(root, "src", "gui", "app.js");
 const guiHtml = join(root, "src", "gui", "index.html");
 
@@ -633,5 +634,154 @@ test("guard: the dist rule refuses a build that would ship a runtime it cannot r
   );
   assert.notEqual(noGuard, base.ciYaml, "ci.yml still guards the desktop job");
   assert.equal(wiring({ ciYaml: noGuard }).tagOnlyJob, false);
+});
+
+/**
+ * The updater, as the pieces have to line up for an installed copy to update itself.
+ *
+ * Nothing here can be observed without two installed builds and a published release, so
+ * what is asserted is the wiring that decides whether such a release *could* work: the
+ * plugin registered, artifacts signed at build time, the endpoint on the Release, passive
+ * install, a public key, the signed-version check, the launch check behind a stored flag,
+ * the sidecar stopped before the installer runs, and the manifest + secrets in CI. The
+ * renderer is deliberately absent — the updater is Rust-side, so the capability allow-list
+ * gains nothing for it.
+ */
+function updaterWiring({ tauriConf, mainRs, distScript, latestScript, ciYaml }) {
+  const updater = tauriConf.plugins?.updater ?? {};
+  const endpoints = Array.isArray(updater.endpoints) ? updater.endpoints : [];
+  return {
+    pluginRegistered: mainRs.includes(".plugin(tauri_plugin_updater::Builder::new().build())"),
+    artifactsBuilt: tauriConf.bundle?.createUpdaterArtifacts === true,
+    releaseEndpoint:
+      endpoints.length === 1
+      && /^https:\/\/github\.com\/seven-lynx\/skyhook\/releases\/latest\/download\/latest\.json$/.test(endpoints[0]),
+    passiveInstall: updater.windows?.installMode === "passive",
+    pubkeyPinned: typeof updater.pubkey === "string" && updater.pubkey.length > 40,
+    versionSigned: updater.requireSignedVersion === true,
+    launchCheckBehindFlag:
+      mainRs.includes("fn check_on_launch_enabled(")
+      && mainRs.includes("if check_on_launch_enabled(&handle) {")
+      && mainRs.includes("check_updates(&handle, false)")
+      && mainRs.includes("set_check_on_launch(app, wanted)"),
+    childStoppedFirst:
+      mainRs.includes(".on_before_exit(before_exit)") && mainRs.includes("move || kill_sidecar(&app)"),
+    manifestWritten:
+      distScript.includes("writeLatestJson(version, updaterZips[0]);") && distScript.includes("latestManifest({"),
+    manifestShape:
+      latestScript.includes("pub_date:") && latestScript.includes("platforms:") && latestScript.includes("signature:"),
+    secretsInCi:
+      ciYaml.includes("TAURI_SIGNING_PRIVATE_KEY")
+      && ciYaml.includes("TAURI_SIGNING_PRIVATE_KEY_PASSWORD"),
+    releaseUpload: /gh release upload/.test(ciYaml) && /refs\/tags\/v/.test(ciYaml),
+  };
+}
+
+function updaterInputs() {
+  return {
+    tauriConf: JSON.parse(readFileSync(tauriConfig, "utf8")),
+    mainRs: readFileSync(shellMain, "utf8"),
+    distScript: readFileSync(distWrapper, "utf8"),
+    latestScript: readFileSync(latestJsonScript, "utf8"),
+    ciYaml: readFileSync(ciWorkflow, "utf8"),
+  };
+}
+
+test("guard: an installed copy finds, verifies and applies a published update", () => {
+  assert.deepEqual(
+    updaterWiring(updaterInputs()),
+    {
+      pluginRegistered: true,
+      artifactsBuilt: true,
+      releaseEndpoint: true,
+      passiveInstall: true,
+      pubkeyPinned: true,
+      versionSigned: true,
+      launchCheckBehindFlag: true,
+      childStoppedFirst: true,
+      manifestWritten: true,
+      manifestShape: true,
+      secretsInCi: true,
+      releaseUpload: true,
+    },
+    "the updater is wired end to end, and the window is granted nothing new for it",
+  );
+});
+
+test("guard: the updater rule refuses each way an installed copy would stop updating", () => {
+  const base = updaterInputs();
+  const wiring = (changes) => updaterWiring({ ...base, ...changes });
+  const withUpdater = (updater) => ({
+    ...base.tauriConf,
+    plugins: { ...base.tauriConf.plugins, updater: { ...base.tauriConf.plugins?.updater, ...updater } },
+  });
+
+  // 1. The plugin is never registered, so nothing reads the config at all.
+  const noPlugin = base.mainRs.replace(".plugin(tauri_plugin_updater::Builder::new().build())", "");
+  assert.notEqual(noPlugin, base.mainRs, "main.rs still registers the updater");
+  assert.equal(wiring({ mainRs: noPlugin }).pluginRegistered, false);
+
+  // 2. The build stops creating the archive the updater downloads.
+  assert.equal(
+    wiring({
+      tauriConf: { ...base.tauriConf, bundle: { ...base.tauriConf.bundle, createUpdaterArtifacts: false } },
+    }).artifactsBuilt,
+    false,
+  );
+
+  // 3. An endpoint that is not the Release's latest manifest — a dead channel, or a plain
+  // `http` URL a release build refuses to fetch (`InsecureTransportProtocol`).
+  assert.equal(
+    wiring({ tauriConf: withUpdater({ endpoints: ["http://example.test/latest.json"] }) }).releaseEndpoint,
+    false,
+  );
+  assert.equal(
+    wiring({ tauriConf: withUpdater({ endpoints: ["https://example.test/latest.json"] }) }).releaseEndpoint,
+    false,
+  );
+
+  // 4. `basicUi` leaves the installer waiting on a click nobody is there to make.
+  assert.equal(wiring({ tauriConf: withUpdater({ windows: { installMode: "basicUi" } }) }).passiveInstall, false);
+
+  // 5. An empty public key: every download is refused as unverifiable.
+  assert.equal(wiring({ tauriConf: withUpdater({ pubkey: "" }) }).pubkeyPinned, false);
+
+  // 6. The signature stops carrying the version it was signed for, so a crafted manifest
+  // can pair a newer number with an older signed artifact.
+  assert.equal(wiring({ tauriConf: withUpdater({ requireSignedVersion: false }) }).versionSigned, false);
+
+  // 7. The launch check runs regardless of the flag — the air-gapped box has no way out.
+  const noFlag = base.mainRs.replace("if check_on_launch_enabled(&handle) {", "{");
+  assert.notEqual(noFlag, base.mainRs, "main.rs still gates the launch check");
+  assert.equal(wiring({ mainRs: noFlag }).launchCheckBehindFlag, false);
+
+  // 8. The installer runs without the sidecar being stopped first, so the orphaned child
+  // holds `.app-session.lock` and the next launch is refused at it.
+  const noHook = base.mainRs.replace(".on_before_exit(before_exit)", "");
+  assert.notEqual(noHook, base.mainRs, "main.rs still hooks the pre-install exit");
+  assert.equal(wiring({ mainRs: noHook }).childStoppedFirst, false);
+
+  // 9. The wrapper ships the installer and forgets the manifest, so every installed copy
+  // polls a URL that does not exist.
+  const noManifest = base.distScript.replace("writeLatestJson(version, updaterZips[0]);", "");
+  assert.notEqual(noManifest, base.distScript, "the wrapper still writes latest.json");
+  assert.equal(wiring({ distScript: noManifest }).manifestWritten, false);
+
+  // 10. A manifest without `platforms` — an updater reads it as "no update for you".
+  const badManifest = base.latestScript.replace("platforms: {", "platformKeys: {");
+  assert.notEqual(badManifest, base.latestScript, "latest-json.mjs still emits platforms");
+  assert.equal(wiring({ latestScript: badManifest }).manifestShape, false);
+
+  // 11. CI builds on a tag with no signing key, so `tauri build` fails and the release
+  // has no artifacts at all.
+  const noSecrets = base.ciYaml.replace(/TAURI_SIGNING_PRIVATE_KEY/g, "SOME_SECRET");
+  assert.notEqual(noSecrets, base.ciYaml, "ci.yml still passes the signing key");
+  assert.equal(wiring({ ciYaml: noSecrets }).secretsInCi, false);
+
+  // 12. The artifacts are uploaded as workflow artifacts and never attached to the
+  // Release, so the endpoint has nothing to answer with.
+  const noUpload = base.ciYaml.replace("gh release upload", "echo would upload");
+  assert.notEqual(noUpload, base.ciYaml, "ci.yml still attaches the artifacts");
+  assert.equal(wiring({ ciYaml: noUpload }).releaseUpload, false);
 });
 

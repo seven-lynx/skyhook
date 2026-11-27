@@ -41,6 +41,9 @@ discover ──▶ enrich ──▶ stage ──▶ curate ──▶ tag ──�
   copy, tag offline, then upload tags/attributes/quality back.
 - **Cloudflare bypass** — optional FlareSolverr integration for bot-protected
   sites, launched on demand and torn down after each run.
+- **Desktop app** — optional: a Tauri window around the same server, with a bundled
+  Node runtime, a tray menu, the scheduler while it runs, and signed in-place
+  updates. Everything above works without it. See [desktop.md](docs/desktop.md).
 
 ## Quick start
 
@@ -153,6 +156,7 @@ See [storage](docs/storage.md) for the `schema.json` column mapping.
 - [Multi-node](docs/multi-node.md) — PC ⇄ Pi controller/worker pair
 - [HTTP API](docs/api.md) — JSON API reference
 - [Deployment](docs/deployment.md) — systemd timer + `init` scaffold
+- [Desktop app](docs/desktop.md) — install, data location, tray, updates
 
 ## Project layout
 

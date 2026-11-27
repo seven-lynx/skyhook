@@ -16,6 +16,12 @@ once the desktop track ships — a signed installer.
   with no values in it, and a test that fails if one ever appears.
 - A desktop application (Tauri + a bundled Node sidecar) on the desktop track,
   not yet released: it ships in `v0.5.0`.
+- In-place updates for the desktop app: it checks `latest.json` on the Release once
+  per launch behind a *Check for updates automatically* toggle, verifies the
+  download's minisign signature and its signed version, then installs passively.
+  Building the installer now needs `TAURI_SIGNING_PRIVATE_KEY` and
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; `npm run desktop:dist` also writes
+  `latest.json` beside the artifacts.
 - `tag --reask-no-tags` — put the rows the model answered with no tag back to
   the model, once, after the prompt or vocabulary changed.
 

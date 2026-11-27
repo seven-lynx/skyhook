@@ -21,6 +21,11 @@
 //! no registered OS task. The only thing Windows is told is where the exe lives —
 //! the *Start with Windows* check item, a per-user `Run` entry the autostart plugin
 //! writes and reads back, so the menu holds no second copy of that fact.
+//!
+//! Updates belong to the shell for the same reason the schedule does: it owns the
+//! window the user closed and the process Windows can replace. `check_updates` asks
+//! the endpoint in `tauri.conf.json` once per launch, behind a flag the menu writes,
+//! and the plugin verifies the signature before the installer ever sees the bytes.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -37,6 +42,7 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_updater::UpdaterExt;
 
 // The OS CSPRNG, declared by hand.
 //
@@ -345,6 +351,98 @@ fn latest_log(root: &Path) -> Option<PathBuf> {
         .map(|entry| entry.path())
 }
 
+/// Where *check for updates automatically* is kept, beside the sidecar's data root.
+///
+/// A file rather than a plugin store: the shell is its only writer and its only reader, the
+/// flag is one boolean, and `app_data_dir()` is the directory the sidecar gets as `--root` —
+/// so *Open data folder* shows it. An absent file means the check is on, which is what a
+/// fresh install expects and why the default needs no file at all.
+fn updates_file(app: &AppHandle) -> Option<PathBuf> {
+    let dir = app.path().app_data_dir().ok()?;
+    Some(plain_path(&dir).join("updates.json"))
+}
+
+/// Whether the launch check may run.
+///
+/// Unreadable or malformed reads as `true`: the flag exists so an air-gapped box can opt out,
+/// not so a corrupt file can make the feature look broken.
+fn check_on_launch_enabled(app: &AppHandle) -> bool {
+    let Some(file) = updates_file(app) else {
+        return true;
+    };
+    let Ok(raw) = fs::read_to_string(&file) else {
+        return true;
+    };
+    let parsed: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    parsed
+        .get("checkOnLaunch")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// Write the flag, creating the data directory on the first toggle.
+fn set_check_on_launch(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let file = updates_file(app).ok_or_else(|| "no app data directory".to_string())?;
+    if let Some(dir) = file.parent() {
+        fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+    }
+    let body = json!({ "checkOnLaunch": enabled }).to_string() + "\n";
+    fs::write(&file, body).map_err(|err| format!("{}: {err}", file.display()))
+}
+
+/// Ask the configured endpoint for a newer release, and take it if there is one.
+///
+/// The plugin verifies the minisign signature against the public key compiled into the app
+/// before anything reaches the installer; `requireSignedVersion` makes the signature's own
+/// comment the authority on which version it belongs to, so a crafted manifest cannot pair a
+/// newer number with an older signed artifact.
+///
+/// This is `installMode: "passive"`: the download runs while the app is up and Windows takes
+/// over unattended. Windows quits the app to install, so `on_before_exit` kills the sidecar
+/// first — otherwise the next launch finds a child the installer orphaned still holding
+/// `.app-session.lock`.
+///
+/// `manual` only changes what is said when there is nothing to install: a launch check stays
+/// quiet, a menu click answers.
+fn check_updates(app: &AppHandle, manual: bool) {
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let before_exit = {
+            let app = handle.clone();
+            move || kill_sidecar(&app)
+        };
+        let updater = match handle.updater_builder().on_before_exit(before_exit).build() {
+            Ok(updater) => updater,
+            Err(err) => {
+                eprintln!("update: {err}");
+                return;
+            }
+        };
+        let update = match updater.check().await {
+            Ok(Some(update)) => update,
+            Ok(None) => {
+                if manual {
+                    eprintln!("update: up to date ({})", env!("CARGO_PKG_VERSION"));
+                }
+                return;
+            }
+            Err(err) => {
+                eprintln!("update: check failed: {err}");
+                return;
+            }
+        };
+        let version = update.version.clone();
+        eprintln!(
+            "update: {} -> {version}, downloading",
+            update.current_version
+        );
+        match update.download_and_install(|_, _| {}, || {}).await {
+            Ok(()) => eprintln!("update: {version} installed"),
+            Err(err) => eprintln!("update: download failed: {err}"),
+        }
+    });
+}
+
 /// The dashboard: the sidecar's own origin, so every call is same-origin.
 ///
 /// The injected flag is the renderer half of the handshake (`src/gui/app.js`,
@@ -429,11 +527,16 @@ fn open_failure(app: &AppHandle, reason: &str) -> Result<(), String> {
 
 /// The app menu, shared by the window and the tray.
 ///
-/// *Start with Windows* is a check item whose mark is read from the OS's own Run
-/// entry, so an install where the entry exists shows it — nothing here remembers
-/// the answer. The mark is passed in rather than re-read so a toggle can rebuild the
-/// tray's menu with the value it just wrote.
-fn build_menu(app: &AppHandle, autostart_checked: bool) -> tauri::Result<Menu<tauri::Wry>> {
+/// *Start with Windows* is a check item whose mark is read from the OS's own Run entry, so an
+/// install where the entry exists shows it — nothing here remembers the answer. *Check for
+/// updates automatically* is the same shape with a different source: the shell's own
+/// `updates.json`, because the flag is the app's, not Windows's. The marks are passed in rather
+/// than re-read so a toggle can rebuild the tray's menu with the value it just wrote.
+fn build_menu(
+    app: &AppHandle,
+    autostart_checked: bool,
+    updates_checked: bool,
+) -> tauri::Result<Menu<tauri::Wry>> {
     let data = MenuItem::with_id(app, "open-data", "Open data folder", true, None::<&str>)?;
     let log = MenuItem::with_id(app, "open-log", "Open latest log", true, None::<&str>)?;
     let run = MenuItem::with_id(app, "run-due", "Run due now", true, None::<&str>)?;
@@ -445,6 +548,15 @@ fn build_menu(app: &AppHandle, autostart_checked: bool) -> tauri::Result<Menu<ta
         autostart_checked,
         None::<&str>,
     )?;
+    let auto_update = CheckMenuItem::with_id(
+        app,
+        "auto-update",
+        "Check for updates automatically",
+        true,
+        updates_checked,
+        None::<&str>,
+    )?;
+    let check_now = MenuItem::with_id(app, "check-updates", "Check for updates now", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, Some("CmdOrCtrl+Q"))?;
     Menu::with_items(
         app,
@@ -453,6 +565,8 @@ fn build_menu(app: &AppHandle, autostart_checked: bool) -> tauri::Result<Menu<ta
             &log,
             &run,
             &autostart,
+            &auto_update,
+            &check_now,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
@@ -464,17 +578,19 @@ fn autostart_enabled(app: &AppHandle) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
 }
 
-/// Re-state the check mark on both menus that carry it, after a toggle.
+/// Re-state both check marks on both menus that carry them, after a toggle.
 ///
-/// The item exists twice — the window's menu bar and the tray's — because each is a
-/// separate menu. `TrayIcon` in tauri 2.12 offers `set_menu` and no getter (checked in
-/// the crate source, `tray/mod.rs:526`), so the tray's copy is replaced with a freshly
-/// built menu rather than read back; the window's copy is walked. A mark that disagreed
-/// with the Run entry would be the only copy of that fact anywhere, which is what
-/// reading the OS exists to avoid.
-fn sync_autostart_checks(app: &AppHandle, checked: bool) {
+/// Each item exists twice — the window's menu bar and the tray's — because each is a separate
+/// menu. `TrayIcon` in tauri 2.12 offers `set_menu` and no getter (checked in the crate
+/// source, `tray/mod.rs:526`), so the tray's copy is replaced with a freshly built menu rather
+/// than read back; the window's copy is walked. Every mark is read from where its fact lives —
+/// *Start with Windows* from the OS's Run entry, *updates* from the shell's own flag file —
+/// because a mark that disagreed with its source would be the only copy of that fact anywhere.
+fn sync_menu_checks(app: &AppHandle) {
+    let autostart = autostart_enabled(app);
+    let updates = check_on_launch_enabled(app);
     if let Some(tray) = app.tray_by_id("skyhook") {
-        match build_menu(app, checked) {
+        match build_menu(app, autostart, updates) {
             Ok(menu) => {
                 if let Err(err) = tray.set_menu(Some(menu)) {
                     eprintln!("tray menu: {err}");
@@ -485,10 +601,14 @@ fn sync_autostart_checks(app: &AppHandle, checked: bool) {
     }
     if let Some(menu) = app.menu() {
         for item in menu.items().unwrap_or_default() {
-            if item.id().as_ref() == "autostart" {
-                if let Some(check) = item.as_check_menuitem() {
-                    let _ = check.set_checked(checked);
-                }
+            let id = item.id().as_ref().to_string();
+            let wanted = match id.as_str() {
+                "autostart" => Some(autostart),
+                "auto-update" => Some(updates),
+                _ => None,
+            };
+            if let (Some(wanted), Some(check)) = (wanted, item.as_check_menuitem()) {
+                let _ = check.set_checked(wanted);
             }
         }
     }
@@ -529,11 +649,23 @@ fn on_menu(app: &AppHandle, id: &str) {
             let wanted = !autolaunch.is_enabled().unwrap_or(false);
             let result = if wanted { autolaunch.enable() } else { autolaunch.disable() };
             match result {
-                Ok(()) => sync_autostart_checks(app, wanted),
+                Ok(()) => sync_menu_checks(app),
                 // The mark is left as it was: the entry did not move, so neither does it.
                 Err(err) => eprintln!("start with windows: {err}"),
             }
         }
+        // The flag is the only copy of this answer: written here, read back by
+        // `check_on_launch_enabled`, so the menu and the next launch cannot disagree.
+        "auto-update" => {
+            let wanted = !check_on_launch_enabled(app);
+            match set_check_on_launch(app, wanted) {
+                Ok(()) => sync_menu_checks(app),
+                Err(err) => eprintln!("check for updates automatically: {err}"),
+            }
+        }
+        // A click is consent, so this ignores the flag — it is the one way to ask from
+        // an air-gapped box that had the launch check turned off.
+        "check-updates" => check_updates(app, true),
         "quit" => {
             kill_sidecar(app);
             app.exit(0);
@@ -558,7 +690,7 @@ fn kill_sidecar(app: &AppHandle) {
 }
 
 fn install_tray(app: &AppHandle) -> tauri::Result<()> {
-    let menu = build_menu(app, autostart_enabled(app))?;
+    let menu = build_menu(app, autostart_enabled(app), check_on_launch_enabled(app))?;
     let mut tray = TrayIconBuilder::with_id("skyhook")
         .tooltip("Skyhook")
         .menu(&menu)
@@ -585,12 +717,21 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        // The updater is used from Rust only, so the window is granted nothing: the
+        // capability allow-list in `capabilities/default.json` stays `core`, `opener`
+        // and `autostart`, and `test/desktop-guard.test.mjs` keeps it that way.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Session::default())
         .setup(|app| {
             let handle = app.handle().clone();
             // Menus are built here, not by `Builder::menu`: the autostart item reads
             // the plugin's state, and plugin state exists by the time `setup` runs.
-            build_menu(&handle, autostart_enabled(&handle))?.set_as_app_menu()?;
+            build_menu(
+                &handle,
+                autostart_enabled(&handle),
+                check_on_launch_enabled(&handle),
+            )?
+            .set_as_app_menu()?;
             install_tray(&handle)?;
             let token = launch_token();
             {
@@ -609,6 +750,12 @@ fn main() {
                         }
                         if let Err(err) = open_dashboard(&handle, &info.base_url, &token) {
                             eprintln!("window: {err}");
+                        }
+                        // After the window, not before: an update download must never be
+                        // the reason a launch looks slow. The flag is stored, so an
+                        // air-gapped box turns this off and gets no request at all.
+                        if check_on_launch_enabled(&handle) {
+                            check_updates(&handle, false);
                         }
                     }
                     Err(err) => {

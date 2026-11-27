@@ -23,3 +23,6 @@ src-tauri/target/
 src-tauri/gen/
 dist/desktop/
 src-tauri/binaries/*.exe
+# The stamp `fetch-sidecar.mjs` writes beside it: which pin placed that runtime. A build
+# artifact like the binary, and the reason a re-pin refetches instead of shipping the old one.
+src-tauri/binaries/*.pin

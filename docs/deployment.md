@@ -98,6 +98,14 @@ runtime runs: `desktop/`, `src/` and `config/` plus a production `node_modules`,
 ships, and then loaded once to prove it. `cargo tauri build` bundles the result as the
 `app` resource, and the installer is copied to `dist/desktop/`.
 
+A build also produces the **updater** half: the `.nsis.zip` an installed copy downloads, its
+minisign `.sig`, and a generated `latest.json` naming both. Signing happens inside `tauri build`, so
+`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` must be in the environment —
+the wrapper refuses before it compiles when they are missing, because an unsigned artifact is one no
+installed copy will accept. The public half of that keypair is `plugins.updater.pubkey` in
+`src-tauri/tauri.conf.json` (committed, harmless); the private half never is, and losing it means
+installed copies can no longer update. `cargo tauri signer generate -w <path>` makes a new pair.
+
 An installed copy carries the whole server, not a script: `desktop/server.js` imports
 `src/interfaces/app-session.js`, which imports everything else. It runs the `node.exe`
 beside its own executable and never the `node` on `PATH` — a release build refuses to
@@ -161,6 +169,13 @@ git push origin v0.4.2
 Release history is `CHANGELOG.md`, newest first: the release's own section is written in
 the same commit as the version bump, and the README **Status** paragraph is rewritten
 from it rather than the other way round.
+
+A release that ships the desktop app carries four assets, and the tag produces them: the tag-only
+`desktop` job in `.github/workflows/ci.yml` builds on `windows-latest` with the signing key from CI
+secrets, and attaches `Skyhook_<version>_x64-setup.exe`, its `.nsis.zip`, that zip's `.sig`, and
+`latest.json` to the Release. An installed copy polls
+`releases/latest/download/latest.json`, so a Release without those four strands everyone who
+installed the previous version — build and sign first, upload second, announce last.
 
 The version lives in three places, and all must agree before the tag: `package.json`,
 the README **Status** line, and — once the desktop track ships — the bundle `version` in
