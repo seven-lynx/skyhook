@@ -14,9 +14,9 @@
  *    the build instead of shipping a runtime nobody verified.
  * 2. The archive is unpacked with `tar` — bsdtar, present since Windows 10 — rather
  *    than a zip package: no dependency is added for a build step (`10-node.md`).
- * 3. Extraction happens in `%TEMP%` and the result is renamed into place, so an
- *    interrupted run can never leave a truncated `node.exe` that a later run, which
- *    skips an existing file, would happily package.
+ * 3. Extraction happens in `%TEMP%` and the result is renamed into place, and the pin is
+ *    stamped beside it only after that rename, so an interrupted run cannot leave a
+ *    truncated `node.exe` that a later run would trust and package.
  * 4. The pieces that decide whether a download is accepted are pure functions of
  *    their inputs, because `test/desktop-dist.test.mjs` proves the refusals with no
  *    network and no 30 MB download.
@@ -76,6 +76,35 @@ export function expectedSidecar(pin, root = ROOT) {
 }
 
 /**
+ * The stamp beside a placed binary: the pin that put it there.
+ *
+ * nodejs.org publishes a hash for the `.zip`, not for the `node.exe` inside it, so a placed
+ * binary cannot be compared against the pin directly: a check against `pin.sha256` compares
+ * an extracted file to an archive it was never part of, which refetches 30 MB on every
+ * build and never accepts the one it just wrote. Existence alone is the other error — D10
+ * re-pinned `sidecar.json` while the runtime placed by the previous build was still on
+ * disk, so a file that is merely present would ship Node 20 under a pin that said 24. The
+ * stamp is the missing fact, and it is written only after the rename, so a binary with no
+ * stamp is one no run has vouched for.
+ */
+export function stampPath(target) {
+  return `${target.path}.pin`;
+}
+
+/** Whether the binary at `target` came from this pin; a missing or unreadable stamp is a no. */
+export function placedByPin(target, pin) {
+  let stamp;
+  try {
+    stamp = JSON.parse(readFileSync(stampPath(target), "utf8"));
+  } catch {
+    // Absent, or left half-written by an interrupted run: neither vouches for the binary,
+    // and a refetch is the safe answer to both.
+    return false;
+  }
+  return stamp?.artifact === pin.artifact && stamp?.sha256 === pin.sha256;
+}
+
+/**
  * Every reason to refuse the download, or `[]` when it may be packaged.
  *
  * `published` is `null` when nodejs.org's list is reachable but silent about this
@@ -127,9 +156,10 @@ function findNodeExe(dir) {
 /**
  * Fetch, verify and place the pinned runtime; return where it landed.
  *
- * `fetchImpl`, `unpack` and `log` are injected so the refusals are testable offline,
- * and an already-present binary short-circuits unless `force`: the build calls this on
- * every run, and a 30 MB download per build is not a step anyone keeps.
+ * `fetchImpl`, `unpack` and `log` are injected so the refusals are testable offline, and an
+ * already-present binary short-circuits only when its stamp names this pin: the build calls
+ * this on every run, and a 30 MB download per build is not a step anyone keeps — but neither
+ * is a stale `node.exe` accepted because a file with that name exists.
  */
 export async function ensureSidecar({
   root = ROOT,
@@ -142,8 +172,13 @@ export async function ensureSidecar({
   const target = expectedSidecar(pin, root);
 
   if (!force && existsSync(target.path)) {
-    log(`sidecar: ${relative(root, target.path)} is already in place (Node ${pin.node}) — --force to refetch`);
-    return { path: target.path, fetched: false };
+    if (placedByPin(target, pin)) {
+      log(`sidecar: ${relative(root, target.path)} is already in place (Node ${pin.node}) — --force to refetch`);
+      return { path: target.path, fetched: false };
+    }
+    log(
+      `sidecar: ${relative(root, target.path)} was not placed by the pin in ${MANIFEST} — refetching (Node ${pin.node})`,
+    );
   }
 
   const download = async (name) => {
@@ -178,6 +213,13 @@ export async function ensureSidecar({
     const staged = `${target.path}.part`;
     copyFileSync(extracted, staged);
     renameSync(staged, target.path);
+    // After the rename, never before: a stamp for a binary that did not land would be the
+    // existence check this replaced, with an extra file.
+    writeFileSync(
+      stampPath(target),
+      JSON.stringify({ node: pin.node, artifact: pin.artifact, sha256: pin.sha256 }) + "\n",
+      "utf8",
+    );
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

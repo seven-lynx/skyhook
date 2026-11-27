@@ -22,6 +22,7 @@ whole directory.
 | Run a PC and a Pi as controller and worker | [`multi-node.md`](multi-node.md) | guide |
 | Build a client against the JSON API | [`api.md`](api.md) | **contract** |
 | Scaffold a project, or schedule it with systemd | [`deployment.md`](deployment.md) | guide |
+| Install the desktop app, and let it update itself | [`desktop.md`](desktop.md) | guide |
 | Fix a run that stopped, stalled, or was rejected | [`troubleshooting.md`](troubleshooting.md) | runbook |
 | Understand the pipeline end to end | [`../README.md`](../README.md) | overview |
 
@@ -63,6 +64,8 @@ same commit, or neither does; `check_plans.py` rule `W15` warns while they disag
 | File | Holds |
 |---|---|
 | `README.md` | what the project is, the command table, the feature list, the Status paragraph |
+| `CHANGELOG.md` | release history, newest first — the README Status paragraph is rewritten from it each release |
+| `.env.example` | every environment key `.env` may set, with empty values; `src/config.js` reads them |
 | `src/config.js` | `DEFAULTS` — the defaults every install starts from |
 | `config/categories.json` | the taxonomy: 8 pillars, 98 subcategories |
 | `config/schema.json` | the canonical-field → column mapping for a user's database |

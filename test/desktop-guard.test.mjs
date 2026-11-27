@@ -42,6 +42,7 @@ const tauriConfig = join(root, "src-tauri", "tauri.conf.json");
 const packageManifest = join(root, "package.json");
 const distWrapper = join(root, "scripts", "desktop-dist.mjs");
 const stageScript = join(root, "scripts", "stage-desktop-app.mjs");
+const latestJsonScript = join(root, "scripts", "latest-json.mjs");
 const guiApp = join(root, "src", "gui", "app.js");
 const guiHtml = join(root, "src", "gui", "index.html");
 
@@ -139,8 +140,10 @@ function majorOf(version) {
 /**
  * Every Node major `ci.yml` tests on.
  *
- * `node-version:` takes one value or a matrix list, and the workflow is the only
- * place the tested runtime is recorded — so it is read, never restated here.
+ * `node-version:` takes one value, and a matrix leg is written as
+ * `matrix: node: [22, 24]` with `node-version: ${{ matrix.node }}` — which has
+ * no number in it at all, so the matrix list is read separately. The workflow is
+ * the only place the tested runtime is recorded, so it is read, never restated.
  */
 function ciNodeMajors(yaml) {
   const majors = [];
@@ -150,7 +153,13 @@ function ciNodeMajors(yaml) {
       if (major !== null) majors.push(major);
     }
   }
-  return majors;
+  for (const match of yaml.matchAll(/^\s*node:\s*\[([^\]]+)\]/gm)) {
+    for (const raw of match[1].split(",")) {
+      const major = majorOf(raw.replace(/["'\s]/g, ""));
+      if (major !== null) majors.push(major);
+    }
+  }
+  return [...new Set(majors)];
 }
 
 /**
@@ -226,6 +235,43 @@ function scheduleWiring({ serverJs, scheduleJs, mainRs, capability }) {
 }
 
 /**
+ * Whether a workflow is *started* by a version-tag push — its `on:` header, read
+ * before the first `jobs:` line.
+ *
+ * A different question from the `if:` guard: `desktop` is guarded to `refs/tags/v`,
+ * but a push carries its tags only when `on.push` names them, so a header with
+ * `branches` alone leaves that job unreachable while the guard still reads correct
+ * (#35). Only the header counts — a `tags:` inside a step's `with:` starts nothing.
+ */
+function tagTriggered(yaml) {
+  const header = String(yaml).split(/^jobs:\s*$/m)[0] ?? "";
+  return (
+    /^\s*push:\s*$/m.test(header)
+    && (/^\s*tags:\s*\[[^\]]*\bv/m.test(header) || /^\s*tags:\s*\n\s*-\s*["']?v/m.test(header))
+  );
+}
+
+/**
+ * Whether the workflow's token permissions are scoped: read-only at the root, and the one
+ * write inside the job that creates and fills the Release.
+ *
+ * `actions/missing-workflow-permissions` (#37) asks for an explicit block; the half that
+ * matters is the pair, because a root `contents: read` alone would break the tag-time
+ * `gh release create` and no pull-request run would ever say so. Read by indentation —
+ * two spaces for a workflow key, four for a job key — so the header and the job body can be
+ * told apart without a YAML parser this repo does not have.
+ */
+function permissionsScoped(ciYaml) {
+  const text = String(ciYaml);
+  const header = text.split(/^jobs:\s*$/m)[0] ?? "";
+  const desktopAt = text.search(/^\s{2}desktop:\s*$/m);
+  const desktop = desktopAt >= 0 ? text.slice(desktopAt) : "";
+  const workflowReadOnly = /^permissions:\s*\n\s{2}contents:\s*read\s*$/m.test(header);
+  const releaseWrites = /^\s{4}permissions:\s*\n\s{6}contents:\s*write\s*$/m.test(desktop);
+  return workflowReadOnly && releaseWrites;
+}
+
+/**
  * The halves of "a fresh checkout produces an installer", read from the five files that
  * carry them: the pin, the bundle config, the npm script that wraps the build, the
  * wrapper itself, and the workflow that builds it on CI.
@@ -234,8 +280,9 @@ function scheduleWiring({ serverJs, scheduleJs, mainRs, capability }) {
  * here — so what is asserted is that each piece is wired to the next: the runtime present
  * under the name `externalBin` requires, the sidecar script shipped as a resource (an
  * installed window has no checkout to fall back to), the fetch running before `tauri
- * build`, the release build refusing the machine's own Node, and the CI job guarded to a
- * tag so the installer never becomes a pull-request gate.
+ * build`, the release build refusing the machine's own Node, the CI job guarded to a
+ * tag so the installer never becomes a pull-request gate, and that tag push actually
+ * starting the workflow.
  */
 function distWiring({ pin, tauriConf, packageJson, distScript, stageScript, ciYaml, mainRs }) {
   const bundle = tauriConf.bundle ?? {};
@@ -258,6 +305,8 @@ function distWiring({ pin, tauriConf, packageJson, distScript, stageScript, ciYa
     tagOnlyJob:
       ciYaml.includes("windows-latest")
       && /if:\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/.test(ciYaml),
+    tagTrigger: tagTriggered(ciYaml),
+    permissionsScoped: permissionsScoped(ciYaml),
   };
 }
 
@@ -363,6 +412,24 @@ test("guard: the pin rule reads a version and spots the drift", () => {
 
   // The "Done means" case: a sidecar pinned to 22 while CI stays on 20.
   assert.equal([20].includes(majorOf("22.0.0")), false);
+});
+
+test("guard: the trigger rule reads the on: header, not the job body", () => {
+  assert.equal(tagTriggered("on:\n  push:\n    branches: [main]\n    tags: [\"v*\"]\njobs:\n"), true);
+  assert.equal(tagTriggered("on:\n  push:\n    tags:\n      - \"v*\"\njobs:\n"), true);
+
+  // The defect #35 was: branches named, tags not — so a guarded job never started.
+  assert.equal(tagTriggered("on:\n  push:\n    branches: [main]\njobs:\n"), false);
+  // A `tags:` inside a step's `with:` starts nothing, so only the header is read.
+  assert.equal(
+    tagTriggered(
+      "on:\n  push:\n    branches: [main]\njobs:\n  x:\n    steps:\n      - with:\n          tags: [\"v*\"]\n",
+    ),
+    false,
+  );
+
+  // The workflow itself, which the installer family above depends on.
+  assert.equal(tagTriggered(readFileSync(ciWorkflow, "utf8")), true, "ci.yml starts on a version tag");
 });
 
 test("guard: the shell's token reaches the sidecar and the window", () => {
@@ -551,8 +618,10 @@ test("guard: a fresh checkout carries every piece the installer build needs", ()
       bundledRuntime: true,
       plainPaths: true,
       tagOnlyJob: true,
+      tagTrigger: true,
+      permissionsScoped: true,
     },
-    "the bundle carries its runtime and the app that runtime runs, and the CI job is a tag job",
+    "the bundle carries its runtime and the app that runtime runs, the CI job is a tag job a tag push starts, and its permissions are scoped",
   );
 });
 
@@ -625,5 +694,175 @@ test("guard: the dist rule refuses a build that would ship a runtime it cannot r
   );
   assert.notEqual(noGuard, base.ciYaml, "ci.yml still guards the desktop job");
   assert.equal(wiring({ ciYaml: noGuard }).tagOnlyJob, false);
+
+  // 9. The guard stays but the workflow never starts on a tag, so the job above is
+  // unreachable and a release builds nothing — the state ci.yml was in until #35.
+  const noTrigger = base.ciYaml.replace(/^\s*tags: \[.*\]\s*$/m, "");
+  assert.notEqual(noTrigger, base.ciYaml, "ci.yml still triggers on a version tag");
+  assert.equal(wiring({ ciYaml: noTrigger }).tagTrigger, false);
+  assert.equal(wiring({ ciYaml: noTrigger }).tagOnlyJob, true, "the guard alone would still pass");
+
+  // 10. The root token is left implicit, so every job inherits whatever the repository default is.
+  const noRootPermissions = base.ciYaml.replace(/^permissions:\r?\n  contents: read\r?\n/m, "");
+  assert.notEqual(noRootPermissions, base.ciYaml, "ci.yml still scopes the workflow token");
+  assert.equal(wiring({ ciYaml: noRootPermissions }).permissionsScoped, false);
+
+  // 11. The release job inherits the read-only root, so `gh release create` fails at tag time —
+  // a run no pull request ever performs.
+  const noReleaseWrite = base.ciYaml.replace(
+    /^(    permissions:\r?\n      contents: )write$/m,
+    "$1read",
+  );
+  assert.notEqual(noReleaseWrite, base.ciYaml, "the desktop job still asks for the Release write");
+  assert.equal(wiring({ ciYaml: noReleaseWrite }).permissionsScoped, false);
+});
+
+/**
+ * The updater, as the pieces have to line up for an installed copy to update itself.
+ *
+ * Nothing here can be observed without two installed builds and a published release, so
+ * what is asserted is the wiring that decides whether such a release *could* work: the
+ * plugin registered, artifacts signed at build time, the endpoint on the Release, passive
+ * install, a public key, the signed-version check, the launch check behind a stored flag,
+ * the sidecar stopped before the installer runs, and the manifest + secrets in CI. The
+ * renderer is deliberately absent — the updater is Rust-side, so the capability allow-list
+ * gains nothing for it.
+ */
+function updaterWiring({ tauriConf, mainRs, distScript, latestScript, ciYaml }) {
+  const updater = tauriConf.plugins?.updater ?? {};
+  const endpoints = Array.isArray(updater.endpoints) ? updater.endpoints : [];
+  return {
+    pluginRegistered: mainRs.includes(".plugin(tauri_plugin_updater::Builder::new().build())"),
+    artifactsBuilt: tauriConf.bundle?.createUpdaterArtifacts === true,
+    releaseEndpoint:
+      endpoints.length === 1
+      && /^https:\/\/github\.com\/seven-lynx\/skyhook\/releases\/latest\/download\/latest\.json$/.test(endpoints[0]),
+    passiveInstall: updater.windows?.installMode === "passive",
+    pubkeyPinned: typeof updater.pubkey === "string" && updater.pubkey.length > 40,
+    versionSigned: updater.requireSignedVersion === true,
+    launchCheckBehindFlag:
+      mainRs.includes("fn check_on_launch_enabled(")
+      && mainRs.includes("if check_on_launch_enabled(&handle) {")
+      && mainRs.includes("check_updates(&handle, false)")
+      && mainRs.includes("set_check_on_launch(app, wanted)"),
+    childStoppedFirst:
+      mainRs.includes(".on_before_exit(before_exit)") && mainRs.includes("move || kill_sidecar(&app)"),
+    manifestWritten:
+      distScript.includes("writeLatestJson(version, updaterZips[0]);") && distScript.includes("latestManifest({"),
+    manifestShape:
+      latestScript.includes("pub_date:") && latestScript.includes("platforms:") && latestScript.includes("signature:"),
+    secretsInCi:
+      ciYaml.includes("TAURI_SIGNING_PRIVATE_KEY")
+      && ciYaml.includes("TAURI_SIGNING_PRIVATE_KEY_PASSWORD"),
+    releaseUpload: /gh release upload/.test(ciYaml) && /refs\/tags\/v/.test(ciYaml),
+  };
+}
+
+function updaterInputs() {
+  return {
+    tauriConf: JSON.parse(readFileSync(tauriConfig, "utf8")),
+    mainRs: readFileSync(shellMain, "utf8"),
+    distScript: readFileSync(distWrapper, "utf8"),
+    latestScript: readFileSync(latestJsonScript, "utf8"),
+    ciYaml: readFileSync(ciWorkflow, "utf8"),
+  };
+}
+
+test("guard: an installed copy finds, verifies and applies a published update", () => {
+  assert.deepEqual(
+    updaterWiring(updaterInputs()),
+    {
+      pluginRegistered: true,
+      artifactsBuilt: true,
+      releaseEndpoint: true,
+      passiveInstall: true,
+      pubkeyPinned: true,
+      versionSigned: true,
+      launchCheckBehindFlag: true,
+      childStoppedFirst: true,
+      manifestWritten: true,
+      manifestShape: true,
+      secretsInCi: true,
+      releaseUpload: true,
+    },
+    "the updater is wired end to end, and the window is granted nothing new for it",
+  );
+});
+
+test("guard: the updater rule refuses each way an installed copy would stop updating", () => {
+  const base = updaterInputs();
+  const wiring = (changes) => updaterWiring({ ...base, ...changes });
+  const withUpdater = (updater) => ({
+    ...base.tauriConf,
+    plugins: { ...base.tauriConf.plugins, updater: { ...base.tauriConf.plugins?.updater, ...updater } },
+  });
+
+  // 1. The plugin is never registered, so nothing reads the config at all.
+  const noPlugin = base.mainRs.replace(".plugin(tauri_plugin_updater::Builder::new().build())", "");
+  assert.notEqual(noPlugin, base.mainRs, "main.rs still registers the updater");
+  assert.equal(wiring({ mainRs: noPlugin }).pluginRegistered, false);
+
+  // 2. The build stops creating the archive the updater downloads.
+  assert.equal(
+    wiring({
+      tauriConf: { ...base.tauriConf, bundle: { ...base.tauriConf.bundle, createUpdaterArtifacts: false } },
+    }).artifactsBuilt,
+    false,
+  );
+
+  // 3. An endpoint that is not the Release's latest manifest — a dead channel, or a plain
+  // `http` URL a release build refuses to fetch (`InsecureTransportProtocol`).
+  assert.equal(
+    wiring({ tauriConf: withUpdater({ endpoints: ["http://example.test/latest.json"] }) }).releaseEndpoint,
+    false,
+  );
+  assert.equal(
+    wiring({ tauriConf: withUpdater({ endpoints: ["https://example.test/latest.json"] }) }).releaseEndpoint,
+    false,
+  );
+
+  // 4. `basicUi` leaves the installer waiting on a click nobody is there to make.
+  assert.equal(wiring({ tauriConf: withUpdater({ windows: { installMode: "basicUi" } }) }).passiveInstall, false);
+
+  // 5. An empty public key: every download is refused as unverifiable.
+  assert.equal(wiring({ tauriConf: withUpdater({ pubkey: "" }) }).pubkeyPinned, false);
+
+  // 6. The signature stops carrying the version it was signed for, so a crafted manifest
+  // can pair a newer number with an older signed artifact.
+  assert.equal(wiring({ tauriConf: withUpdater({ requireSignedVersion: false }) }).versionSigned, false);
+
+  // 7. The launch check runs regardless of the flag — the air-gapped box has no way out.
+  const noFlag = base.mainRs.replace("if check_on_launch_enabled(&handle) {", "{");
+  assert.notEqual(noFlag, base.mainRs, "main.rs still gates the launch check");
+  assert.equal(wiring({ mainRs: noFlag }).launchCheckBehindFlag, false);
+
+  // 8. The installer runs without the sidecar being stopped first, so the orphaned child
+  // holds `.app-session.lock` and the next launch is refused at it.
+  const noHook = base.mainRs.replace(".on_before_exit(before_exit)", "");
+  assert.notEqual(noHook, base.mainRs, "main.rs still hooks the pre-install exit");
+  assert.equal(wiring({ mainRs: noHook }).childStoppedFirst, false);
+
+  // 9. The wrapper ships the installer and forgets the manifest, so every installed copy
+  // polls a URL that does not exist.
+  const noManifest = base.distScript.replace("writeLatestJson(version, updaterZips[0]);", "");
+  assert.notEqual(noManifest, base.distScript, "the wrapper still writes latest.json");
+  assert.equal(wiring({ distScript: noManifest }).manifestWritten, false);
+
+  // 10. A manifest without `platforms` — an updater reads it as "no update for you".
+  const badManifest = base.latestScript.replace("platforms: {", "platformKeys: {");
+  assert.notEqual(badManifest, base.latestScript, "latest-json.mjs still emits platforms");
+  assert.equal(wiring({ latestScript: badManifest }).manifestShape, false);
+
+  // 11. CI builds on a tag with no signing key, so `tauri build` fails and the release
+  // has no artifacts at all.
+  const noSecrets = base.ciYaml.replace(/TAURI_SIGNING_PRIVATE_KEY/g, "SOME_SECRET");
+  assert.notEqual(noSecrets, base.ciYaml, "ci.yml still passes the signing key");
+  assert.equal(wiring({ ciYaml: noSecrets }).secretsInCi, false);
+
+  // 12. The artifacts are uploaded as workflow artifacts and never attached to the
+  // Release, so the endpoint has nothing to answer with.
+  const noUpload = base.ciYaml.replace("gh release upload", "echo would upload");
+  assert.notEqual(noUpload, base.ciYaml, "ci.yml still attaches the artifacts");
+  assert.equal(wiring({ ciYaml: noUpload }).releaseUpload, false);
 });
 

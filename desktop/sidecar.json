@@ -1,10 +1,10 @@
 {
-  "$comment": "The Node runtime an installed build runs, ruled 2026-11-25: bundle it, do not require the user's. The Rust shell cannot host a JS engine and must not link better-sqlite3, so the sidecar is a stock node.exe shipped as Tauri's externalBin. D8 fetches `artifact`, checks `sha256` against nodejs.org's published SHASUMS256.txt, and fails the build on a mismatch. `test/desktop-guard.test.mjs` asserts this major is the major ci.yml tests on, so the runtime that ships cannot drift from the one the suite measured.",
-  "node": "20.20.2",
+  "$comment": "The Node runtime an installed build runs, ruled 2026-11-25: bundle it, do not require the user's. The Rust shell cannot host a JS engine and must not link better-sqlite3, so the sidecar is a stock node.exe shipped as Tauri's externalBin. D8 fetches `artifact`, checks `sha256` against nodejs.org's published SHASUMS256.txt, and fails the build on a mismatch. `test/desktop-guard.test.mjs` asserts this major is one of the majors ci.yml tests on, so the runtime that ships cannot drift from the one the suite measured. Was 20.20.2 until 2026-11-26: Node 20 reached EOL on 2026-03-24, which is the pin-bump trigger DC6 always had.",
+  "node": "24.22.3",
   "platform": "win-x64",
-  "artifact": "node-v20.20.2-win-x64.zip",
-  "source": "https://nodejs.org/dist/v20.20.2/",
-  "sha256": "dc3700fdd57a63eedb8fd7e3c7baaa32e6a740a1b904167ff4204bc68ed8bf77",
+  "artifact": "node-v24.22.3-win-x64.zip",
+  "source": "https://nodejs.org/dist/v24.22.3/",
+  "sha256": "e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f",
   "externalBin": "binaries/skyhook-sidecar",
   "targetTriple": "x86_64-pc-windows-msvc"
 }

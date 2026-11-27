@@ -481,7 +481,7 @@ export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
         if (Number.isFinite(minTags) && minTags > 0) args.push("--min-tags", String(minTags));
         runJob({ key: jobKey, scriptPath: skyhookPath, args })
           .then(() => {})
-          .catch((err) => console.error(`task ${taskKey} error:`, err.message));
+          .catch((err) => console.error("task %s error: %s", taskKey, err.message));
         return send(res, 200, { ok: true, job: jobKey, task: taskKey });
       }
 

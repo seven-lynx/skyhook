@@ -3,17 +3,28 @@ name: CI
 on:
   push:
     branches: [main]
+    # A tag push runs nothing unless `push` names the tags (#35): `desktop` below is
+    # guarded to `refs/tags/v`, so without this line that job had no reachable trigger
+    # and a release built no installer at all.
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+
+# Read-only by default; the release job asks for the one write it needs (#37).
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - run: npm test
@@ -27,17 +38,43 @@ jobs:
   desktop:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
+    # `gh release create` / `upload` below write the Release; nothing else needs more than read.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: rustup default stable
       - run: cargo install tauri-cli --version "^2" --locked
       - run: npm ci
       - run: npm run desktop:dist
+        # The updater's minisign key. Both secrets are the release channel's identity
+        # (`PLAN.md` §6 item 13): without them the build refuses, because an unsigned
+        # update artifact is one no installed copy will accept.
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: skyhook-installer
-          path: dist/desktop/*.exe
+          path: |
+            dist/desktop/*.exe
+            dist/desktop/*.nsis.zip
+            dist/desktop/*.sig
+            dist/desktop/latest.json
+      # The Release is the update channel: an installed copy reads `latest.json` from
+      # `releases/latest/download/`, so the assets and the manifest are attached, not
+      # just uploaded. A tag push is the only time this runs; creating the release here
+      # (rather than failing because it does not exist yet) means the tag alone is enough.
+      - name: Attach the artifacts to the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$env:TAG" *> $null
+          if ($LASTEXITCODE -ne 0) { gh release create "$env:TAG" --title "$env:TAG" --notes-from-tag }
+          gh release upload "$env:TAG" dist/desktop/*.exe dist/desktop/*.nsis.zip dist/desktop/*.sig dist/desktop/latest.json --clobber

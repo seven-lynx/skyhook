@@ -62,6 +62,13 @@ export function routeSeeders(seeders) {
   return { local, remote };
 }
 
+/** A peer URL without its trailing slashes — a loop, because `/\/+$/` backtracks quadratically. */
+function withoutTrailingSlashes(url) {
+  let trimmed = String(url ?? "");
+  while (trimmed.endsWith("/")) trimmed = trimmed.slice(0, -1);
+  return trimmed;
+}
+
 async function request(peer, method, path, body, { timeoutMs = 30000 } = {}) {
   const headers = { "Content-Type": "application/json" };
   const token = remoteToken();
@@ -70,7 +77,7 @@ async function request(peer, method, path, body, { timeoutMs = 30000 } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${String(peer.url).replace(/\/+$/, "")}${path}`, {
+    const res = await fetch(`${withoutTrailingSlashes(peer.url)}${path}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,

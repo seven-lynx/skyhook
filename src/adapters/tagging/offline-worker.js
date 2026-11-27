@@ -242,13 +242,16 @@ function parseResponse(raw, urlCount, validTags, table = enumTable()) {
  * @param {number} [opts.max]       stop after this many URLs
  * @param {"tag"|"retag-add"|"retag-replace"} [opts.mode]
  * @param {number} [opts.tier]
+ * @param {boolean} [opts.retryFailed]     only the rows a failed batch marked
+ * @param {boolean} [opts.requeueUntagged] rows with zero tags it has not given up on
+ * @param {boolean} [opts.reaskNoTags]     only the rows it has, which is finite
  */
 export async function runOfflineTagWorker(opts = {}) {
   const {
     dbPath, provider, model, prompt,
     validTags = null, modelSource = "llm", batchSize = 25, max = null,
     mode = "tag", tier = 0, task: taskKey = null, logFile = null, minTags = null,
-    retryFailed = false, requeueUntagged = false,
+    retryFailed = false, requeueUntagged = false, reaskNoTags = false,
   } = opts;
 
   // Tee console output to a persistent log file so the GUI can show the
@@ -299,25 +302,35 @@ export async function runOfflineTagWorker(opts = {}) {
 
   const reprocess = mode === "retag-add" || mode === "retag-replace" || (taskActive && task.reprocess === true);
 
-  // Row selection. Three mutually exclusive selects beyond the default queue:
+  // Row selection. Four mutually exclusive selects beyond the default queue:
   //   --retry-failed      only the rows a failed batch marked `:failed`
-  //   --requeue-untagged  rows with zero tags, even though a marker exists
-  //                       (a partial model answer marked the whole batch, so the
-  //                       marker alone is not evidence of work)
-  // The marker rows are read, never deleted: resume history survives a requeue.
+  //   --requeue-untagged  rows with zero tags that the model has not yet been
+  //                       asked about and given up on (`:no-tags`)
+  //   --reask-no-tags     only the rows it has (`:no-tags`), which is how a
+  //                       requeue terminates instead of re-buying the same tail
+  //                       every pass
+  // A URL the model answers with no surviving tag gets two markers: the plain
+  // one (so the answer counts as work) and `:no-tags` (so the queue stops
+  // offering it). The marker rows are read, never deleted: resume survives.
   const failedSource = `${resolvedModelSource}:failed`;
+  const noTagSource = `${resolvedModelSource}:no-tags`;
   const hasQuality = !!db.prepare(
     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_url_quality'",
   ).get();
   let taggedFilter;
-  if (requeueUntagged) {
-    taggedFilter = "AND u.id NOT IN (SELECT url_id FROM local_url_tags)";
+  if (reaskNoTags) {
+    // These rows keep their marker, so the select would return them again on
+    // the next iteration of *this* run. `asked` (below) is what stops that.
+    taggedFilter = `AND u.id IN (SELECT url_id FROM local_url_tagged_by WHERE model_source = '${noTagSource}')`;
+  } else if (requeueUntagged) {
+    taggedFilter = `AND u.id NOT IN (SELECT url_id FROM local_url_tags)
+      AND u.id NOT IN (SELECT url_id FROM local_url_tagged_by WHERE model_source = '${noTagSource}')`;
   } else if (retryFailed) {
     taggedFilter = `AND u.id IN (SELECT url_id FROM local_url_tagged_by WHERE model_source = '${failedSource}')`;
   } else if (reprocess) {
     taggedFilter = "";
   } else {
-    taggedFilter = `AND u.id NOT IN (SELECT url_id FROM local_url_tagged_by WHERE model_source IN ('${resolvedModelSource}', '${failedSource}'))`;
+    taggedFilter = `AND u.id NOT IN (SELECT url_id FROM local_url_tagged_by WHERE model_source IN ('${resolvedModelSource}', '${failedSource}', '${noTagSource}'))`;
   }
 
   // A requeue skips junk, because the consumer filters those pages out and a
@@ -332,7 +345,14 @@ export async function runOfflineTagWorker(opts = {}) {
   const minTagsFilter = (resolvedMinTags != null && resolvedMinTags > 0)
     ? `AND (u.id NOT IN (SELECT url_id FROM local_url_tags) OR (SELECT COUNT(*) FROM local_url_tags t WHERE t.url_id = u.id) < ${resolvedMinTags})`
     : "";
-  const URL_QUERY = `
+  // `asked` holds the ids a --reask-no-tags pass has already put to the model in
+  // this run. Those rows keep their `:no-tags` marker, so without this the same
+  // batch would come back on every iteration.
+  const asked = new Set();
+  const askedFilter = () => (asked.size === 0
+    ? ""
+    : `AND u.id NOT IN (${[...asked].map((id) => `'${String(id).replace(/'/g, "''")}'`).join(",")})`);
+  const urlQuery = (except = "") => `
     SELECT u.id, u.title, u.description, u.url
     FROM urls u
     WHERE u.approved = 1 AND u.inactive = 0
@@ -341,6 +361,7 @@ export async function runOfflineTagWorker(opts = {}) {
       ${junkFilter}
       ${taskFilter}
       ${minTagsFilter}
+      ${except}
     ORDER BY u.id
   `;
 
@@ -382,7 +403,7 @@ export async function runOfflineTagWorker(opts = {}) {
 
   const totalEligible = db.prepare(`SELECT COUNT(*) AS c FROM urls WHERE approved = 1 AND inactive = 0 AND title IS NOT NULL AND title != ''`).get().c;
   let done = db.prepare(`SELECT COUNT(*) AS c FROM local_url_tagged_by WHERE model_source = ?`).get(modelSource).c;
-  const totalRemaining = db.prepare(`SELECT COUNT(*) AS c FROM (${URL_QUERY})`).get().c;
+  const totalRemaining = db.prepare(`SELECT COUNT(*) AS c FROM (${urlQuery()})`).get().c;
 
   console.log(`\nOffline tagging worker`);
   console.log(`  mode: ${mode}  model: ${model}  source: ${modelSource}`);
@@ -408,7 +429,7 @@ export async function runOfflineTagWorker(opts = {}) {
     if (max && totalProcessed >= max) break;
 
     const limit = max ? Math.min(batchSize, max - totalProcessed) : batchSize;
-    const urls = db.prepare(`${URL_QUERY} LIMIT ${limit}`).all();
+    const urls = db.prepare(`${reaskNoTags ? urlQuery(askedFilter()) : urlQuery()} LIMIT ${limit}`).all();
     if (urls.length === 0) { console.log("\n[ok] No more URLs to process."); break; }
 
     const batchStart = Date.now();
@@ -429,6 +450,15 @@ export async function runOfflineTagWorker(opts = {}) {
       for (const idx of answered) {
         if (idx < 0 || idx >= urls.length) answered.delete(idx);
       }
+      // Answered with nothing that survived the taxonomy. Recorded, not
+      // retried: a requeue that keeps asking the same URL is the tail that
+      // never reaches zero (#19). `--reask-no-tags` is the way back.
+      const empty = new Set();
+      if (!taskActive) {
+        for (const r of parsed) {
+          if (answered.has(r.url_index) && (!r.tags || r.tags.length === 0)) empty.add(r.url_index);
+        }
+      }
 
       db.transaction(() => {
         if (mode === "retag-replace") {
@@ -437,6 +467,8 @@ export async function runOfflineTagWorker(opts = {}) {
         for (const idx of answered) {
           const u = urls[idx];
           insertTaggedBy.run(u.id, resolvedModelSource);
+          if (empty.has(idx)) insertTaggedBy.run(u.id, noTagSource);
+          if (reaskNoTags) asked.add(u.id);
           // A successful retry must clear its failure marker, or the failure
           // counts can only ever go up.
           if (retryFailed) deleteTaggedBy.run(u.id, failedSource);
@@ -514,6 +546,9 @@ export async function runOfflineTagWorker(opts = {}) {
       const missing = urls.length - answered.size;
       if (missing > 0) {
         console.log(`  batch ${batchCount}: missing: ${missing} of ${urls.length} (left unmarked)`);
+      }
+      if (empty.size > 0) {
+        console.log(`  batch ${batchCount}: ${empty.size} answered with no tag (marked ${noTagSource})`);
       }
       totalProcessed += answered.size;
       done += answered.size;

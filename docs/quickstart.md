@@ -54,6 +54,8 @@ file is gitignored, so a fresh clone starts without one). See
 ```
 
 Or set `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` in `.env` (they override config).
+`.env.example` lists every key that file may set — copy it and fill in only what you
+need; the values in it are empty on purpose, and a test fails if one is not.
 
 ## 4. Schedule
 

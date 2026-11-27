@@ -66,9 +66,18 @@ part of it, so those URLs carry a marker and zero tags.
 skyhook tag --requeue-untagged
 ```
 
-That select re-reads URLs with no `local_url_tags` rows regardless of the marker, and
-skips junk when `local_url_quality` is present. Markers are never deleted, so resume
-history survives.
+That select re-reads URLs with no `local_url_tags` rows even though the marker says the
+model saw them, and skips junk when `local_url_quality` is present. Markers are never
+deleted, so resume history survives.
+
+It converges: a URL the model answers with no surviving tag is marked `<source>:no-tags`
+and left out of later requeues, so the remaining count reaches zero instead of re-buying
+the same tail every pass. When the reason was the prompt or the vocabulary, put exactly
+those rows back:
+
+```bash
+skyhook tag --reask-no-tags
+```
 
 ## Failed batches are never retried
 

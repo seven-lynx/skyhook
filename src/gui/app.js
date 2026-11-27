@@ -43,6 +43,8 @@ const state = {
   live: null, _liveWired: false, logSources: [], followLog: true, userTab: null,
   historySource: null, wasRunning: false, categories: [],
   infoSource: null, taggingGaps: null, tagTasks: [],
+  // W3: what the inspector shows. Client state, not a route — a reload forgets the pick.
+  focus: null, inspRuns: null, inspStaged: null, inspRunAt: null, inspSeq: 0,
   route: { name: "dashboard", params: {} },
   nodeId: "local",
 };
@@ -267,9 +269,13 @@ function applyNodeVisibility() {
 }
 function handleRouteChange() {
   const r = parseRoute();
+  // A pick belongs to the section that offered it: a row chosen in Seeders must not sit behind
+  // the Pipeline's back. The log dock is what survives a section change (W5), not the inspector.
+  if (r.name !== state.route.name) clearFocus();
   state.route = r;
   $$(".surface").forEach((p) => p.classList.toggle("active", p.dataset.route === r.name));
   $$(".rail-item, .navlist-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === r.name));
+  renderInspector();
   // The pane head names the section; a log route names its source instead.
   const workTitle = $("#workTitle");
   if (workTitle) workTitle.textContent = r.name === "log" ? (r.params.source || "log") : ROUTE_TITLES[r.name] || r.name;
@@ -339,8 +345,16 @@ function renderSeeders() {
   if (badge) badge.textContent = state.seeders.length;
   const tbody = $("#seederBody");
   tbody.innerHTML = "";
+  // Roving tabindex: one tab stop for the whole table, arrows inside it (see wireRowFocus).
+  const roveSource = rowFocusSource || (rows[0] && rows[0].source);
   for (const s of rows) {
     const tr = document.createElement("tr");
+    tr.dataset.source = s.source;
+    tr.tabIndex = s.source === roveSource ? 0 : -1;
+    if (s.source === state.focus) {
+      tr.classList.add("focused");
+      tr.setAttribute("aria-current", "true");
+    }
     const statusCls = s.lastStatus === "ok" ? "ok" : s.lastStatus ? "err" : "";
     const result = resultText(s.lastResult);
     const isRunning = runningSet.has(s.source);
@@ -369,7 +383,7 @@ function renderSeeders() {
       const result = resultText(s.lastResult);
       const isRunning = runningSet.has(s.source);
       return (
-        '<div class="seeder-card' + (isRunning ? " running" : "") + '">' +
+        '<div class="seeder-card' + (isRunning ? " running" : "") + (s.source === state.focus ? " focused" : "") + '" data-source="' + esc(s.source) + '">' +
           '<div class="sc-head">' +
             '<div class="sc-check"><input type="checkbox" data-source="' + esc(s.source) + '"' + (state.selected.has(s.source) ? " checked" : "") + ' aria-label="Select ' + esc(s.source) + '"></div>' +
             '<div class="sc-title">' +
@@ -1013,6 +1027,361 @@ let logPageState = {
   followLog: true,
 };
 
+/* ── pane mechanics ──────────────────────────────────────────────────────── */
+
+/* Pane sizes are the only shell state worth persisting: three integers, clamped on read so a
+ * value a stale session wrote can never leave a pane unusable. They are written on :root, never
+ * on #workbench, because a collapse rule re-declares the same variable on the grid container —
+ * an inline value there would win and the pane could never collapse. */
+const PANES = {
+  nav:  { css: "--nav-w",  key: "skyhook.navW",  min: 140, max: 420, def: 220, axis: "x" },
+  insp: { css: "--insp-w", key: "skyhook.inspW", min: 240, max: 560, def: 300, axis: "x" },
+  dock: { css: "--dock-h", key: "skyhook.dockH", min: 120, max: 480, def: 220, axis: "y" },
+};
+const PANE_LABEL = { nav: "navigator", insp: "inspector", dock: "log dock" };
+
+/* A dock taller than two fifths of the window leaves no work surface on a short screen. */
+function paneMax(name) {
+  return name === "dock"
+    ? Math.min(PANES.dock.max, Math.round(window.innerHeight * 0.4))
+    : PANES[name].max;
+}
+
+function clampPane(name, value) {
+  const p = PANES[name];
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return p.def;
+  return Math.min(paneMax(name), Math.max(p.min, n));
+}
+
+function currentPaneSize(name) {
+  const raw = document.documentElement.style.getPropertyValue(PANES[name].css);
+  return clampPane(name, parseFloat(raw) || PANES[name].def);
+}
+
+function setPaneSize(name, value, persist = false) {
+  const p = PANES[name];
+  const n = clampPane(name, value);
+  const wb = $("#workbench");
+  if (!wb) return n;
+  document.documentElement.style.setProperty(p.css, n + "px");
+  const split = wb.querySelector('.splitter[data-pane="' + name + '"]');
+  if (split) {
+    split.setAttribute("aria-valuenow", String(n));
+    split.setAttribute("aria-valuemin", String(p.min));
+    split.setAttribute("aria-valuemax", String(paneMax(name)));
+  }
+  if (persist) localStorage.setItem(p.key, String(n));
+  return n;
+}
+
+function restorePaneSizes() {
+  for (const name of Object.keys(PANES)) {
+    const stored = localStorage.getItem(PANES[name].key);
+    setPaneSize(name, stored == null ? PANES[name].def : stored);
+  }
+}
+
+/* The pointer's position is the size, so a drag cannot jump by the grab offset: nav is measured
+ * from the rail's edge, the inspector from the window's right, the dock from the status bar. */
+function paneSizeFromPointer(name, ev) {
+  const wb = $("#workbench");
+  if (!wb) return PANES[name].def;
+  const rect = wb.getBoundingClientRect();
+  const cs = getComputedStyle(wb);
+  const px = (v) => parseFloat(cs.getPropertyValue(v)) || 0;
+  if (name === "nav") return ev.clientX - rect.left - px("--rail-w");
+  if (name === "insp") return rect.right - ev.clientX;
+  return rect.bottom - ev.clientY - px("--status-h");
+}
+
+/* F6 walks the regions in visual order and skips whatever a collapse or a breakpoint hides. */
+function focusNextRegion(dir) {
+  const regions = ["rail", "nav", "work", "insp", "dock"]
+    .map((id) => document.getElementById(id))
+    .filter((el) => el && el.offsetParent !== null);
+  if (!regions.length) return;
+  const current = regions.find((el) => el.contains(document.activeElement));
+  const from = current ? regions.indexOf(current) : (dir > 0 ? -1 : 0);
+  regions[(from + dir + regions.length) % regions.length].focus();
+}
+
+function wirePanes() {
+  const wb = $("#workbench");
+  if (!wb) return;
+  restorePaneSizes();
+
+  wb.querySelectorAll(".splitter").forEach((split) => {
+    const name = split.dataset.pane;
+    const p = PANES[name];
+    if (!p) return;
+    let dragging = false;
+
+    split.addEventListener("pointerdown", (ev) => {
+      dragging = true;
+      split.setPointerCapture(ev.pointerId);
+      document.body.classList.add("resizing");
+      document.body.style.cursor = p.axis === "x" ? "col-resize" : "row-resize";
+    });
+    split.addEventListener("pointermove", (ev) => {
+      if (dragging) setPaneSize(name, paneSizeFromPointer(name, ev));
+    });
+    const stop = (ev) => {
+      if (!dragging) return;
+      dragging = false;
+      if (split.hasPointerCapture(ev.pointerId)) split.releasePointerCapture(ev.pointerId);
+      document.body.classList.remove("resizing");
+      document.body.style.cursor = "";
+      setPaneSize(name, currentPaneSize(name), true);
+    };
+    split.addEventListener("pointerup", stop);
+    split.addEventListener("pointercancel", stop);
+    split.addEventListener("dblclick", () => setPaneSize(name, p.def, true));
+
+    // A separator only a pointer can move is not reachable by keyboard at all.
+    split.addEventListener("keydown", (ev) => {
+      const now = currentPaneSize(name);
+      const step = ev.shiftKey ? 48 : 16;
+      let next = null;
+      if (p.axis === "x" && ev.key === "ArrowLeft") next = now - step;
+      if (p.axis === "x" && ev.key === "ArrowRight") next = now + step;
+      if (p.axis === "y" && ev.key === "ArrowUp") next = now - step;
+      if (p.axis === "y" && ev.key === "ArrowDown") next = now + step;
+      if (ev.key === "Home") next = p.def;
+      if (next == null) return;
+      ev.preventDefault();
+      setPaneSize(name, next, true);
+    });
+  });
+
+
+  // Collapse toggles. The dock's own attribute is its open/collapsed state (W5 owns its body);
+  // nav and inspector share `data-collapsed` as a whitespace-separated list.
+  $$(".pane-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.pane;
+      const open = btn.getAttribute("aria-expanded") !== "true";
+      btn.setAttribute("aria-expanded", String(open));
+      const label = (open ? "Collapse " : "Expand ") + (PANE_LABEL[name] || name);
+      btn.title = label;
+      const sr = btn.querySelector(".sr-only");
+      if (sr) sr.textContent = label;
+      if (name === "dock") {
+        wb.dataset.dock = open ? "open" : "collapsed";
+      } else {
+        const collapsed = new Set((wb.dataset.collapsed || "").split(/\s+/).filter(Boolean));
+        if (open) collapsed.delete(name); else collapsed.add(name);
+        if (collapsed.size) wb.dataset.collapsed = [...collapsed].join(" ");
+        else delete wb.dataset.collapsed;
+      }
+      // Focus must not die inside the pane that just went away.
+      const pane = document.getElementById(name);
+      if (!open && pane && pane.contains(document.activeElement)) $("#work").focus();
+    });
+  });
+
+  // A restored size can be too tall for a window that shrank since it was stored.
+  window.addEventListener("resize", () => {
+    for (const name of Object.keys(PANES)) setPaneSize(name, currentPaneSize(name));
+  });
+}
+
+
+/* Row focus is a roving tabindex: one row of the seeder table is Tab-reachable and the arrows
+ * move inside it. What is *picked* is `state.focus` (below) — this decides only where focus lands
+ * and how it leaves; the two are separate on purpose, or arrowing would refetch on every step. */
+let rowFocusSource = null;
+
+function roveTo(tr) {
+  const tbody = $("#seederBody");
+  if (!tbody || !tr) return;
+  for (const row of tbody.rows) row.tabIndex = row === tr ? 0 : -1;
+  rowFocusSource = tr.dataset.source || null;
+}
+
+function wireRowFocus() {
+  const tbody = $("#seederBody");
+  if (!tbody) return;
+  tbody.addEventListener("focusin", (ev) => {
+    const tr = ev.target.closest("tr");
+    if (tr && tr.parentElement === tbody) roveTo(tr);
+  });
+  tbody.addEventListener("keydown", (ev) => {
+    const tr = ev.target.closest("tr");
+    if (!tr || tr.parentElement !== tbody) return;
+    const rows = [...tbody.rows];
+    const at = rows.indexOf(tr);
+    let next = null;
+    if (ev.key === "ArrowDown") next = rows[Math.min(at + 1, rows.length - 1)];
+    else if (ev.key === "ArrowUp") next = rows[Math.max(at - 1, 0)];
+    else if (ev.key === "Home") next = rows[0];
+    else if (ev.key === "End") next = rows[rows.length - 1];
+    else if (ev.key === "Enter" && ev.target === tr) {
+      // Enter is the keyboard's click, so it picks. A key pressed on the row's own link or
+      // checkbox is that control's, and never reaches here.
+      ev.preventDefault();
+      setFocus(tr.dataset.source);
+      return;
+    }
+    if (!next) return;
+    ev.preventDefault();
+    roveTo(next);
+    next.focus();
+  });
+}
+
+
+/* ── selection and the inspector (W3) ─────────────────────────────────────
+ * One pick at a time, held in `state.focus`. The inspector renders from `state.seeders`, which the
+ * list already fetched, so a refresh costs no request; only history and the staged count are
+ * fetched, and only when the pick changes or the focused seeder's last run does. A poll that
+ * refetched both every 10 s would put a source's whole staged set on the wire 8,640 times a day. */
+
+const RUN_BARS = 20;
+
+function focusedSeeder() {
+  return state.seeders.find((s) => s.source === state.focus) || null;
+}
+
+function setFocus(source) {
+  if (!source) { clearFocus(); return; }
+  if (state.focus === source) return;
+  // Re-rendering the table replaces the row the keyboard was on, so the new one takes focus back.
+  const hadRow = document.activeElement && document.activeElement.tagName === "TR"
+    && document.activeElement.dataset.source === source;
+  state.focus = source;
+  state.inspRuns = null;
+  state.inspStaged = null;
+  state.inspRunAt = null;
+  renderSeeders();
+  if (hadRow) {
+    const tr = $$("#seederBody tr").find((row) => row.dataset.source === source);
+    if (tr) tr.focus();
+  }
+  renderInspector();
+  loadInspector(source);
+}
+
+function clearFocus() {
+  if (!state.focus) return;
+  state.focus = null;
+  state.inspRuns = null;
+  state.inspStaged = null;
+  state.inspRunAt = null;
+  renderInspector();
+}
+
+async function loadInspector(source) {
+  const seq = ++state.inspSeq;
+  const before = (state.seeders.find((s) => s.source === source) || {}).lastRunAt || null;
+  const [runs, staged] = await Promise.all([
+    get("/api/history/" + encodeURIComponent(source)).catch(() => []),
+    get("/api/staged?source=" + encodeURIComponent(source)).catch(() => null),
+  ]);
+  // A click on another row wins: a late answer for the previous pick is dropped, not painted.
+  if (seq !== state.inspSeq || state.focus !== source) return;
+  state.inspRuns = Array.isArray(runs) ? runs : [];
+  state.inspStaged = staged && Array.isArray(staged.rows) ? staged.rows.length : null;
+  state.inspRunAt = before;
+  renderInspector();
+}
+
+function renderInspector() {
+  const body = $("#inspBody");
+  if (!body) return;
+  const s = focusedSeeder();
+  if (!s) {
+    body.innerHTML =
+      '<p class="pane-empty">Nothing selected.</p>' +
+      '<p class="pane-note">Pick a seeder in the work surface to see its cadence, recent runs and actions.</p>';
+    return;
+  }
+  // A run that finished since the fetch leaves the cached history one run short: refetch it.
+  if (state.inspRuns && state.inspRunAt !== (s.lastRunAt || null)) loadInspector(s.source);
+
+  const result = resultText(s.lastResult);
+  const facts = [
+    ["Script", esc(s.script)],
+    ["Cadence", esc(s.cadence) + (s.scheduled ? "" : ' <span class="muted">manual</span>')],
+    ["Next run", esc(fmtIn(s.nextRunAt))],
+    ["Last run", esc(fmtAgo(s.lastRunAt))],
+    ["Last result", esc(result || "-"), s.lastStatus === "ok" ? "ok" : s.lastStatus ? "err" : ""],
+    ["Duration", esc(fmtElapsed(s.lastDurationMs))],
+    ["Staged rows", state.inspStaged == null ? "-" : String(state.inspStaged)],
+    ["Category", esc(s.categoryLabel || "") + (s.subcategoryLabel ? " · " + esc(s.subcategoryLabel) : "")],
+    ["Node", esc(s.node || "-")],
+  ];
+  if (s.lastError) facts.push(["Error", esc(s.lastError), "err"]);
+
+  const actions = [
+    ["run", "Run", "ic-play"],
+    ["schedule", "Schedule", "ic-cog"],
+    ["toggle", s.scheduled ? "Disable" : "Enable", "ic-power"],
+    ["log", "Log", "ic-terminal"],
+    ["curation", "Curation", "ic-tag"],
+  ].map(([act, label, icon]) =>
+    '<button class="btn btn-sm" type="button" data-insp="' + act + '">' +
+      '<svg class="ic" aria-hidden="true"><use href="#' + icon + '"/></svg>' +
+      "<span>" + esc(label) + "</span></button>").join("");
+
+  body.innerHTML =
+    '<div class="insp">' +
+      '<div class="insp-id">' +
+        '<div class="insp-title" title="' + esc(s.script) + '">' + esc(s.source) + "</div>" +
+        '<div class="insp-sub">' + esc(s.displayName || s.script) + "</div>" +
+      "</div>" +
+      '<div class="insp-actions">' + actions + "</div>" +
+      '<div class="info-grid">' +
+        facts.map(([k, v, cls]) =>
+          '<div class="info-k">' + esc(k) + '</div>' +
+          '<div class="info-v' + (cls ? " " + cls : "") + '">' + v + "</div>").join("") +
+      "</div>" +
+      '<div class="insp-section"><span>Recent runs</span>' +
+        "<span>" + (state.inspRuns == null ? "-" : state.inspRuns.length) + "</span></div>" +
+      runStrip(state.inspRuns) +
+    "</div>";
+}
+
+/* The strip is one bar per run, so a source that fails every other time *looks* like one. Bar height
+ * is rows found, colour is the run's status; the newest is at the right, where a reader's eye lands. */
+function runStrip(runs) {
+  if (runs == null) return '<p class="pane-note">Loading history...</p>';
+  if (!runs.length) return '<p class="pane-note">No runs recorded yet.</p>';
+  const recent = runs.slice(0, RUN_BARS).reverse();
+  const peak = Math.max(1, ...recent.map((r) => (r.staged || 0) + (r.dead || 0)));
+  const step = 100 / RUN_BARS;
+  const bars = recent.map((r, i) => {
+    const found = (r.staged || 0) + (r.dead || 0);
+    const h = Math.max(1.5, Math.round((16 * found / peak) * 10) / 10);
+    const cls = r.status === "ok" ? "ok" : "err";
+    const tip = r.started_at + " - " + r.status + ", staged " + (r.staged || 0) + ", dead " + (r.dead || 0);
+    return '<rect class="insp-run ' + cls + '" x="' + (i * step + 0.8).toFixed(1) +
+      '" y="' + (20 - h).toFixed(1) + '" width="' + (step - 1.6).toFixed(1) + '" height="' + h + '">' +
+      "<title>" + esc(tip) + "</title></rect>";
+  }).join("");
+  return '<svg class="insp-runs" viewBox="0 0 100 20" preserveAspectRatio="none" role="img" aria-label="' +
+    esc("The last " + recent.length + " runs, oldest first") + '">' + bars + "</svg>";
+}
+
+/* Every action here is a button the table already has, reached through the same function — the
+ * inspector is a second way in, never a second implementation. */
+function wireInspector() {
+  const body = $("#inspBody");
+  if (!body) return;
+  body.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-insp]");
+    const source = state.focus;
+    if (!btn || !source) return;
+    const act = btn.dataset.insp;
+    if (act === "run") runSources([source]);
+    else if (act === "schedule") openSchedule(source);
+    else if (act === "toggle") toggleSchedule(source);
+    else if (act === "log") navigate("#/log/" + encodeURIComponent(source));
+    else if (act === "curation") navigate("#/curation");
+  });
+}
+
+
 function openLogPage(source) {
   logPageState.source = source;
   const runningSources = state.running.map((r) => r.source);
@@ -1152,6 +1521,16 @@ async function stopRuns(source) {
 
 async function bulkEnable()  { for (const s of state.selected) await post("/api/enable", { source: s, cadence: "weekly" }).catch(() => {}); await refreshAll(); }
 async function bulkDisable() { for (const s of state.selected) await post("/api/disable", { source: s }).catch(() => {}); await refreshAll(); }
+
+/* The table's power button and the inspector's are the same request; a schedule toggle is one
+ * decision either way, so it lives in one function and both call it. */
+function toggleSchedule(source) {
+  const s = state.seeders.find((x) => x.source === source);
+  const p = s && s.scheduled
+    ? post("/api/disable", { source }).then(() => toast("Disabled " + source + "."))
+    : post("/api/enable", { source, cadence: "weekly" }).then(() => toast("Enabled " + source + " (weekly)."));
+  return p.then(refreshAll);
+}
 
 async function toggleRemote(currentlyOn) {
   try {
@@ -1401,18 +1780,24 @@ function bind() {
     });
     el.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-action]");
-      if (!btn) return;
-      const action = btn.dataset.action;
-      const source = btn.dataset.source;
-      if (action === "run") runSources([source]);
-      else if (action === "schedule") openSchedule(source);
-      else if (action === "toggle") {
-        const s = state.seeders.find((x) => x.source === source);
-        const p = s && s.scheduled
-          ? post("/api/disable", { source }).then(() => toast("Disabled " + source + "."))
-          : post("/api/enable", { source, cadence: "weekly" }).then(() => toast("Enabled " + source + " (weekly)."));
-        p.then(refreshAll);
+      if (btn) {
+        const action = btn.dataset.action;
+        const source = btn.dataset.source;
+        if (action === "run") runSources([source]);
+        else if (action === "schedule") openSchedule(source);
+        else if (action === "toggle") toggleSchedule(source);
+        return;
       }
+      // A click anywhere else in the row is the pick (W3). The source link and the checkbox keep
+      // their own behaviour, so a click on the name still opens its log and nothing is swallowed.
+      if (e.target.closest("a, input, button, label")) return;
+      const picked = e.target.closest("[data-source]");
+      if (picked) setFocus(picked.dataset.source);
+    });
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("a, input, button, label")) return;
+      const picked = e.target.closest("[data-source]");
+      if (picked) setFocus(picked.dataset.source);
     });
   }
 
@@ -1551,8 +1936,13 @@ function bind() {
     });
   });
 
+  wirePanes();
+  wireRowFocus();
+  wireInspector();
+
   // Keyboard shortcuts (skip when typing in a form).
   document.addEventListener("keydown", (e) => {
+    if (e.key === "F6") { e.preventDefault(); focusNextRegion(e.shiftKey ? -1 : 1); return; }
     if (e.target.matches("input, textarea, select")) return;
     if (e.key === "/") { e.preventDefault(); if ($("#filter")) $("#filter").focus(); }
     else if (e.key === "r" && !e.metaKey && !e.ctrlKey) refreshAll();

@@ -189,6 +189,52 @@ export async function ensureModelLoaded(provider, modelId) {
   }
 }
 
+/**
+ * Resolve the id a tag pass is about to send against what the provider lists,
+ * load it when the provider can (LM Studio's native REST does; Ollama and a
+ * plain OpenAI endpoint load on demand), and refuse — naming the ids it does
+ * list — when the model is simply not there.
+ *
+ * A configured id may carry a quantisation suffix (`model@q4_k_m`): the base id
+ * is what `/v1/models` lists, the suffix is what the inference server wants.
+ *
+ * @returns {{ ok: true, model: string, loaded?: boolean, warning?: string }
+ *         | { ok: false, error: string, listed: string[] }}
+ */
+export async function resolveTaggingModel(provider, modelId) {
+  const wanted = String(modelId ?? "").trim();
+  if (!wanted) return { ok: false, error: "no tagging model is configured (tagging.model)", listed: [] };
+  const base = wanted.replace(/@.*$/, "");
+
+  const { models, errors } = await detectModels([provider]);
+  const listed = models.map((m) => m.id);
+  // Nothing to resolve against: an unreachable endpoint is the first
+  // completion's failure to report, not a refusal here.
+  if (listed.length === 0) {
+    return { ok: true, model: wanted, warning: (errors && errors[0]) || `provider "${provider?.id}" lists no models` };
+  }
+
+  const hit = models.find((m) => m.id === base)
+    || models.find((m) => m.id === wanted)
+    || models.find((m) => String(m.id).startsWith(`${base}@`));
+  if (!hit) {
+    return {
+      ok: false,
+      error: `model "${wanted}" is not listed by "${provider?.id}"; it has: ${listed.join(", ")}`,
+      listed,
+    };
+  }
+  if (hit.isLoaded) return { ok: true, model: wanted, loaded: true };
+
+  const load = await ensureModelLoaded(provider, hit.id);
+  if (load?.error) {
+    // Being listed is enough for a provider that loads on demand, so this is a
+    // warning: the pass proceeds and the first completion says what broke.
+    return { ok: true, model: wanted, warning: `could not preload "${hit.id}": ${load.error}` };
+  }
+  return { ok: true, model: wanted, loaded: true, loadTimeSeconds: load?.loadTimeSeconds };
+}
+
 export function loadText(file) {
   if (!file || !existsSync(file)) return null;
   return readFileSync(file, "utf8");

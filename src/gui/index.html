@@ -75,7 +75,7 @@
     </header>
 
     <!-- ── rail (desktop sections) ─────────────────────────────────────── -->
-    <nav class="rail" id="rail" aria-label="Sections">
+    <nav class="rail" id="rail" aria-label="Sections" tabindex="-1">
       <a class="rail-item" href="#/" data-route="dashboard" title="Dashboard">
         <svg class="ic" aria-hidden="true"><use href="#ic-home"/></svg><span class="sr-only">Dashboard</span>
       </a>
@@ -102,9 +102,13 @@
     </nav>
 
     <!-- ── navigator (a section list until a section has a tree) ────────── -->
-    <section class="pane navigator" id="nav" aria-label="Navigator">
+    <section class="pane navigator" id="nav" aria-label="Navigator" tabindex="-1">
       <div class="pane-head">
         <span class="pane-title" id="navTitle">Sections</span>
+        <button class="pane-btn" type="button" data-pane="nav" aria-controls="nav" aria-expanded="true" title="Collapse navigator">
+          <svg class="ic" aria-hidden="true"><use href="#ic-chevron-right"/></svg>
+          <span class="sr-only">Collapse navigator</span>
+        </button>
       </div>
       <div class="pane-body">
         <nav class="navlist" aria-label="All sections">
@@ -120,7 +124,7 @@
     </section>
 
     <!-- ── work surface ────────────────────────────────────────────────── -->
-    <main class="pane work" id="work">
+    <main class="pane work" id="work" tabindex="-1">
       <div class="pane-head">
         <span class="pane-title" id="workTitle">Dashboard</span>
         <span class="pane-meta" id="workMeta"></span>
@@ -352,9 +356,13 @@
     </main>
 
     <!-- ── inspector ───────────────────────────────────────────────────── -->
-    <aside class="pane inspector" id="insp" aria-label="Inspector">
+    <aside class="pane inspector" id="insp" aria-label="Inspector" tabindex="-1">
       <div class="pane-head">
         <span class="pane-title">Inspector</span>
+        <button class="pane-btn" type="button" data-pane="insp" aria-controls="insp" aria-expanded="true" title="Collapse inspector">
+          <svg class="ic" aria-hidden="true"><use href="#ic-chevron-right"/></svg>
+          <span class="sr-only">Collapse inspector</span>
+        </button>
       </div>
       <div class="pane-body" id="inspBody">
         <p class="pane-empty">Nothing selected.</p>
@@ -363,10 +371,14 @@
     </aside>
 
     <!-- ── log dock (collapsed until a log is open) ────────────────────── -->
-    <section class="pane dock" id="dock" aria-label="Log dock">
+    <section class="pane dock" id="dock" aria-label="Log dock" tabindex="-1">
       <div class="dock-head">
         <div class="dock-tabs" id="dockTabs" role="tablist" aria-label="Open logs"></div>
         <span class="pane-note" id="dockNote">no log open</span>
+        <button class="pane-btn" type="button" data-pane="dock" aria-controls="dock" aria-expanded="false" title="Expand log dock">
+          <svg class="ic" aria-hidden="true"><use href="#ic-chevron-right"/></svg>
+          <span class="sr-only">Expand log dock</span>
+        </button>
       </div>
     </section>
 
@@ -379,6 +391,11 @@
         <span class="status-item"><code>g</code> then <code>s</code> to jump</span>
       </span>
     </footer>
+
+    <!-- ── pane splitters (overlays: the grid has no gutters to hold a handle) ──── -->
+    <div class="splitter" data-pane="nav" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize navigator"></div>
+    <div class="splitter" data-pane="insp" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize inspector"></div>
+    <div class="splitter" data-pane="dock" role="separator" tabindex="0" aria-orientation="horizontal" aria-label="Resize log dock"></div>
 
     <!-- ── bottom nav (mobile) ─────────────────────────────────────── -->
     <nav class="bottomnav" id="bottomnav" aria-label="Primary (mobile)">

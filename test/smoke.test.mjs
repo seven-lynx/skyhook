@@ -11,6 +11,7 @@ import { mergeRows, filterRows, readStaged, writeStagedSource } from "../src/cor
 import { pruneStaged, clearDiscovery } from "../src/core/data.js";
 import { livenessVerdict, resolveStageOnly } from "../src/core/seed.js";
 import { mergeRemoteRows } from "../src/core/sync.js";
+import { fetchSiteMeta } from "../src/engine/seeder-engine.js";
 
 const root = process.cwd();
 
@@ -249,6 +250,20 @@ test("tag() returns category/subcategory/tags via a stubbed provider", async () 
     assert.equal(out[0].category, "TECHNOLOGY");
     assert.equal(out[0].subcategory, "PROGRAMMING_SOFTWARE");
     assert.deepEqual(out[0].tags, ["news", "how-to"]);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("a site title is decoded once, so an escaped entity stays text", async () => {
+  // `&amp;lt;` is the HTML for the text `&lt;`. Unescaping `&amp;` first would turn it into
+  // `<` — the double-decode `js/double-escaping` reports (#37). One level, never two.
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response("<title>A &amp;lt; B &amp; C</title>", { status: 200 });
+  try {
+    const meta = await fetchSiteMeta("https://example.test/");
+    assert.equal(meta.title, "A &lt; B & C", "&amp;lt; decodes one level, not two");
   } finally {
     globalThis.fetch = original;
   }

@@ -745,14 +745,22 @@ export function writeTimer(seeders = buildIndex()) {
 
 // ── Seeder creation / deletion (GUI "new seeder" flow) ──────────────────────
 
+/**
+ * A URL or host as a seeder source name.
+ *
+ * The hyphen trim is two loops rather than `^-+|-+$` or `-+$`: a right-anchored run of one
+ * character retries at every position on a string that does not end in it, which is the
+ * quadratic shape `js/polynomial-redos` reports (#37).
+ */
 function slugifySource(s) {
-  const t = String(s || "")
+  let t = String(s || "")
     .toLowerCase()
     .trim()
     .replace(/^https?:\/\//, "")
     .replace(/^www\./, "")
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    .replace(/[^a-z0-9-]+/g, "-");
+  while (t.startsWith("-")) t = t.slice(1);
+  while (t.endsWith("-")) t = t.slice(0, -1);
   return t.slice(0, 60) || null;
 }
 
@@ -762,13 +770,14 @@ function escapeRegex(s) {
 
 function decodeHtmlMeta(s) {
   return String(s ?? "")
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&nbsp;/g, " ")
-    .replace(/&#\d+;|&#x[0-9a-f]+;/gi, " ");
+    .replace(/&#\d+;|&#x[0-9a-f]+;/gi, " ")
+    // `&amp;` last: unescaping the escape character first decodes `&amp;lt;` twice (#37).
+    .replace(/&amp;/g, "&");
 }
 
 /** Categories + subcategories for the "new seeder" form (single source of truth). */

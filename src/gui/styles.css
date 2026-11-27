@@ -343,6 +343,98 @@ code, kbd {
   color: var(--text-muted); margin: var(--space-3) 0 var(--space-1);
 }
 
+/* ── pane mechanics ─────────────────────────────────────────────────────── */
+
+/* A collapsed pane keeps its head as a 26 px strip. Collapsing to zero would take the only
+ * control that brings it back off screen — the toggle lives in the head it just hid. */
+.workbench[data-collapsed~="nav"] { --nav-w: var(--head-h); }
+.workbench[data-collapsed~="insp"] { --insp-w: var(--head-h); }
+.workbench[data-collapsed~="nav"] #nav .pane-head,
+.workbench[data-collapsed~="insp"] #insp .pane-head {
+  justify-content: center; padding: 0; border-bottom: 0;
+}
+.workbench[data-collapsed~="nav"] #nav .pane-title,
+.workbench[data-collapsed~="nav"] #nav .pane-body,
+.workbench[data-collapsed~="insp"] #insp .pane-title,
+.workbench[data-collapsed~="insp"] #insp .pane-body { display: none; }
+
+/* The toggle is head-sized on purpose: a full button would not fit the strip it lives in. */
+.pane-btn {
+  width: 18px; height: 18px; margin-left: auto; flex: 0 0 auto;
+  display: grid; place-items: center;
+  background: transparent; border: 0; border-radius: var(--radius-sm);
+  color: var(--text-subtle); cursor: pointer;
+}
+.pane-btn:hover { background: var(--bg-hover); color: var(--text); }
+.pane-btn .ic {
+  width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2;
+  transition: transform var(--dur) var(--ease);
+}
+/* The chevron points at the edge the pane collapses to, so it reads the same in all three. */
+#nav .pane-btn[aria-expanded="true"] .ic { transform: rotate(180deg); }
+#insp .pane-btn[aria-expanded="true"] .ic { transform: none; }
+#insp .pane-btn[aria-expanded="false"] .ic { transform: rotate(180deg); }
+#dock .pane-btn .ic { transform: rotate(-90deg); }
+#dock .pane-btn[aria-expanded="true"] .ic { transform: rotate(90deg); }
+.workbench[data-collapsed~="nav"] #nav .pane-btn,
+.workbench[data-collapsed~="insp"] #insp .pane-btn { margin-left: 0; }
+
+/* F6 lands on the region itself, not a child; inset so a full-bleed pane cannot clip the ring. */
+#rail:focus-visible, #nav:focus-visible, #work:focus-visible,
+#insp:focus-visible, #dock:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+
+/* A row is a tab stop (roving: one 0, the rest -1), so it has to show where focus is. */
+#seederBody tr:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+
+/* The pick is a state, not a hover: one brand edge on the left, the shape a running card already
+ * uses. Focus is the outline above, so the two never read as the same thing. The edge is on the
+ * first cell, not the row — Chromium does not paint a box-shadow on a `tr`. */
+#seederBody tr.focused { background: var(--bg-overlay); }
+#seederBody tr.focused td:first-child { box-shadow: inset 2px 0 0 var(--brand); }
+.seeder-card.focused {
+  background: var(--bg-overlay);
+  border-color: var(--border-strong);
+  box-shadow: inset 2px 0 0 var(--brand);
+}
+
+
+
+/* Splitters are overlays, not grid tracks: the grid has no gutters, and an overlay costs no
+ * change to grid-template-areas. Each handle is 6 px of hit area around a 1 px seam. */
+.workbench { position: relative; }
+.splitter {
+  position: absolute; z-index: 6;
+  padding: 0; border: 0; background: transparent;
+  touch-action: none;
+}
+.splitter::after {
+  content: ""; position: absolute; background: var(--seam-strong);
+  transition: background var(--dur) var(--ease);
+}
+.splitter[data-pane="nav"] {
+  top: var(--bar-h); bottom: calc(var(--status-h) + var(--dock-h));
+  left: calc(var(--rail-w) + var(--nav-w) - 3px); width: 6px; cursor: col-resize;
+}
+.splitter[data-pane="nav"]::after { top: 0; bottom: 0; left: 2px; width: 1px; }
+.splitter[data-pane="insp"] {
+  top: var(--bar-h); bottom: calc(var(--status-h) + var(--dock-h));
+  right: calc(var(--insp-w) - 3px); width: 6px; cursor: col-resize;
+}
+.splitter[data-pane="insp"]::after { top: 0; bottom: 0; left: 2px; width: 1px; }
+.splitter[data-pane="dock"] {
+  left: var(--rail-w); right: 0;
+  bottom: calc(var(--status-h) + var(--dock-h) - 3px); height: 6px; cursor: row-resize;
+}
+.splitter[data-pane="dock"]::after { left: 0; right: 0; top: 2px; height: 1px; }
+.splitter:hover::after, .splitter:focus-visible::after { background: var(--backlight); }
+/* A collapsed pane has no edge to drag: the handle would resize a value the rule masks anyway. */
+.workbench[data-collapsed~="nav"] .splitter[data-pane="nav"],
+.workbench[data-collapsed~="insp"] .splitter[data-pane="insp"],
+.workbench[data-dock="collapsed"] .splitter[data-pane="dock"] { display: none; }
+body.resizing { user-select: none; }
+
+
+
 /* ── navigator ──────────────────────────────────────────────────────────── */
 
 .navigator { grid-area: nav; border-right: 1px solid var(--seam-strong); }
@@ -368,6 +460,39 @@ code, kbd {
 
 .inspector { grid-area: insp; border-left: 1px solid var(--seam-strong); }
 .inspector .pane-body { padding: 0 var(--space-3) var(--space-3); }
+
+/* The inspector is read at a glance from 300 px, so it is a stack of dense mono rows, not prose:
+ * identity, the five actions, the facts the table already shows, then the run strip. */
+.insp { display: flex; flex-direction: column; gap: var(--space-3); padding-top: var(--space-3); }
+.insp-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.insp-title {
+  font-family: var(--font-mono); font-size: var(--text-md); font-weight: 600;
+  color: var(--text); word-break: break-word;
+}
+.insp-sub {
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-subtle);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.insp-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-1); }
+.insp-actions .btn { justify-content: flex-start; height: var(--btn-h); padding: 0 var(--space-2); }
+.insp-actions .btn:last-child { grid-column: 1 / -1; }
+
+.insp .info-grid { font-size: var(--text-sm); gap: 0 var(--space-2); }
+.insp .info-grid .info-v { word-break: break-word; }
+
+.insp-section {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-subtle);
+  letter-spacing: .1em; text-transform: uppercase;
+}
+.insp-runs { display: block; width: 100%; height: 36px; }
+/* One bar per run: rows found decide the height, the run's status decides the colour. A failed run
+ * is --err even at zero rows, because "it failed" is the fact, not how much it failed to find. */
+.insp-run.ok  { fill: var(--ok); }
+.insp-run.err { fill: var(--err); }
 
 /* ── work surface ───────────────────────────────────────────────────────── */
 
@@ -412,6 +537,7 @@ code, kbd {
 @media (max-width: 1180px) {
   .workbench { grid-template-columns: var(--rail-w) var(--nav-w) minmax(0, 1fr) 0; }
   .workbench > .inspector { display: none; }
+  .workbench > .splitter[data-pane="insp"] { display: none; }
 }
 
 /* The phone has no panes: one scrolling surface and the bottom nav, as before. These rules
@@ -427,7 +553,7 @@ code, kbd {
       "work"
       "bottomnav";
   }
-  .rail, .navigator, .inspector, .dock, .status { display: none; }
+  .rail, .navigator, .inspector, .dock, .status, .splitter { display: none; }
 }
 
 
@@ -1150,9 +1276,9 @@ td .row-link:hover { color: var(--brand); }
 
 .log-page {
   display: flex; flex-direction: column;
-  /* The work pane's height, minus the chrome above and below it: bar, status, dock strip and
-   * its own pane head. The dock replaces this page once W5 lands. */
-  height: calc(100dvh - var(--bar-h) - var(--status-h) - var(--dock-collapsed-h) - var(--head-h));
+  /* The work pane's height, minus the chrome above and below it: bar, status, the dock row
+   * (whatever height it has) and its own pane head. The dock replaces this page once W5 lands. */
+  height: calc(100dvh - var(--bar-h) - var(--status-h) - var(--dock-h) - var(--head-h));
   margin: calc(-1 * var(--space-4));
 }
 @media (max-width: 720px) {

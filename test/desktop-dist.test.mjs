@@ -22,6 +22,7 @@ import {
   sha256,
   shasumFor,
 } from "../scripts/fetch-sidecar.mjs";
+import { latestManifest } from "../scripts/latest-json.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pin = JSON.parse(readFileSync(join(root, MANIFEST), "utf8"));
@@ -102,6 +103,43 @@ test("dist: an unverified archive fails the build and writes nothing", async () 
   }
 });
 
+test("dist: the update manifest names the artifact an installed copy downloads", () => {
+  const manifest = latestManifest({
+    version: "0.5.0",
+    signature: "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZQo=\n",
+    url: "https://github.com/seven-lynx/skyhook/releases/download/v0.5.0/Skyhook_0.5.0_x64-setup.nsis.zip",
+    pubDate: new Date("2026-11-26T12:00:00Z"),
+  });
+
+  assert.equal(manifest.version, "0.5.0");
+  assert.equal(manifest.pub_date, "2026-11-26T12:00:00.000Z");
+  assert.deepEqual(manifest.platforms["windows-x86_64"], {
+    signature: "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZQo=",
+    url: "https://github.com/seven-lynx/skyhook/releases/download/v0.5.0/Skyhook_0.5.0_x64-setup.nsis.zip",
+  });
+});
+
+test("dist: a manifest that would strand an installed copy is refused", () => {
+  const good = {
+    version: "0.5.0",
+    signature: "c2lnbmF0dXJl",
+    url: "https://example.test/app.nsis.zip",
+    pubDate: new Date("2026-11-26T12:00:00Z"),
+  };
+
+  for (const field of ["version", "signature", "url", "pubDate"]) {
+    assert.throws(() => latestManifest({ ...good, [field]: "" }), new RegExp(`missing ${field}`), field);
+  }
+
+  // A tag-shaped version is not what the updater compares against `0.4.2`; a prerelease
+  // suffix is fine, a two-part version is not.
+  assert.throws(() => latestManifest({ ...good, version: "v0.5" }), /not a semver version/);
+  assert.equal(latestManifest({ ...good, version: "v0.5.0" }).version, "0.5.0");
+  assert.equal(latestManifest({ ...good, version: "0.5.0-rc.1" }).version, "0.5.0-rc.1");
+
+  assert.throws(() => latestManifest({ ...good, url: "not a url" }), /not a URL/);
+});
+
 test("dist: a verified archive lands as the externalBin name", async () => {
   const archive = Buffer.from("stub archive");
   const dir = fixture({ sha256: sha256(archive) });
@@ -115,11 +153,11 @@ test("dist: a verified archive lands as the externalBin name", async () => {
     });
 
     assert.equal(result.fetched, true);
-    assert.deepEqual(readdirSync(dirname(target.path)), [target.name], "one file, and no .part left over");
+    assert.deepEqual(readdirSync(dirname(target.path)).sort(), [target.name, target.name + ".pin"].sort(), "the runtime and its stamp, and no .part left over");
     assert.equal(readFileSync(target.path, "utf8"), "runtime");
 
-    // Second run: the file is in place, so the fetch is never called — this is the
-    // branch every build after the first takes.
+    // Second run: the file and its stamp are in place, so the fetch is never called — this
+    // is the branch every build after the first takes.
     const again = await ensureSidecar({
       root: dir,
       log: () => {},
@@ -129,6 +167,60 @@ test("dist: a verified archive lands as the externalBin name", async () => {
       unpack: stubUnpack(),
     });
     assert.equal(again.fetched, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dist: a runtime with no pin stamp beside it is refetched", async () => {
+  const archive = Buffer.from("stub archive");
+  const dir = fixture({ sha256: sha256(archive) });
+  try {
+    const target = expectedSidecar({ ...pin }, dir);
+    mkdirSync(dirname(target.path), { recursive: true });
+    // A binary from a build that predates the stamp: present, and vouched for by nothing.
+    writeFileSync(target.path, "an older runtime");
+
+    const result = await ensureSidecar({
+      root: dir,
+      log: () => {},
+      fetchImpl: stubFetch({ archive, shasums: `${sha256(archive)}  ${pin.artifact}\n` }),
+      unpack: stubUnpack(),
+    });
+
+    assert.equal(result.fetched, true, "presence alone is not evidence");
+    assert.equal(readFileSync(target.path, "utf8"), "runtime");
+    assert.ok(existsSync(`${target.path}.pin`), "a placed runtime carries the pin that placed it");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dist: a runtime an older pin placed is refetched, not trusted", async () => {
+  const archive = Buffer.from("stub archive");
+  const dir = fixture({ sha256: sha256(archive) });
+  try {
+    const target = expectedSidecar({ ...pin, sha256: sha256(archive) }, dir);
+    mkdirSync(dirname(target.path), { recursive: true });
+    writeFileSync(target.path, "the runtime the previous pin shipped");
+    // Exactly the D10 case: `sidecar.json` re-pinned while the old runtime was on disk.
+    writeFileSync(
+      `${target.path}.pin`,
+      JSON.stringify({ node: "20.20.2", artifact: "node-v20.20.2-win-x64.zip", sha256: "a".repeat(64) }),
+    );
+
+    const result = await ensureSidecar({
+      root: dir,
+      log: () => {},
+      fetchImpl: stubFetch({ archive, shasums: `${sha256(archive)}  ${pin.artifact}\n` }),
+      unpack: stubUnpack(),
+    });
+
+    assert.equal(result.fetched, true, "a stamp from another pin is not this pin");
+    assert.equal(readFileSync(target.path, "utf8"), "runtime");
+    const stamp = JSON.parse(readFileSync(`${target.path}.pin`, "utf8"));
+    assert.equal(stamp.sha256, sha256(archive), "the stamp is rewritten to the pin that placed this one");
+    assert.equal(stamp.artifact, pin.artifact);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
