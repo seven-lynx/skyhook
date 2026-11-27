@@ -153,7 +153,7 @@ directory the shell was launched from.
 A consumer pins a **tag**, never a branch:
 
 ```json
-"skyhook": "github:seven-lynx/skyhook#v0.4.2"
+"skyhook": "github:seven-lynx/skyhook#v0.4.3"
 ```
 
 So the release is four steps in this order — a tag on a commit nobody can fetch is not a release:
@@ -162,8 +162,8 @@ So the release is four steps in this order — a tag on a commit nobody can fetc
 git checkout main
 git merge --ff-only <branch that tips the release line>   # never a plain merge on the release path
 git push origin main
-git tag -a v0.4.2 -m "v0.4.2 — what the release changes"
-git push origin v0.4.2
+git tag -a v0.4.3 -m "v0.4.3 — what the release changes"
+git push origin v0.4.3
 ```
 
 Release history is `CHANGELOG.md`, newest first: the release's own section is written in
@@ -189,7 +189,7 @@ Then prove the tag from outside the working copy, because the consumer installs 
 tree and not this checkout:
 
 ```bash
-npm i github:seven-lynx/skyhook#v0.4.2   # in a scratch directory
+npm i github:seven-lynx/skyhook#v0.4.3   # in a scratch directory
 npm ls skyhook --depth=0                 # prints the resolved version
 ```
 
