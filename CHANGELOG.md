@@ -30,6 +30,10 @@ once the desktop track ships — a signed installer.
   names `Authorization` and `x-skyhook-token`, not just `Content-Type`.
 - A request path ending in a long run of slashes is trimmed by a loop instead of a
   right-anchored regex, so it cannot be made to backtrack quadratically.
+- `skyhook serve` warns on stderr when no `skyhook.config.json` sits beside the
+  working directory, naming that directory and the path it looked for. A run started
+  from the wrong `WorkingDirectory` used to boot on the defaults and answer with the
+  two built-in cards, with nothing in the log to say why.
 
 ## [0.4.3]
 

@@ -401,3 +401,35 @@ setTimeout(() => {}, 6000);
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
+
+// #49: started from a directory with no `skyhook.config.json`, `loadConfig` merges the defaults
+// and the server says nothing — `/api/pipeline` then answers with the two built-in cards, which
+// is indistinguishable from a project that really defines two. The banner now names the
+// directory and the file it looked for, on stderr, once.
+test("api: a boot with no config file says which directory it used", async () => {
+  mkdirSync(stateDir, { recursive: true });
+  const absent = join(tmp, "skyhook.config.absent.json");
+  loadConfig({ file: absent, reload: true });
+
+  const warned = [];
+  const silenced = console.warn;
+  let server;
+  try {
+    console.warn = (...args) => warned.push(args.join(" "));
+    const { startServer } = await import("../src/interfaces/api-server.js");
+    server = startServer(0);
+    await new Promise((r) => server.once("listening", r));
+  } finally {
+    console.warn = silenced;
+  }
+
+  try {
+    const text = warned.join("\n");
+    assert.match(text, /no config found/, "the run says it is on the defaults");
+    assert.match(text, new RegExp(process.cwd().replace(/\\/g, "\\\\")), "…and names the directory");
+    assert.match(text, /skyhook\.config\.absent\.json/, "…and the file it looked for");
+  } finally {
+    await new Promise((r) => server.close(r));
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+});

@@ -21,7 +21,7 @@ import {
   listCategories, fetchSiteMeta, createSeeder, deleteSeeder,
 } from "../engine/seeder-engine.js";
 import { pipelineStatus, startPipelineJob, isLlmKind } from "./pipeline.js";
-import { nodeId, getConfig } from "../config.js";
+import { nodeId, getConfig, configSource } from "../config.js";
 import {
   routeSeeders, peerFor, runRemote, forwardSchedule, remoteToken, acceptedTokens,
 } from "../core/remote.js";
@@ -572,6 +572,14 @@ export function startServer(port = 4173, { host = "127.0.0.1" } = {}) {
     console.log(`\n🛰  Skyhook seeder API listening on http://${shown}:${bound} (${reach})`);
     console.log(`   GUI:  http://${shown}:${bound}/`);
     console.log(`   API:  http://${shown}:${bound}/api/health\n`);
+    // Started from a directory with no `skyhook.config.json`, the server boots on the defaults
+    // and answers with the two built-in cards — indistinguishable from a project that really
+    // defines two, and silent in the log (#49). Say which directory and which file, once.
+    const source = configSource();
+    if (source && !source.found) {
+      console.warn(`⚠  no config found — running on the defaults, from ${process.cwd()}`);
+      console.warn(`   looked for: ${source.file}\n`);
+    }
   });
 
   // This function opens the state DB, so it is also where the handle is
