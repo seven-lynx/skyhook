@@ -6,6 +6,11 @@ dist/
 coverage/
 *.log
 
+# Test fixtures: every `node --test` file builds its own `.tmp-*` project under the repo root and
+# removes it in an `after()` hook. A red run or a Ctrl+C can still leave one, and it is never
+# something to commit (#22).
+.tmp-*
+
 # User config — the example lives in config/, but a live config at the root is gitignored.
 skyhook.config.json
 config/skyhook.config.json

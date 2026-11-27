@@ -807,5 +807,16 @@ async function main() {
   }
 }
 
-main();
+/**
+ * A command that throws answers with its message and exit 1.
+ *
+ * Without this, `loadConfig`'s `Invalid config …` reaches the top as an unhandled rejection: Node
+ * prints a stack, an `UnhandledPromiseRejection` banner and exit 1, and the one line the reader
+ * needs is buried in it (#23). `SKYHOOK_DEBUG=1` puts the stack back.
+ */
+main().catch((err) => {
+  console.error(err?.message ?? err);
+  if (process.env.SKYHOOK_DEBUG === "1" && err?.stack) console.error(err.stack);
+  process.exitCode = 1;
+});
 

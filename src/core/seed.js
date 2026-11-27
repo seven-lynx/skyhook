@@ -46,10 +46,30 @@ function resolveCategoriesFile() {
   if (existsSync(cfg.categoriesFile)) return cfg.categoriesFile;
   return resolve(__dirname, '../../config/categories.json'); // bundled default
 }
-const _cats = loadCategories(resolveCategoriesFile());
-export const CATEGORY = _cats.CATEGORY;
-export const SUBCATEGORY = _cats.SUBCATEGORY;
-export const SUBCATEGORY_BY_CATEGORY = _cats.SUBCATEGORY_BY_CATEGORY;
+// Read on first access, never at import. `getConfig()` throws on a `skyhook.config.json` that does
+// not parse, and a module-scope read turns that into a module-evaluation error no handler in
+// `bin/skyhook.js` can reach — `skyhook list` printed a stack from the loader before `main()` ran,
+// so the one line naming the file never appeared (#23). It is also the rule the rest of `src/`
+// keeps: importing a module reads no config, so `skyhook help` works next to a broken file.
+let _cats = null;
+const cats = () => (_cats ??= loadCategories(resolveCategoriesFile()));
+
+/** A constant table that loads on first read and still looks like a plain object to its reader. */
+function lazyTable(key) {
+  return new Proxy({}, {
+    get: (_, prop) => Reflect.get(cats()[key], prop),
+    has: (_, prop) => Reflect.has(cats()[key], prop),
+    ownKeys: () => Reflect.ownKeys(cats()[key]),
+    getOwnPropertyDescriptor: (_, prop) => {
+      const d = Reflect.getOwnPropertyDescriptor(cats()[key], prop);
+      return d ? { ...d, configurable: true } : undefined;
+    },
+  });
+}
+
+export const CATEGORY = lazyTable("CATEGORY");
+export const SUBCATEGORY = lazyTable("SUBCATEGORY");
+export const SUBCATEGORY_BY_CATEGORY = lazyTable("SUBCATEGORY_BY_CATEGORY");
 
 /** Resolve a subcategory by id or label (no DB round-trip). */
 export async function getSubcategoryId(name) {
@@ -337,8 +357,10 @@ export async function fetchOgMeta(url, { bypassCloudflare = false } = {}) {
 // ── Main export: upsert a batch of URL records ────────────────────────────────
 const BATCH_SIZE = 500;
 
-// Known category ids for validation (derived from the configured taxonomy)
-const VALID_CATEGORY_IDS = new Set([...Object.values(CATEGORY), ...Object.values(SUBCATEGORY)]);
+// Known category ids for validation (derived from the configured taxonomy). Built on first use for
+// the same reason the tables are: this line used to read the config at import (`#23`).
+let _validIds = null;
+const validCategoryIds = () => (_validIds ??= new Set([...Object.values(CATEGORY), ...Object.values(SUBCATEGORY)]));
 
 /**
  * @param {Array<{
@@ -445,7 +467,7 @@ export async function upsertUrls(rows, {
 
   // 1b. Validate category_id values (warn only — don't drop, some seeders pass null)
   const badCategory = filtered.filter(
-    (r) => r.category_id && !VALID_CATEGORY_IDS.has(r.category_id),
+    (r) => r.category_id && !validCategoryIds().has(r.category_id),
   );
   if (badCategory.length > 0) {
     console.warn(`[seed] Warning: ${badCategory.length} rows have unrecognised category_id values`);

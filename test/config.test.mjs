@@ -9,11 +9,15 @@
  * settings file discarded every runtime toggle behind a silent `{}` (#21).
  *
  * The fixtures live under `.tmp-config-*` and the config is repointed at them,
- * so the repo's own `.skyhook/` is never read or written.
+ * so the repo's own `.skyhook/` is never read or written. The **root** is removed by
+ * one `after()` hook, not by each test's own `rmSync`: a test that fails before its
+ * cleanup line leaves the directory behind, which is how 76 `.tmp-config-*` roots
+ * accumulated in this checkout (#22).
  */
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { loadConfig } from "../src/config.js";
@@ -22,6 +26,10 @@ import { allowRemote, loadSettings } from "../src/core/settings.js";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tmp = join(root, `.tmp-config-${process.pid}`);
 const BOM = "\uFEFF";
+
+// Recommended shape from `test/desktop-sidecar.test.mjs:31`: the root outlives every test and one
+// hook removes it, so a red test cannot leak a fixture either.
+after(() => rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
 test("loadConfig parses a skyhook.config.json that starts with a BOM", () => {
   const dir = join(tmp, "config");
@@ -34,8 +42,6 @@ test("loadConfig parses a skyhook.config.json that starts with a BOM", () => {
   assert.equal(cfg.dataDir, dataDir, "the file's value survives the BOM");
   assert.equal(cfg.userAgent, "BOM/1.0", "the file is read, not discarded");
   assert.equal(cfg.storage.provider, "stage", "keys the file omits still come from the defaults");
-
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test("loadSettings keeps a BOM'd settings.json instead of degrading to {}", () => {
@@ -49,8 +55,6 @@ test("loadSettings keeps a BOM'd settings.json instead of degrading to {}", () =
 
   assert.deepEqual(loadSettings(), { allowRemote: true });
   assert.equal(allowRemote(), true, "a runtime toggle in a BOM'd file still wins");
-
-  rmSync(dir, { recursive: true, force: true });
 });
 
 test(".env.example lists the keys and carries no value", () => {
@@ -76,4 +80,27 @@ test(".env.example lists the keys and carries no value", () => {
   ]) {
     assert.ok(keys.includes(key), `.env.example documents ${key}`);
   }
+});
+
+// #23: an invalid `skyhook.config.json` used to reach the top of `bin/skyhook.js` as an unhandled
+// rejection — a stack, a `UnhandledPromiseRejection` banner and exit 1 — so the one line that says
+// what is wrong was buried in nine. The child is spawned with `SKYHOOK_DEBUG` cleared, because a
+// developer's own environment must not decide what this test sees.
+test("the CLI answers a broken config with one line and exit 1", () => {
+  const dir = join(tmp, "cli");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "skyhook.config.json"), "{ this is not json\n");
+
+  const res = spawnSync(process.execPath, [join(root, "bin", "skyhook.js"), "list"], {
+    cwd: dir,
+    encoding: "utf8",
+    timeout: 30_000,
+    env: { ...process.env, SKYHOOK_DEBUG: "" },
+  });
+
+  assert.equal(res.status, 1, `a failed command exits 1 (stderr: ${res.stderr})`);
+  const lines = res.stderr.trim().split(/\r?\n/);
+  assert.equal(lines.length, 1, `one line, not a stack — got:\n${res.stderr}`);
+  assert.match(lines[0], /^Invalid config .*skyhook\.config\.json/);
+  assert.equal(res.stdout, "", "nothing is written to stdout");
 });
