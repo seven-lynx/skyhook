@@ -77,6 +77,7 @@ skyhook tag --requeue-untagged  # re-select URLs with zero tags it has not given
 skyhook tag --reask-no-tags     # put the URLs it did give up on back to the model, once
 skyhook tag --task fill-category # targeted gap-filling pass (see tagging.md)
 skyhook tag --provider ollama --batch-size 50
+skyhook tag --max 100           # tag at most N URLs in this run; the checkpoint still advances
 
 # 3. Upload results back to storage
 skyhook upload                  # staged URLs + tags/attributes/quality

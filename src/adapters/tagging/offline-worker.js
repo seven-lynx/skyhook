@@ -400,6 +400,11 @@ export async function runOfflineTagWorker(opts = {}) {
   let totalFailed = cp.total_failed;
   let totalSkipped = cp.total_skipped;
   let ratePerHour = cp.rate_per_hour ?? null;
+  // What *this run* has processed. `--max` used to be compared against `totalProcessed`, which is
+  // seeded from the persisted checkpoint, so on a DB tagged before `--max 1` exited immediately and
+  // `--max N` processed `N - checkpoint` URLs — the flag silently meant "stop after the N-th URL
+  // ever processed" (#50). The checkpoint stays the resume cursor; the bound counts from zero here.
+  let runProcessed = 0;
 
   const totalEligible = db.prepare(`SELECT COUNT(*) AS c FROM urls WHERE approved = 1 AND inactive = 0 AND title IS NOT NULL AND title != ''`).get().c;
   let done = db.prepare(`SELECT COUNT(*) AS c FROM local_url_tagged_by WHERE model_source = ?`).get(modelSource).c;
@@ -426,9 +431,9 @@ export async function runOfflineTagWorker(opts = {}) {
   let consecutiveEmptyBatches = 0;
   while (true) {
     if (shuttingDown) break;
-    if (max && totalProcessed >= max) break;
+    if (max && runProcessed >= max) break;
 
-    const limit = max ? Math.min(batchSize, max - totalProcessed) : batchSize;
+    const limit = max ? Math.min(batchSize, max - runProcessed) : batchSize;
     const urls = db.prepare(`${reaskNoTags ? urlQuery(askedFilter()) : urlQuery()} LIMIT ${limit}`).all();
     if (urls.length === 0) { console.log("\n[ok] No more URLs to process."); break; }
 
@@ -551,6 +556,7 @@ export async function runOfflineTagWorker(opts = {}) {
         console.log(`  batch ${batchCount}: ${empty.size} answered with no tag (marked ${noTagSource})`);
       }
       totalProcessed += answered.size;
+      runProcessed += answered.size;
       done += answered.size;
       const lastUrl = urls[urls.length - 1];
       const instantRate = urls.length / ((Date.now() - batchStart) / 3600000);
@@ -579,6 +585,7 @@ export async function runOfflineTagWorker(opts = {}) {
       totalFailed += urls.length;
       totalSkipped += urls.length;
       totalProcessed += urls.length;
+      runProcessed += urls.length;
       updateProgress.run(tier, cp.last_url_id ?? null, totalProcessed, totalFailed, totalSkipped, ratePerHour);
       if (/Model unloaded/i.test(err.message) || consecutiveFailures >= 5) {
         console.error(`\n[pause] model may have unloaded. Check LM Studio.`);
@@ -590,7 +597,7 @@ export async function runOfflineTagWorker(opts = {}) {
   const finalStatus = shuttingDown ? "paused" : "done";
   db.prepare(`UPDATE local_tagging_progress SET status = ?, updated_at = datetime('now'), total_processed = ?, total_failed = ?, total_skipped = ? WHERE id = 1`)
     .run(finalStatus, totalProcessed, totalFailed, totalSkipped);
-  console.log(`\n${finalStatus === "done" ? "[ok] Complete" : "[pause] Paused"} - ${totalProcessed.toLocaleString()} processed, ${totalFailed.toLocaleString()} failed`);
+  console.log(`\n${finalStatus === "done" ? "[ok] Complete" : "[pause] Paused"} - ${runProcessed.toLocaleString()} processed this run (${totalProcessed.toLocaleString()} lifetime), ${totalFailed.toLocaleString()} failed`);
   cleanup();
-  return { status: finalStatus, processed: totalProcessed, failed: totalFailed, skipped: totalSkipped };
+  return { status: finalStatus, processed: totalProcessed, processedThisRun: runProcessed, failed: totalFailed, skipped: totalSkipped };
 }

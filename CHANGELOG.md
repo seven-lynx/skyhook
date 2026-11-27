@@ -34,6 +34,11 @@ once the desktop track ships — a signed installer.
   working directory, naming that directory and the path it looked for. A run started
   from the wrong `WorkingDirectory` used to boot on the defaults and answer with the
   two built-in cards, with nothing in the log to say why.
+- `tag --max N` bounds the URLs tagged in *that run* rather than the lifetime
+  checkpoint, so `--max 1` on a database tagged before the flag no longer exits
+  before tagging anything, and `--max N` no longer processes `N - checkpoint`
+  rows. The run summary reads `N processed this run (M lifetime)`; the returned
+  `processed` is still the lifetime total, with `processedThisRun` beside it.
 
 ## [0.4.3]
 

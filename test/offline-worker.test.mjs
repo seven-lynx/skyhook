@@ -119,3 +119,41 @@ test("an answered URL with no tag is recorded, not left for the next pass", asyn
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// #50: `--max` is a run budget. It was compared against `totalProcessed`, which is seeded from the
+// persisted checkpoint, so on a DB that had been tagged before, `--max 1` exited immediately and
+// `--max N` processed `N - checkpoint` URLs — the only way to run a bounded probe was to read
+// `total_processed` out of `skyhook status` and ask for `checkpoint + n`.
+test("--max bounds this run, not the lifetime checkpoint", async () => {
+  const { dir, dbPath } = fixture("max");
+  const calls = stubModel();
+  try {
+    const seeded = new Database(dbPath);
+    seeded.prepare("INSERT INTO urls (id, title, description, url, approved, inactive) VALUES (?, ?, ?, ?, 1, 0)")
+      .run("u3", "A third page", null, "https://c.example/z");
+    seeded.close();
+
+    // One full pass creates and fills the checkpoint table.
+    const first = await runOfflineTagWorker(opts(dbPath));
+    assert.equal(first.processed, 3, "the whole fixture was tagged");
+
+    // ...then give the DB the history the issue measured, and queue one more URL.
+    const history = new Database(dbPath);
+    history.prepare("UPDATE local_tagging_progress SET total_processed = 1000 WHERE id = 1").run();
+    history.prepare("INSERT INTO urls (id, title, description, url, approved, inactive) VALUES (?, ?, ?, ?, 1, 0)")
+      .run("u4", "A bounded probe", null, "https://d.example/w");
+    history.close();
+
+    const before = calls.length;
+    const bounded = await runOfflineTagWorker({ ...opts(dbPath), max: 1 });
+
+    assert.equal(bounded.processedThisRun, 1, "--max counts this run, not the lifetime total");
+    assert.equal(bounded.processed, 1001, "the checkpoint still advances by what the run did");
+    assert.equal(calls.length, before + 1, "exactly one model call");
+    assert.match(calls[calls.length - 1], /d\.example\/w/, "the run took the queued URL, not the checkpoint");
+  } finally {
+    globalThis.fetch = original;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
