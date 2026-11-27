@@ -367,14 +367,24 @@
           <span class="sr-only">Expand log dock</span>
         </button>
       </div>
+      <div class="pane-body dock-body" id="dockBody" tabindex="0" aria-live="polite">
+        <p class="pane-note">Run a seeder, or pick a tab, to tail its output here.</p>
+      </div>
     </section>
 
     <!-- ── status bar ──────────────────────────────────────────────────── -->
     <footer class="status" id="statusbar">
+      <span class="status-item" id="statusEndpoint" title="API endpoint">…</span>
+      <span class="status-sep"></span>
       <span class="status-item"><b id="seederCountBadge">…</b> seeders</span>
+      <span class="status-sep"></span>
+      <span class="status-item" id="statusDue">0 due</span>
+      <span class="status-sep"></span>
+      <span class="status-item" id="statusNode">local</span>
       <span class="status-sep"></span>
       <span class="status-item" id="statusRoute">dashboard</span>
       <span class="status-right">
+        <span class="status-item" id="statusSync">synced —</span>
         <span class="status-item"><code>g</code> then <code>s</code> to jump</span>
       </span>
     </footer>

@@ -45,6 +45,9 @@ const state = {
   live: null, _liveWired: false, logSources: [], followLog: true, userTab: null,
   historySource: null, wasRunning: false, categories: [],
   infoSource: null, taggingGaps: null, tagTasks: [],
+  // W5: the status bar's "synced" is this console's last successful poll, and the dock's
+  // open/closed state lives on `#workbench[data-dock]` — this is the only copy of the former.
+  lastRefreshAt: 0,
   // W3: what the inspector shows. Client state, not a route — a reload forgets the pick.
   focus: null, inspRuns: null, inspStaged: null, inspRunAt: null, inspSeq: 0,
   // W4: the tier/schedule/status selects live in the filter sheet now, so their values are state
@@ -275,34 +278,42 @@ function applyNodeVisibility() {
 }
 function handleRouteChange() {
   const r = parseRoute();
+  // W5: `#/log/:source` is a dock deep link on the desktop, not a section — the work surface keeps
+  // what it was already showing and the rail keeps its place. At 720 px and below there is no dock
+  // at all (`styles.css` hides it), so the route stays a surface there, exactly as before.
+  const deepLink = r.name === "log" && !isPhone();
   // A pick belongs to the section that offered it: a row chosen in Seeders must not sit behind
   // the Pipeline's back. The log dock is what survives a section change (W5), not the inspector.
-  if (r.name !== state.route.name) clearFocus();
-  state.route = r;
-  $$(".surface").forEach((p) => p.classList.toggle("active", p.dataset.route === r.name));
-  $$(".rail-item, .navlist-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === r.name));
+  if (r.name !== state.route.name && !deepLink) clearFocus();
+  if (!deepLink) state.route = r;
+  const route = state.route;
+  $$(".surface").forEach((p) => p.classList.toggle("active", p.dataset.route === route.name));
+  $$(".rail-item, .navlist-item, .bn-item").forEach((el) => el.classList.toggle("active", el.dataset.route === route.name));
   renderNav();
   renderInspector();
   // The pane head names the section; a log route names its source instead.
   const workTitle = $("#workTitle");
-  if (workTitle) workTitle.textContent = r.name === "log" ? (r.params.source || "log") : ROUTE_TITLES[r.name] || r.name;
-  const statusRoute = $("#statusRoute");
-  if (statusRoute) statusRoute.textContent = r.name;
-  if (r.name === "timer" && !isPiNode()) { navigate("#/"); return; }
-  if (r.name === "dashboard") renderDashboard();
-  if (r.name === "seeders") renderSeeders();
-  if (r.name === "pipeline") renderPipeline();
-  if (r.name === "stats") renderAnalytics();
-  if (r.name === "curation") renderCuration();
-  if (r.name === "settings") renderSettings();
-  if (r.name === "timer") renderTimer();
+  if (workTitle) workTitle.textContent = route.name === "log" ? (r.params.source || "log") : ROUTE_TITLES[route.name] || route.name;
+  if (route.name === "timer" && !isPiNode()) { navigate("#/"); return; }
+  if (route.name === "dashboard") renderDashboard();
+  if (route.name === "seeders") renderSeeders();
+  if (route.name === "pipeline") renderPipeline();
+  if (route.name === "stats") renderAnalytics();
+  if (route.name === "curation") renderCuration();
+  if (route.name === "settings") renderSettings();
+  if (route.name === "timer") renderTimer();
   if (r.name === "log") {
     // If no specific source, fall back to the first running seeder (or the
     // most recent log source) so the mobile "Logs" nav item always lands.
     const src = r.params.source || (state.running[0] && state.running[0].source) || logPageState.source;
-    openLogPage(src);
+    // Only a source the route has not asked for yet reopens it: `refreshAll` runs this on every
+    // poll, and a tab the user picked must survive the poll that follows it.
+    if (src !== logPageState.routeSource) openLogPage(src);
+    // Repainting an already-open dock would fetch its tail a second time per tick.
+    if (deepLink && $("#workbench").dataset.dock !== "open") setDockOpen(true);
   }
-  if (r.name !== "log") closeLogPage();
+  syncLogPolling();
+  renderStatus();
 }
 
 async function loadSeeders()    { state.seeders = await get("/api/seeders?limit=5000"); }
@@ -360,8 +371,6 @@ function renderSeeders() {
   const countLabel = $("#countLabel");
   if (countLabel) countLabel.textContent = rows.length + " / " + state.seeders.length;
   const runningSet = new Set(state.running.map((r) => r.source));
-  const badge = $("#seederCountBadge");
-  if (badge) badge.textContent = state.seeders.length;
   const tbody = $("#seederBody");
   tbody.innerHTML = "";
   // Roving tabindex: one tab stop for the whole table, arrows inside it (see wireRowFocus).
@@ -1254,9 +1263,63 @@ let logPageState = {
   source: null,
   sources: [],
   active: null,
+  // What the *route* last asked for, which is not the same thing as `source`: a tab click moves the
+  // tail without touching the hash, so a refresh must not read the route as "go back to that one".
+  routeSource: null,
   pollTimer: null,
   followLog: true,
 };
+
+/* ── the dock and the status bar ─────────────────────────────────────────── */
+
+/* The same log is rendered twice — the log surface (the phone keeps it) and the dock (the desktop
+ * has no surface for a log). Two host lists and one fetch per tick: `renderLogBody` writes both, so
+ * an open dock on any section is still exactly one tail every 2 s, not one per host. */
+const LOG_TAB_HOSTS = ["logTabs", "dockTabs"];
+const LOG_BODY_HOSTS = ["logBody", "dockBody"];
+
+/* Both regions are `display: none` at 720 px and below (`styles.css`, the phone block), so the one
+ * viewport question this file asks is whether the phone shell is what is on screen. */
+const isPhone = () => !window.matchMedia("(min-width: 721px)").matches;
+
+/* The open state lives on `#workbench[data-dock]` and nowhere else. This writes the attribute and
+ * the button that controls it together, because a toggle that disagrees with the grid is worse than
+ * a dock that will not open — and `#dock` is opened by code (a deep link, a run starting) as often
+ * as by the button. */
+function setDockOpen(open) {
+  const wb = $("#workbench");
+  if (!wb) return;
+  wb.dataset.dock = open ? "open" : "collapsed";
+  const btn = $$(".pane-btn").find((b) => b.dataset.pane === "dock");
+  if (btn) {
+    btn.setAttribute("aria-expanded", String(open));
+    const label = (open ? "Collapse " : "Expand ") + PANE_LABEL.dock;
+    btn.title = label;
+    const sr = btn.querySelector(".sr-only");
+    if (sr) sr.textContent = label;
+  }
+  // A dock that was shut while a source was selected has no lines to show until it is told to ask.
+  if (open) {
+    renderLogPageHead();
+    renderLogTabs();
+    renderLogBody();
+  }
+  syncLogPolling();
+}
+
+/* One tail, started in one place. The timer runs while there is a source AND something on screen is
+ * showing it — the log surface (phone) or the open dock (any section, which is what W5 changes).
+ * `startLogPagePolling` returns early when a timer exists, so calling this freely cannot stack one. */
+function syncLogPolling() {
+  const wb = $("#workbench");
+  const dockOpen = !!wb && wb.dataset.dock === "open";
+  if (logPageState.source && (state.route.name === "log" || dockOpen)) {
+    startLogPagePolling();
+  } else if (logPageState.pollTimer) {
+    clearInterval(logPageState.pollTimer);
+    logPageState.pollTimer = null;
+  }
+}
 
 /* ── pane mechanics ──────────────────────────────────────────────────────── */
 
@@ -1386,20 +1449,21 @@ function wirePanes() {
   });
 
 
-  // Collapse toggles. The dock's own attribute is its open/collapsed state (W5 owns its body);
-  // nav and inspector share `data-collapsed` as a whitespace-separated list.
+  // Collapse toggles. The dock has its own state (`#workbench[data-dock]`), written only through
+  // `setDockOpen` so the button and the grid can never disagree; nav and inspector share
+  // `data-collapsed` as a whitespace-separated list.
   $$(".pane-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const name = btn.dataset.pane;
       const open = btn.getAttribute("aria-expanded") !== "true";
-      btn.setAttribute("aria-expanded", String(open));
-      const label = (open ? "Collapse " : "Expand ") + (PANE_LABEL[name] || name);
-      btn.title = label;
-      const sr = btn.querySelector(".sr-only");
-      if (sr) sr.textContent = label;
       if (name === "dock") {
-        wb.dataset.dock = open ? "open" : "collapsed";
+        setDockOpen(open);
       } else {
+        btn.setAttribute("aria-expanded", String(open));
+        const label = (open ? "Collapse " : "Expand ") + (PANE_LABEL[name] || name);
+        btn.title = label;
+        const sr = btn.querySelector(".sr-only");
+        if (sr) sr.textContent = label;
         const collapsed = new Set((wb.dataset.collapsed || "").split(/\s+/).filter(Boolean));
         if (open) collapsed.delete(name); else collapsed.add(name);
         if (collapsed.size) wb.dataset.collapsed = [...collapsed].join(" ");
@@ -1615,6 +1679,7 @@ function wireInspector() {
 
 function openLogPage(source) {
   logPageState.source = source;
+  logPageState.routeSource = source || null;
   const runningSources = state.running.map((r) => r.source);
   const sources = [...new Set([source].concat(runningSources))].filter(Boolean);
   logPageState.sources = sources;
@@ -1622,12 +1687,7 @@ function openLogPage(source) {
   renderLogPageHead();
   renderLogTabs();
   renderLogBody();
-  if (source) startLogPagePolling();
-  else if (logPageState.pollTimer) { clearInterval(logPageState.pollTimer); logPageState.pollTimer = null; }
-}
-
-function closeLogPage() {
-  if (logPageState.pollTimer) { clearInterval(logPageState.pollTimer); logPageState.pollTimer = null; }
+  syncLogPolling();
 }
 
 function renderLogPageHead() {
@@ -1648,29 +1708,42 @@ function renderLogPageHead() {
   const stopBtn = $("#logStopBtn");
   if (runBtn) runBtn.disabled = !!running || !logPageState.source;
   if (stopBtn) stopBtn.disabled = !running;
+  // The dock head says the same thing in one phrase: what is tailing, and for how long, because the
+  // elapsed number is the only evidence a run is still alive rather than merely unfinished.
+  const note = $("#dockNote");
+  if (note) {
+    if (!logPageState.source) note.textContent = "no log open";
+    else if (running) note.textContent = "live · " + fmtElapsed(running.elapsedMs);
+    else note.textContent = logPageState.sources.length + (logPageState.sources.length === 1 ? " log" : " logs");
+    note.toggleAttribute("data-live", !!running);
+  }
 }
 
 function renderLogTabs() {
-  const container = $("#logTabs");
-  if (!container) return;
-  const runningSet = new Set(state.running.map((r) => r.source));
-  container.innerHTML = logPageState.sources.map((src) => {
-    const run = runningSet.has(src);
+  const running = new Map(state.running.map((r) => [r.source, r]));
+  const html = logPageState.sources.map((src) => {
+    const run = running.get(src);
     const isActive = src === logPageState.active;
-    return '<button class="log-tab ' + (isActive ? "active" : "") + ' ' + (run ? "live" : "") + '" data-logtab="' + esc(src) + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '">' +
+    const cls = ["log-tab", isActive && "active", run && "live"].filter(Boolean).join(" ");
+    return '<button class="' + cls + '" data-logtab="' + esc(src) + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '">' +
       '<span class="spin-pulse" aria-hidden="true"></span>' +
       '<span>' + esc(src) + '</span>' +
+      (run ? '<span class="time">' + esc(fmtElapsed(run.elapsedMs)) + '</span>' : "") +
     '</button>';
   }).join("");
+  for (const id of LOG_TAB_HOSTS) {
+    const container = $("#" + id);
+    if (container) container.innerHTML = html;
+  }
 }
 
 let logRenderSeq = 0;
 async function renderLogBody() {
   const seq = ++logRenderSeq;
-  const body = $("#logBody");
-  if (!body) return;
+  const bodies = LOG_BODY_HOSTS.map((id) => $("#" + id)).filter(Boolean);
+  if (!bodies.length) return;
   if (!logPageState.sources.length) {
-    body.innerHTML = '<p class="log-empty">No sources.</p>';
+    for (const b of bodies) b.innerHTML = '<p class="log-empty">No sources.</p>';
     return;
   }
   const sourcesToShow = [logPageState.active].filter(Boolean);
@@ -1689,10 +1762,15 @@ async function renderLogBody() {
         '<pre class="log-lines">' + (lines.length ? esc(lines.join("\n")) : '<span class="log-empty">(no output yet)</span>') + '</pre>' +
       '</div>');
   }
+  // The fetch happened once; each host keeps its own follow position, because the person may be
+  // reading in the dock while the surface sits scrolled somewhere else.
   if (seq !== logRenderSeq) return;
-  const prevScroll = body.scrollTop;
-  body.innerHTML = blocks.join("");
-  body.scrollTop = logPageState.followLog ? body.scrollHeight : prevScroll;
+  const html = blocks.join("");
+  for (const b of bodies) {
+    const prevScroll = b.scrollTop;
+    b.innerHTML = html;
+    b.scrollTop = logPageState.followLog ? b.scrollHeight : prevScroll;
+  }
 }
 
 // The log page refreshes the visible tab only: `renderLogBody` fetches one
@@ -1948,8 +2026,19 @@ async function refreshAll() {
   try {
     await Promise.all([loadSeeders(), loadRunning(), loadPipeline(), loadSettings()]);
     offlineFails = 0;
+    state.lastRefreshAt = Date.now();
     $("#apiLabel").textContent = "api → " + apiBase();
     $("#apiLabel").classList.remove("offline");
+    // A run that starts while the dock is shut would stream where nobody can see it, so the
+    // idle -> running edge opens the dock and picks that source. Nothing closes it: a dock the user
+    // opened is theirs, and a page load starts collapsed (`index.html`).
+    const isRunning = state.running.length > 0;
+    if (isRunning && !state.wasRunning && !isPhone()) {
+      if (!logPageState.source) openLogPage(state.running[0].source);
+      setDockOpen(true);
+    }
+    state.wasRunning = isRunning;
+    renderStatus();
     // Don't re-render the Settings panel during auto-refresh — it tears down
     // the live toggle and resets the checkbox state.
     if (state.route.name !== "settings") handleRouteChange();
@@ -1957,7 +2046,45 @@ async function refreshAll() {
     offlineFails++;
     $("#apiLabel").textContent = "offline — " + err.message;
     $("#apiLabel").classList.add("offline");
+    renderStatus();
     if (offlineFails === 3) toast("Cannot reach API: " + err.message, "err");
+  }
+}
+
+/* The status bar is rebuilt from `state` whole, never edited field by field: every value it shows
+ * is one a poll just refreshed, so one function is what keeps them from disagreeing. "synced" is
+ * this console's last successful poll — no route returns a sync timestamp, and the fleet's own last
+ * run is the dashboard's business, not a footer's. */
+const hhmmss = (ms) => {
+  const d = new Date(ms);
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
+};
+
+function renderStatus() {
+  const base = apiBase();
+  const endpoint = $("#statusEndpoint");
+  if (endpoint) {
+    endpoint.textContent = base.replace(/^https?:\/\//, "");
+    endpoint.title = "API " + base;
+  }
+  const badge = $("#seederCountBadge");
+  if (badge) badge.textContent = String(state.seeders.length);
+  const due = state.seeders.filter(isDueClient).length;
+  const dueEl = $("#statusDue");
+  if (dueEl) {
+    dueEl.textContent = due + " due";
+    dueEl.classList.toggle("due", due > 0);
+  }
+  const nodeEl = $("#statusNode");
+  if (nodeEl) nodeEl.textContent = state.nodeId || "local";
+  const routeEl = $("#statusRoute");
+  if (routeEl) routeEl.textContent = state.route.name;
+  const syncEl = $("#statusSync");
+  if (syncEl) {
+    syncEl.textContent = state.lastRefreshAt ? "synced " + hhmmss(state.lastRefreshAt) : "synced —";
+    // Twice the idle interval means the poll has stopped landing: a timestamp that still looks
+    // fresh would be the lie, so it changes colour instead of ticking.
+    syncEl.classList.toggle("stale", !state.lastRefreshAt || Date.now() - state.lastRefreshAt > 2 * POLL_IDLE_MS);
   }
 }
 
@@ -2137,20 +2264,34 @@ function bind() {
   if (ls) ls.addEventListener("click", () => logPageState.source && stopRuns(logPageState.source));
   const lsc = $("#logScheduleBtn");
   if (lsc) lsc.addEventListener("click", () => logPageState.source && openSchedule(logPageState.source));
-  const lt = $("#logTabs");
-  if (lt) lt.addEventListener("click", (e) => {
-    const tab = e.target.closest("[data-logtab]");
-    if (!tab) return;
-    logPageState.active = tab.dataset.logtab;
-    logPageState.followLog = true;
-    $$("#logTabs .log-tab").forEach((b) => b.classList.toggle("active", b.dataset.logtab === logPageState.active));
-    renderLogBody();
-  });
-  const lb2 = $("#logBody");
-  if (lb2) lb2.addEventListener("scroll", () => {
-    const b = $("#logBody");
-    logPageState.followLog = b.scrollHeight - b.scrollTop - b.clientHeight < 40;
-  });
+  // The same tabs exist twice — the log surface (which the phone keeps) and the dock (the desktop's
+  // only log) — so one delegation per host keeps both live without either owning the other.
+  for (const id of LOG_TAB_HOSTS) {
+    const host = $("#" + id);
+    if (!host) continue;
+    host.addEventListener("click", (e) => {
+      const tab = e.target.closest("[data-logtab]");
+      if (!tab) return;
+      // The head, the Run button and the tail all read `source`; only `active` used to move, so a
+      // clicked tab streamed one source's lines under another source's name.
+      logPageState.source = tab.dataset.logtab;
+      logPageState.active = tab.dataset.logtab;
+      logPageState.followLog = true;
+      renderLogPageHead();
+      renderLogTabs();
+      renderLogBody();
+      syncLogPolling();
+    });
+  }
+  // Following is per host: scrolling the dock must not stop the surface from following, and the
+  // flag is shared, so the last scroll wins — which is the pane the person is actually reading.
+  for (const id of LOG_BODY_HOSTS) {
+    const b = $("#" + id);
+    if (!b) continue;
+    b.addEventListener("scroll", () => {
+      logPageState.followLog = b.scrollHeight - b.scrollTop - b.clientHeight < 40;
+    });
+  }
 
   const wt = $("#writeTimerBtn");
   if (wt) wt.addEventListener("click", writeTimer);
@@ -2219,6 +2360,9 @@ function bind() {
   });
 
   window.addEventListener("hashchange", handleRouteChange);
+  // Crossing 720 px swaps the log between the dock and the surface, so what a route means changes
+  // with it and the route has to be read again. W7 owns the 1180 px sheet; this one is W5's.
+  window.matchMedia("(min-width: 721px)").addEventListener?.("change", handleRouteChange);
 }
 
 async function startPipeline(kind) {
