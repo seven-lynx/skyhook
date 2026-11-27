@@ -256,6 +256,28 @@ code, kbd {
   margin-left: auto;
 }
 
+/* ── palette trigger (W6) ───────────────────────────────────────────────────
+ * The bar's one text affordance: a button that looks like a field, because that is what it opens.
+ * `Ctrl/Cmd+K` is the shortcut; this is how someone who does not know the shortcut finds it. */
+.cmdk {
+  display: flex; align-items: center; gap: var(--space-2);
+  flex: 0 1 340px; min-width: 0;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+.cmdk:hover { border-color: var(--field-border); background: var(--bg-elevated); color: var(--text-muted); }
+.cmdk .ic { width: 12px; height: 12px; flex-shrink: 0; }
+.cmdk-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk kbd { flex-shrink: 0; }
+
 .dot {
   width: 6px; height: 6px; border-radius: 1px;
   background: var(--text-subtle); flex-shrink: 0;
@@ -1126,6 +1148,112 @@ td .row-link:hover { color: var(--brand); }
 .modal-head .icon-btn { margin-left: var(--space-2); }
 
 .modal-body { padding: var(--space-4); overflow: auto; }
+
+/* ── command palette (W6) ───────────────────────────────────────────────────
+ * A layer of its own rather than a `.modal`: the palette's focus model is one input carrying
+ * `aria-activedescendant`, so `openModal`'s Tab cycle would trap the wrong thing (D16). It is
+ * keyed on `[data-open]` and not `[hidden]` on purpose — a `display: flex` of ours has already
+ * beaten the UA's `[hidden]` rule once on this shell (W4, `.navlist`). */
+#palette {
+  position: fixed; inset: 0;
+  z-index: 110;
+  display: none;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh var(--space-4) var(--space-4);
+  background: rgba(0, 0, 0, .62);
+}
+#palette[data-open="true"] { display: flex; animation: fade-in .12s var(--ease); }
+
+.pal-panel {
+  width: 100%; max-width: 620px;
+  display: flex; flex-direction: column;
+  max-height: 70vh;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.pal-input {
+  display: flex; align-items: center; gap: var(--space-2);
+  height: 38px;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-overlay);
+  color: var(--text-subtle);
+}
+.pal-input input {
+  flex: 1; min-width: 0; height: 100%;
+  border: 0; outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+}
+.pal-input input::placeholder { color: var(--text-subtle); }
+/* `.ic` carries no size of its own — every context sizes it (`.btn .ic`, `.rail-item .ic`), and an
+ * unsized one renders at the SVG default and swamps the row. */
+.pal-input .ic { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; flex-shrink: 0; }
+
+.pal-list { overflow: auto; padding: var(--space-1) 0; }
+
+.pal-sec { display: flex; flex-direction: column; }
+.pal-sec-label {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+/* A row is a `<button role="option">` out of the tab order: reachable by pointer and by the
+ * input's active descendant, never a clickable `<div>` (`gui-and-pwa` §3). */
+.pal-item {
+  display: flex; align-items: baseline; gap: var(--space-3);
+  width: 100%;
+  padding: 5px var(--space-3) 5px calc(var(--space-3) - 2px);
+  border: 0; border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+}
+.pal-item:hover { background: var(--bg-hover); }
+.pal-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-hint {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+}
+/* The selection is the brand edge the nav rows use. Never `--live`: orange means a run (D2). */
+.pal-item.sel { background: var(--bg-overlay); border-left-color: var(--brand); }
+.pal-item.sel .pal-hint { color: var(--text-muted); }
+
+.pal-empty { margin: 0; padding: var(--space-4); color: var(--text-subtle); font-size: var(--text-base); }
+
+.pal-foot {
+  display: flex; gap: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--pane-head);
+  font-size: var(--text-xs);
+  color: var(--text-subtle);
+}
+.pal-foot kbd { margin-right: var(--space-1); }
+
+/* The phone keeps the same component: the trigger becomes its icon, the panel takes the width. */
+@media (max-width: 720px) {
+  #palette { padding: 8vh var(--space-3) var(--space-3); }
+  .pal-panel { max-height: 76vh; }
+  .cmdk { flex: 0 0 26px; padding: 0; justify-content: center; }
+  .cmdk-label, .cmdk kbd { display: none; }
+}
 
 /* ── 12. Tabs (inline tabs within a panel) ──────────────────────────────── */
 

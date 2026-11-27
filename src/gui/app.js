@@ -284,7 +284,12 @@ function handleRouteChange() {
   const deepLink = r.name === "log" && !isPhone();
   // A pick belongs to the section that offered it: a row chosen in Seeders must not sit behind
   // the Pipeline's back. The log dock is what survives a section change (W5), not the inspector.
-  if (r.name !== state.route.name && !deepLink) clearFocus();
+  // A palette closed here has done its job or lost its route — a poll calls this function too, so
+  // closing unconditionally would shut the palette mid-keystroke.
+  if (r.name !== state.route.name && !deepLink) {
+    clearFocus();
+    closePalette();
+  }
   if (!deepLink) state.route = r;
   const route = state.route;
   $$(".surface").forEach((p) => p.classList.toggle("active", p.dataset.route === route.name));
@@ -2183,12 +2188,7 @@ function bind() {
   const ns = $("#newSeederBtn");
   if (ns) ns.addEventListener("click", openBuildModal);
   const rd = $("#runDueBtn");
-  if (rd) rd.addEventListener("click", () => {
-    const sources = ($("#forceDue") && $("#forceDue").checked
-      ? state.seeders.filter((s) => s.scheduled)
-      : state.seeders.filter(isDueClient)).map((s) => s.source);
-    runSources(sources);
-  });
+  if (rd) rd.addEventListener("click", () => runDue());
   const et = $("#emitTimerBtn");
   if (et) et.addEventListener("click", writeTimer);
 
@@ -2224,18 +2224,7 @@ function bind() {
   if (lmb) lmb.addEventListener("click", loadSelectedModel);
 
   const pb = $("#pruneBtn");
-  if (pb) pb.addEventListener("click", async () => {
-    try {
-      const filter = {};
-      const src = $("#curateSource") && $("#curateSource").value.trim();
-      const before = $("#curateBefore") && $("#curateBefore").value;
-      if (src) filter.source = src;
-      if (before) filter.before = before;
-      const r = await post("/api/cache/prune", { filter });
-      toast("Deleted " + r.deleted + " URL(s) (kept " + r.kept + ").", "ok");
-      renderCuration();
-    } catch (err) { toast(err.message, "err"); }
-  });
+  if (pb) pb.addEventListener("click", () => pruneStaged());
   const cr = $("#curateRefreshBtn");
   if (cr) cr.addEventListener("click", renderCuration);
   const cb = $("#curationBody");
@@ -2339,9 +2328,19 @@ function bind() {
   wirePanes();
   wireRowFocus();
   wireInspector();
+  wirePalette();
 
   // Keyboard shortcuts (skip when typing in a form).
   document.addEventListener("keydown", (e) => {
+    // Above the typing guard on purpose: any field can hold the focus when the palette is asked
+    // for — `#filter` most of the time — and `Ctrl/Cmd+K` is the one shortcut that must still work
+    // from inside a form. It toggles, because a second press is how a keyboard user backs out.
+    if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === "k") {
+      e.preventDefault();
+      if ($("#palette") && $("#palette").dataset.open === "true") closePalette();
+      else openPalette();
+      return;
+    }
     if (e.key === "F6") { e.preventDefault(); focusNextRegion(e.shiftKey ? -1 : 1); return; }
     if (e.target.matches("input, textarea, select")) return;
     if (e.key === "/") { e.preventDefault(); if ($("#filter")) $("#filter").focus(); }
@@ -2387,6 +2386,222 @@ async function writeTimer() {
     toast("Timer regenerated: " + (t.onCalendar || "none"), "ok");
     await renderTimer();
   } catch (err) { toast("Timer failed: " + err.message, "err"); }
+}
+
+/* One handler per heavy or destructive action, named rather than left inside a click listener:
+ * the palette and the button it mirrors have to reach the same code, or W6's "Enter reaches the
+ * handler the button does" is a claim about two copies that will drift. */
+function runDue() {
+  const force = !!($("#forceDue") && $("#forceDue").checked);
+  return runSources(state.seeders.filter(force ? (s) => s.scheduled : isDueClient).map((s) => s.source));
+}
+
+function pruneStaged(opts) {
+  const filter = {};
+  const srcEl = $("#curateSource"), beforeEl = $("#curateBefore");
+  const src = srcEl ? srcEl.value.trim() : "";
+  const before = beforeEl ? beforeEl.value : "";
+  if (src) filter.source = src;
+  if (before) filter.before = before;
+  // From the palette those two fields can be on another section — or empty, which prunes the whole
+  // staged set — so that path names what it is about to move to `.skyhook/trash/` first (D18).
+  if (opts && opts.confirm) {
+    const what = src ? "staged URLs from " + src : "every staged URL";
+    const when = before ? " staged before " + before : "";
+    if (!confirm("Prune " + what + when + "? Rows move to .skyhook/trash/ — they are not destroyed.")) {
+      return Promise.resolve();
+    }
+  }
+  return post("/api/cache/prune", { filter })
+    .then((r) => {
+      toast("Deleted " + r.deleted + " URL(s) (kept " + r.kept + ").", "ok");
+      renderCuration();
+    })
+    .catch((err) => toast(err.message, "err"));
+}
+
+/* ── command palette (W6) ────────────────────────────────────────────────────
+ * Three kinds of row behind one input: the sections `ROUTE_TITLES` names, five actions, and
+ * per-seeder rows once something is typed. It is not a `.modal` (D16) — the palette's focus never
+ * leaves its input, and `aria-activedescendant` is what moves, not a Tab cycle — so it owns
+ * `openPalette`/`closePalette` and leaves the nine dialogs `openModal` serves untouched.
+ * Rows are rebuilt per keystroke from `state.seeders`, so a poll that replaces the fleet cannot
+ * leave a row pointing at a seeder that is gone. */
+const PALETTE_CAP = 50;      // rows on screen at once: a wall of options is not a palette
+const PALETTE_SEEDERS = 8;   // seeders matched per keystroke, three rows each (D17)
+
+let paletteItems = [], paletteSel = 0, paletteReturnFocus = null;
+
+/* A prefix beats a hit inside the label, that beats a subsequence, and no match means no row.
+ * Case-folded: a source is `Lobsters` but nobody types the shift. */
+function fuzzyScore(query, text) {
+  const t = String(text || "").toLowerCase();
+  if (!query) return 1;
+  const at = t.indexOf(query);
+  if (at === 0) return 200 - Math.min(t.length, 100);
+  if (at > 0) return 120 - Math.min(at, 60);
+  let pos = 0, gaps = 0;
+  for (const ch of query) {
+    const hit = t.indexOf(ch, pos);
+    if (hit === -1) return 0;
+    gaps += hit - pos;
+    pos = hit + 1;
+  }
+  return Math.max(1, 60 - gaps);
+}
+
+function paletteCommands() {
+  const rows = [];
+  // `ROUTE_TITLES`' own order is the rail's; `timer` is a Pi node's section, and the rail hides it
+  // everywhere else, so the palette offers it exactly where the rail does.
+  for (const [name, label] of Object.entries(ROUTE_TITLES)) {
+    if (name === "timer" && !isPiNode()) continue;
+    rows.push({
+      group: "Views", label, hint: name,
+      run: () => navigate(name === "dashboard" ? "#/" : "#/" + name),
+    });
+  }
+  rows.push(
+    { group: "Actions", label: "Refresh everything", hint: "r", run: () => refreshAll() },
+    { group: "Actions", label: "Run due seeders", hint: "run due", run: () => runDue() },
+    { group: "Actions", label: "Prune staged URLs", hint: "curation", run: () => pruneStaged({ confirm: true }) },
+    { group: "Actions", label: "Push staged to storage", hint: "pipeline", run: () => startPipeline("push") },
+    { group: "Actions", label: "Regenerate the systemd timer", hint: "timer", run: () => writeTimer() },
+  );
+  return rows;
+}
+
+/** The rows for `query`, by section and then by how well each matched. */
+function paletteMatches(query) {
+  const q = query.trim().toLowerCase();
+  const rows = paletteCommands();
+  // Per-seeder rows appear only once something is typed (D17): an empty palette listing three
+  // rows for every seeder in a fleet of hundreds is a scroll, not a command list.
+  if (q) {
+    const hits = state.seeders
+      .map((s) => ({ s, score: Math.max(fuzzyScore(q, s.source), fuzzyScore(q, s.displayName)) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, PALETTE_SEEDERS);
+    for (const { s } of hits) {
+      // A display name is what the table shows, so it becomes the hint rather than a second label.
+      const note = s.displayName && s.displayName !== s.source ? s.displayName : "";
+      rows.push(
+        { group: "Seeders", label: "Log: " + s.source, hint: note || "open log",
+          run: () => navigate("#/log/" + encodeURIComponent(s.source)) },
+        { group: "Seeders", label: "Run: " + s.source, hint: note || "run now",
+          run: () => runSources([s.source]) },
+        { group: "Seeders", label: "Schedule: " + s.source, hint: note || "cadence",
+          run: () => openSchedule(s.source) },
+      );
+    }
+  }
+  const rank = { Views: 0, Actions: 1, Seeders: 2 };
+  return rows
+    .map((row, i) => ({ ...row, i, score: Math.max(fuzzyScore(q, row.label), fuzzyScore(q, row.hint)) }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => (rank[a.group] - rank[b.group]) || (b.score - a.score) || (a.i - b.i))
+    .slice(0, PALETTE_CAP);
+}
+
+function renderPalette() {
+  const list = $("#palList"), input = $("#palInput");
+  if (!list || !input) return;
+  if (!paletteItems.length) {
+    list.innerHTML = '<p class="pal-empty">Nothing matches.</p>';
+    input.removeAttribute("aria-activedescendant");
+    return;
+  }
+  let html = "", group = null;
+  paletteItems.forEach((row, i) => {
+    if (row.group !== group) {
+      if (group) html += "</div>";
+      group = row.group;
+      html += '<div class="pal-sec" role="group" aria-label="' + esc(group) + '">' +
+        '<span class="pal-sec-label" aria-hidden="true">' + esc(group) + "</span>";
+    }
+    html += '<button type="button" role="option" tabindex="-1" id="pal-opt-' + i + '"' +
+      ' class="pal-item' + (i === paletteSel ? " sel" : "") + '"' +
+      ' aria-selected="' + (i === paletteSel ? "true" : "false") + '" data-pal="' + i + '">' +
+      '<span class="pal-label">' + esc(row.label) + "</span>" +
+      (row.hint ? '<span class="pal-hint">' + esc(row.hint) + "</span>" : "") +
+      "</button>";
+  });
+  if (group) html += "</div>";
+  list.innerHTML = html;
+  input.setAttribute("aria-activedescendant", "pal-opt-" + paletteSel);
+  const selected = $("#pal-opt-" + paletteSel);
+  if (selected && selected.scrollIntoView) selected.scrollIntoView({ block: "nearest" });
+}
+
+function openPalette() {
+  const layer = $("#palette");
+  if (!layer) return;
+  // Two traps and one Escape key would fight: a sheet closes first, the palette never stacks on it.
+  closeModal();
+  if (layer.dataset.open === "true") { $("#palInput").focus(); return; }
+  paletteReturnFocus = document.activeElement;
+  paletteSel = 0;
+  $("#palInput").value = "";
+  paletteItems = paletteMatches("");
+  layer.dataset.open = "true";
+  renderPalette();
+  $("#palInput").focus();
+}
+
+function closePalette() {
+  const layer = $("#palette");
+  if (!layer || layer.dataset.open !== "true") return;
+  layer.dataset.open = "false";
+  // Only back into something still on screen: Enter may have just replaced the surface the focus
+  // came from, and focusing a detached node silently drops the caret on `<body>`.
+  if (paletteReturnFocus && paletteReturnFocus.isConnected && paletteReturnFocus.focus) {
+    paletteReturnFocus.focus();
+  }
+  paletteReturnFocus = null;
+}
+
+function paletteRun() {
+  const row = paletteItems[paletteSel];
+  if (!row) return;
+  closePalette();
+  row.run();
+}
+
+function paletteMove(delta) {
+  if (!paletteItems.length) return;
+  paletteSel = (paletteSel + delta + paletteItems.length) % paletteItems.length;
+  renderPalette();
+}
+
+function wirePalette() {
+  const layer = $("#palette"), btn = $("#paletteBtn"), input = $("#palInput"), list = $("#palList");
+  if (!layer || !input || !list) return;
+  if (btn) btn.addEventListener("click", openPalette);
+  input.addEventListener("input", () => {
+    paletteSel = 0;
+    paletteItems = paletteMatches(input.value);
+    renderPalette();
+  });
+  // The input is the palette's only tab stop by design (D16), so every key that moves the
+  // selection is handled here — a `Tab` would otherwise leave the list the arrow keys drive.
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); paletteMove(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); paletteMove(-1); }
+    else if (e.key === "Home") { e.preventDefault(); paletteSel = 0; renderPalette(); }
+    else if (e.key === "End") { e.preventDefault(); paletteSel = Math.max(0, paletteItems.length - 1); renderPalette(); }
+    else if (e.key === "Enter") { e.preventDefault(); paletteRun(); }
+    else if (e.key === "Escape") { e.preventDefault(); closePalette(); }
+    else if (e.key === "Tab") { e.preventDefault(); }
+  });
+  // Delegated on the list, not per row: every keystroke rewrites the rows.
+  list.addEventListener("click", (e) => {
+    const opt = e.target.closest("[data-pal]");
+    if (!opt) return;
+    paletteSel = Number(opt.dataset.pal) || 0;
+    paletteRun();
+  });
+  layer.addEventListener("click", (e) => { if (e.target === layer) closePalette(); });
 }
 
 /* The affordances a window cannot honour, removed rather than hidden so nothing in
