@@ -33,7 +33,13 @@ let _queue = Promise.resolve(); // serialises /v1 requests (FlareSolverr is sing
 export function flareSolverrBaseUrl() {
   const s = getFlareSolverrSettings();
   if (!s.enabled) return null;
-  if (s.url) return s.url.replace(/\/+$/, "");
+  if (s.url) {
+    // A loop, because `/\/+$/` backtracks quadratically on a run of slashes that does not end in
+    // one — the same move `core/remote.js:66-70` made, for the same reason.
+    let base = String(s.url);
+    while (base.endsWith("/")) base = base.slice(0, -1);
+    return base;
+  }
   return `http://127.0.0.1:${s.port}`;
 }
 

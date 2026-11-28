@@ -70,7 +70,13 @@ const apiBase = () => {
   // A window has exactly one server — the one the shell spawned — so an override a
   // browser session left in localStorage must not redirect it.
   if (isDesktop()) return window.location.origin;
-  if (state.apiBase.trim()) return state.apiBase.trim().replace(/\/+$/, "");
+  const override = state.apiBase.trim();
+  if (override) {
+    // A loop, because `/\/+$/` backtracks quadratically — the shape `src/core/remote.js:66-70` uses.
+    let base = override;
+    while (base.endsWith("/")) base = base.slice(0, -1);
+    return base;
+  }
   return window.location.origin;
 };
 
