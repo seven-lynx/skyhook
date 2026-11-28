@@ -10,6 +10,14 @@ once the desktop track ships — a signed installer.
 
 ## [Unreleased]
 
+### Fixed
+
+- The desktop shell reports the version it is: `src-tauri/Cargo.toml` stayed at `0.4.2` while the
+  release was `0.5.0`, and the updater's up-to-date line prints `env!("CARGO_PKG_VERSION")` from
+  that manifest, so an installed 0.5.0 build said `up to date (0.4.2)` (#56).
+  `test/desktop-guard.test.mjs` now fails when `package.json`, `tauri.conf.json` or
+  `Cargo.toml` disagrees with the others, and `docs/deployment.md` names the fourth.
+
 ## [0.5.0]
 
 ### Added

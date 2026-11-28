@@ -1,6 +1,6 @@
 [package]
 name = "skyhook"
-version = "0.4.2"
+version = "0.5.0"
 description = "Skyhook desktop shell — a view and a supervisor over the Node sidecar"
 edition = "2021"
 # Windows x64 first. The shell links no native Node module: the server is a
