@@ -98,8 +98,11 @@ runtime runs: `desktop/`, `src/` and `config/` plus a production `node_modules`,
 ships, and then loaded once to prove it. `cargo tauri build` bundles the result as the
 `app` resource, and the installer is copied to `dist/desktop/`.
 
-A build also produces the **updater** half: the `.nsis.zip` an installed copy downloads, its
-minisign `.sig`, and a generated `latest.json` naming both. Signing happens inside `tauri build`, so
+A build also produces the **updater** half: the minisign `.sig` beside the installer, and a
+generated `latest.json` naming both. `bundle.createUpdaterArtifacts` is `true`, so Tauri v2 signs
+the installer itself — the `.nsis.zip` an older bundler wrote appears only in the deprecated
+`"v1Compatible"` form (#57), so the updater downloads the `-setup.exe`. Signing happens inside
+`tauri build`, so
 `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` must be in the environment —
 the wrapper refuses before it compiles when they are missing, because an unsigned artifact is one no
 installed copy will accept. The public half of that keypair is `plugins.updater.pubkey` in
@@ -153,7 +156,7 @@ directory the shell was launched from.
 A consumer pins a **tag**, never a branch:
 
 ```json
-"skyhook": "github:seven-lynx/skyhook#v0.4.3"
+"skyhook": "github:seven-lynx/skyhook#v0.5.0"
 ```
 
 So the release is four steps in this order — a tag on a commit nobody can fetch is not a release:
@@ -162,34 +165,35 @@ So the release is four steps in this order — a tag on a commit nobody can fetc
 git checkout main
 git merge --ff-only <branch that tips the release line>   # never a plain merge on the release path
 git push origin main
-git tag -a v0.4.3 -m "v0.4.3 — what the release changes"
-git push origin v0.4.3
+git tag -a v0.5.0 -m "v0.5.0 — the desktop app, and updates in place"
+git push origin v0.5.0
 ```
 
 Release history is `CHANGELOG.md`, newest first: the release's own section is written in
 the same commit as the version bump, and the README **Status** paragraph is rewritten
 from it rather than the other way round.
 
-A release that ships the desktop app carries four assets, and the tag produces them: `on.push` in
+A release that ships the desktop app carries three assets, and the tag produces them: `on.push` in
 `.github/workflows/ci.yml` names `tags: ["v*"]`, so pushing the tag starts the tag-only `desktop`
 job, which builds on `windows-latest` with the signing key from CI secrets and attaches
-`Skyhook_<version>_x64-setup.exe`, its `.nsis.zip`, that zip's `.sig`, and `latest.json` to the
-Release. Without that `tags` filter a tag push runs no workflow at all, so the job's `refs/tags/v`
+`Skyhook_<version>_x64-setup.exe`, that installer's `.sig`, and `latest.json` to the Release.
+Without that `tags` filter a tag push runs no workflow at all, so the job's `refs/tags/v`
 guard had nothing to guard and a release attached nothing (#35). An installed copy polls
-`releases/latest/download/latest.json`, so a Release without those four strands everyone who
+`releases/latest/download/latest.json`, so a Release without those three strands everyone who
 installed the previous version — build and sign first, upload second, announce last.
 
 The version lives in three places, and all must agree before the tag: `package.json`,
-the README **Status** line, and — once the desktop track ships — the bundle `version` in
-`src-tauri/tauri.conf.json`. Nothing compares the third one, so it is set by hand or the
-app's updater compares the wrong number. The `CHANGELOG.md` entry for the version is
+the README **Status** line, and the bundle `version` in `src-tauri/tauri.conf.json`.
+Nothing compares the third one, so it is set by hand or the app's updater compares the
+wrong number — and `src-tauri/Cargo.toml` carries a fourth that the updater's up-to-date
+line prints (#56), so bump that too. The `CHANGELOG.md` entry for the version is
 written in the same commit.
 
 Then prove the tag from outside the working copy, because the consumer installs the published
 tree and not this checkout:
 
 ```bash
-npm i github:seven-lynx/skyhook#v0.4.3 --allow-git=all   # in a scratch directory
+npm i github:seven-lynx/skyhook#v0.5.0 --allow-git=all   # in a scratch directory
 npm install-scripts approve better-sqlite3               # npm 12 blocks native builds otherwise
 npm ls skyhook --depth=0                                 # prints the resolved version
 ```

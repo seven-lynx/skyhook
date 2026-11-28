@@ -14,7 +14,9 @@
  * 3. Signing of the *updater* artifact happens inside `tauri build` and needs
  *    `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`). Without it the build fails with a
  *    Tauri error; this names the key instead, and refuses before the long build rather
- *    than after it.
+ *    than after it. With `bundle.createUpdaterArtifacts` true, Tauri v2 signs the
+ *    installer itself — the updater downloads `Skyhook_<version>_x64-setup.exe`, not a
+ *    `.nsis.zip` (that archive belongs to the deprecated `"v1Compatible"` form).
  * 4. `latest.json` is written from the artifacts on disk — the version from
  *    `tauri.conf.json`, the signature from the `.sig` the build produced, the URL from
  *    the tag it will be published under. An installed copy updates from that file, so a
@@ -52,28 +54,33 @@ function requireSigningKey() {
 }
 
 /**
- * The two artifact families the build produces: the installer a person runs, and the
- * `.nsis.zip` the updater downloads. Both are globbed because Tauri names them from
+ * The build's artifacts: the installer a person runs, and the same file recognised as the
+ * updater artifact by the `.sig` beside it. Tauri v2 signs the installer itself when
+ * `bundle.createUpdaterArtifacts` is true and writes no `.nsis.zip`, so the signature is
+ * the only marker that separates the two (#57). Globbed because Tauri names the file from
  * `productName` and `version`, and a hard-coded name is wrong on the next bump.
  */
-function bundleArtifacts() {
+function bundleArtifacts(version) {
   const files = readdirSync(BUNDLE);
+  // The version filter is what keeps a stale installer from a previous bump out of the
+  // release: `target/` survives a rebuild, and the copy below would otherwise carry it.
+  const installers = files.filter((file) => file.endsWith(".exe") && file.includes(`_${version}_`));
   return {
-    installers: files.filter((file) => file.endsWith(".exe")),
-    updaterZips: files.filter((file) => file.endsWith(".nsis.zip")),
+    installers,
+    signedInstallers: installers.filter((file) => existsSync(join(BUNDLE, `${file}.sig`))),
   };
 }
 
 /** `latest.json`, from the signature the build wrote and the tag the release will use. */
-function writeLatestJson(version, zipName) {
-  const signatureFile = join(BUNDLE, `${zipName}.sig`);
+function writeLatestJson(version, artifactName) {
+  const signatureFile = join(BUNDLE, `${artifactName}.sig`);
   if (!existsSync(signatureFile)) {
-    throw new Error(`no signature beside ${zipName}: the build did not sign the updater artifact`);
+    throw new Error(`no signature beside ${artifactName}: the build did not sign the updater artifact`);
   }
   const manifest = latestManifest({
     version,
     signature: readFileSync(signatureFile, "utf8"),
-    url: `${RELEASES}/v${version}/${zipName}`,
+    url: `${RELEASES}/v${version}/${artifactName}`,
     pubDate: new Date(),
   });
   const file = join(OUT, "latest.json");
@@ -103,22 +110,24 @@ async function main() {
     );
   }
 
-  const { installers, updaterZips } = bundleArtifacts();
+  const { version } = JSON.parse(readFileSync(TAURI_CONF, "utf8"));
+  const { installers, signedInstallers } = bundleArtifacts(version);
   if (installers.length === 0) throw new Error(`no installer in ${relative(ROOT, BUNDLE)}`);
-  if (updaterZips.length === 0) {
+  if (signedInstallers.length === 0) {
     throw new Error(
-      `no .nsis.zip in ${relative(ROOT, BUNDLE)} — bundle.createUpdaterArtifacts is what produces the updater archive`,
+      `no signed installer in ${relative(ROOT, BUNDLE)} — bundle.createUpdaterArtifacts is what signs the updater artifact`,
     );
   }
 
+  // The `.sig` travels with the installer: it is the signature `latest.json` quotes and the
+  // one an installed copy verifies, so a Release that carries the exe without it strands it.
   mkdirSync(OUT, { recursive: true });
-  for (const file of [...installers, ...updaterZips]) {
+  for (const file of [...installers, ...signedInstallers.map((installer) => `${installer}.sig`)]) {
     copyFileSync(join(BUNDLE, file), join(OUT, file));
     console.log(`✓ ${relative(ROOT, join(OUT, file))}`);
   }
 
-  const { version } = JSON.parse(readFileSync(TAURI_CONF, "utf8"));
-  writeLatestJson(version, updaterZips[0]);
+  writeLatestJson(version, signedInstallers[0]);
 
   console.log("\nUnsigned installer: Authenticode is D8b's half (PLAN.md §6 item 11).");
 }

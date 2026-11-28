@@ -62,7 +62,6 @@ jobs:
           name: skyhook-installer
           path: |
             dist/desktop/*.exe
-            dist/desktop/*.nsis.zip
             dist/desktop/*.sig
             dist/desktop/latest.json
       # The Release is the update channel: an installed copy reads `latest.json` from
@@ -77,4 +76,4 @@ jobs:
         run: |
           gh release view "$env:TAG" *> $null
           if ($LASTEXITCODE -ne 0) { gh release create "$env:TAG" --title "$env:TAG" --notes-from-tag }
-          gh release upload "$env:TAG" dist/desktop/*.exe dist/desktop/*.nsis.zip dist/desktop/*.sig dist/desktop/latest.json --clobber
+          gh release upload "$env:TAG" dist/desktop/*.exe dist/desktop/*.sig dist/desktop/latest.json --clobber
