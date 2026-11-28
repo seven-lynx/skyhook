@@ -182,12 +182,13 @@ guard had nothing to guard and a release attached nothing (#35). An installed co
 `releases/latest/download/latest.json`, so a Release without those three strands everyone who
 installed the previous version — build and sign first, upload second, announce last.
 
-The version lives in three places, and all must agree before the tag: `package.json`,
-the README **Status** line, and the bundle `version` in `src-tauri/tauri.conf.json`.
-Nothing compares the third one, so it is set by hand or the app's updater compares the
-wrong number — and `src-tauri/Cargo.toml` carries a fourth that the updater's up-to-date
-line prints (#56), so bump that too. The `CHANGELOG.md` entry for the version is
-written in the same commit.
+The version lives in four places, and the first three must agree before the tag:
+`package.json`, the bundle `version` in `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`,
+which is compiled into the shell — the updater's up-to-date line prints
+`env!("CARGO_PKG_VERSION")`, so a stale copy tells a 0.5.0 user they are current at `0.4.2`
+(#56). `test/desktop-guard.test.mjs` compares those three, so a release bump that leaves one behind
+fails `npm test` — which leaves the fourth, the README **Status** line, to the plan gate's `W15`,
+read against `package.json`. The `CHANGELOG.md` entry for the version is written in the same commit.
 
 Then prove the tag from outside the working copy, because the consumer installs the published
 tree and not this checkout:

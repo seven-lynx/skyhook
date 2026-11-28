@@ -1,5 +1,5 @@
 /**
- * desktop-guard.test.mjs — the five ways a desktop build could stop being the
+ * desktop-guard.test.mjs — the six ways a desktop build could stop being the
  * build CI tested, checked instead of trusted.
  *
  * A desktop release is two processes written in two languages, and the failures
@@ -24,6 +24,12 @@
  *
  * The import scan reads module *specifiers*, not raw text: `desktop/server.js`
  * names `better-sqlite3` in its docblock precisely to say it never imports it.
+ *
+ * The sixth family is the version every manifest states in its own dialect, and
+ * which nothing compared (#56): the shell's up-to-date line prints
+ * `CARGO_PKG_VERSION`, compiled from `src-tauri/Cargo.toml`, so a Cargo.toml left
+ * behind reports a version the installed build is not. All three are read, and each
+ * is also fed a copy that drifted.
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -40,6 +46,7 @@ const shellMain = join(root, "src-tauri", "src", "main.rs");
 const sidecarSchedule = join(desktopDir, "schedule.js");
 const tauriConfig = join(root, "src-tauri", "tauri.conf.json");
 const packageManifest = join(root, "package.json");
+const cargoManifest = join(root, "src-tauri", "Cargo.toml");
 const distWrapper = join(root, "scripts", "desktop-dist.mjs");
 const stageScript = join(root, "scripts", "stage-desktop-app.mjs");
 const latestJsonScript = join(root, "scripts", "latest-json.mjs");
@@ -872,5 +879,71 @@ test("guard: the updater rule refuses each way an installed copy would stop upda
   const noUpload = base.ciYaml.replace("gh release upload", "echo would upload");
   assert.notEqual(noUpload, base.ciYaml, "ci.yml still attaches the artifacts");
   assert.equal(wiring({ ciYaml: noUpload }).releaseUpload, false);
+});
+
+/**
+ * The version each of the three manifests gives the build, and whether they agree.
+ *
+ * `package.json` names the npm package, `tauri.conf.json`'s top-level `version` is what the
+ * bundler stamps on the installer, and `Cargo.toml`'s `[package] version` is compiled into
+ * the shell — which is why the updater's up-to-date line quotes it (`env!("CARGO_PKG_VERSION")`).
+ * The third had no reader at all before #56, and a 0.5.0 build came to print
+ * `up to date (0.4.2)`. Only the `[package]` section is read: a dependency's `version` in the
+ * same file is a requirement, not a claim about this app. An empty answer is never agreement —
+ * that is how a regex that stopped matching would pass silently.
+ */
+function manifestVersions({ packageJson, tauriConf, cargoToml }) {
+  const blocks = String(cargoToml ?? "").split(/^\[/m).slice(1);
+  const packageBlock = blocks.find((block) => block.startsWith("package]")) ?? "";
+  const read = (value) => String(value ?? "").trim();
+  const versions = {
+    package: read(packageJson?.version),
+    tauri: read(tauriConf?.version),
+    cargo: /\n\s*version\s*=\s*"([^"]+)"/.exec(packageBlock)?.[1] ?? "",
+  };
+  const distinct = new Set(Object.values(versions));
+  return { ...versions, agree: distinct.size === 1 && !distinct.has("") };
+}
+
+test("guard: the three manifests a build reads its version from agree", () => {
+  const packageJson = JSON.parse(readFileSync(packageManifest, "utf8"));
+  assert.deepEqual(
+    manifestVersions({
+      packageJson,
+      tauriConf: JSON.parse(readFileSync(tauriConfig, "utf8")),
+      cargoToml: readFileSync(cargoManifest, "utf8"),
+    }),
+    { package: packageJson.version, tauri: packageJson.version, cargo: packageJson.version, agree: true },
+    "package.json, tauri.conf.json and Cargo.toml all state the release the tag names",
+  );
+});
+
+test("guard: the version rule refuses a manifest the bump left behind", () => {
+  const base = {
+    packageJson: JSON.parse(readFileSync(packageManifest, "utf8")),
+    tauriConf: JSON.parse(readFileSync(tauriConfig, "utf8")),
+    cargoToml: readFileSync(cargoManifest, "utf8"),
+  };
+  const versions = (changes) => manifestVersions({ ...base, ...changes });
+
+  // 1. The shell's own manifest lags the release — #56 exactly: a 0.5.0 build whose
+  // updater line reads `up to date (0.4.2)`.
+  const staleShell = base.cargoToml.replace(/^version = "[^"]+"\r?$/m, 'version = "0.4.2"');
+  assert.notEqual(staleShell, base.cargoToml, "Cargo.toml still carries a [package] version");
+  assert.equal(versions({ cargoToml: staleShell }).agree, false);
+
+  // 2. The bundle version moves instead, so the installer's name and the app's own claim
+  // disagree.
+  assert.equal(versions({ tauriConf: { ...base.tauriConf, version: "0.4.2" } }).agree, false);
+
+  // 3. The npm manifest moves alone, which is the one a release bump always edits.
+  assert.equal(versions({ packageJson: { ...base.packageJson, version: "0.5.1" } }).agree, false);
+
+  // 4. No `[package]` version at all reads as empty, and an empty manifest is not agreement.
+  const noVersion = base.cargoToml.replace(/^version = "[^"]+"\r?$/m, "");
+  assert.notEqual(noVersion, base.cargoToml, "the bump left a version line to remove");
+  const missing = versions({ cargoToml: noVersion });
+  assert.equal(missing.cargo, "");
+  assert.equal(missing.agree, false);
 });
 
