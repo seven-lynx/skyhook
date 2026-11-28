@@ -1272,8 +1272,9 @@ td .row-link:hover { color: var(--brand); }
   font-size: var(--text-md);
 }
 .pal-input input::placeholder { color: var(--text-subtle); }
-/* `.ic` carries no size of its own — every context sizes it (`.btn .ic`, `.rail-item .ic`), and an
- * unsized one renders at the SVG default and swamps the row. */
+/* `.ic` takes its base size from the single `.ic { … }` rule at the foot of this file; a context rule
+ * like this one is more specific, so it keeps its own numbers. A missing size is never fixed here —
+ * the base rule is what an unsized icon falls back to (#47). */
 .pal-input .ic { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; flex-shrink: 0; }
 
 .pal-list { overflow: auto; padding: var(--space-1) 0; }

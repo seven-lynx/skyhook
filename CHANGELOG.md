@@ -50,6 +50,13 @@ once the desktop track ships — a signed installer.
   hardcoded navy, and the 96 px header logo gets that backdrop too: it was a white tile
   on the dark bar. A test now fails if the stylesheet, the manifest and `index.html`
   disagree about the colour.
+- The Settings remote-control toggle issues one request per click again: its listener was
+  bound on every visit to the section, so four visits turned one click into four
+  `POST /api/settings` calls, each carrying the state its own render had seen.
+- The dashboard's empty states use the shared `.empty` rule instead of an inline
+  padded paragraph.
+- The console's due panel and its two due counters no longer offer a Run button for a
+  seeder that is already running.
 
 ## [0.4.3]
 
