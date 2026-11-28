@@ -39,6 +39,17 @@ once the desktop track ships — a signed installer.
   before tagging anything, and `--max N` no longer processes `N - checkpoint`
   rows. The run summary reads `N processed this run (M lifetime)`; the returned
   `processed` is still the lifetime total, with `processedThisRun` beside it.
+- A failing CLI command prints one line and exits 1 instead of an unhandled-rejection
+  stack. `SKYHOOK_DEBUG=1` keeps the stack for debugging, and the taxonomy is no longer
+  read at import, so `skyhook help` works next to a `skyhook.config.json` that does not
+  parse.
+- Test fixtures are `gitignore`d, and the config suite removes its `.tmp-*` root in an
+  `after()` hook instead of a trailing line a red test skips: 84 empty `.tmp-config-*`
+  directories had accumulated in one checkout.
+- The generated icons composite on `--bg` read out of `styles.css` rather than a
+  hardcoded navy, and the 96 px header logo gets that backdrop too: it was a white tile
+  on the dark bar. A test now fails if the stylesheet, the manifest and `index.html`
+  disagree about the colour.
 
 ## [0.4.3]
 
