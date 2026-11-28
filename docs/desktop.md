@@ -48,17 +48,42 @@ change static config — the same file, and the same defaults, as a command-line
 
 ## The menu and the tray
 
-The app menu is the same list as the tray icon's:
+The window's menu bar is grouped by what each item is for. The tray icon carries a short list of
+its own, because a tray popup opens one level deep.
+
+**File**
 
 | Item | What it does |
 |---|---|
 | Open data folder | Explorer at `%APPDATA%\com.sevenlynx.skyhook` |
 | Open latest log | The newest file under `.skyhook\logs\` |
+| Exit | Kills the server child, then exits (`Ctrl+Q`) |
+
+**Run**
+
+| Item | What it does |
+|---|---|
 | Run due now | Starts every seeder whose cadence is due, through `/api/due` → `/api/run` |
+
+**Settings**
+
+| Item | What it does |
+|---|---|
 | Start with Windows | A per-user `Run` entry — not a service. The mark is read back from Windows |
 | Check for updates automatically | Whether the launch check runs. Off means the app makes no update request at all |
 | Check for updates now | Asks once, whatever the toggle says |
-| Quit | Kills the server child, then exits |
+| Open Settings… | Sends the window to its own Settings page (`Ctrl+,`) — the same page the rail opens |
+
+**Help**
+
+| Item | What it does |
+|---|---|
+| Documentation | Opens `docs/README.md` in the repository |
+| Report an issue | Opens the repository's issue list |
+| About Skyhook | The shell's name, version and licence, in the native dialog |
+
+The tray icon carries *Show Skyhook*, *Run due now*, *Open latest log*, *Start with Windows* and
+*Exit*. It is deliberately not the app menu: the update toggles belong to a window you have open.
 
 While the app runs it is also the scheduler: the sidecar asks its own server what is due once a
 minute and starts it. There is no Windows scheduled task and no systemd unit. Closing the window

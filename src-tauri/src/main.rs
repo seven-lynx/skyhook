@@ -35,7 +35,9 @@ use std::sync::Mutex;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{
+    AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu,
+};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -525,21 +527,32 @@ fn open_failure(app: &AppHandle, reason: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The app menu, shared by the window and the tray.
+/// The two links in *Help*, one line each so a moved doc or a renamed repo is one edit.
+const DOCS_URL: &str = "https://github.com/seven-lynx/skyhook/blob/main/docs/README.md";
+const ISSUES_URL: &str = "https://github.com/seven-lynx/skyhook/issues";
+
+/// The window's menu bar: *File*, *Run*, *Settings* and *Help*.
+///
+/// On Windows the app menu *is* the menu bar, so a flat list of every command reads as a row of
+/// unrelated buttons. The items are therefore grouped by what they are for: housekeeping in
+/// *File*, the one action in *Run*, every preference in *Settings*, the links in *Help*.
 ///
 /// *Start with Windows* is a check item whose mark is read from the OS's own Run entry, so an
 /// install where the entry exists shows it — nothing here remembers the answer. *Check for
 /// updates automatically* is the same shape with a different source: the shell's own
-/// `updates.json`, because the flag is the app's, not Windows's. The marks are passed in rather
-/// than re-read so a toggle can rebuild the tray's menu with the value it just wrote.
-fn build_menu(
+/// `updates.json`, because the flag is the app's, not Windows's. Both marks are passed in rather
+/// than re-read so a toggle can rebuild the menu with the value it just wrote.
+///
+/// *Open Settings…* sends the window to its own `#/settings` route instead of growing a second
+/// settings UI here: the server, the config and that page stay the only place a setting means
+/// anything. *Exit* is an ordinary item, not `PredefinedMenuItem::quit` — that one posts
+/// `WM_QUIT` to the Win32 loop (muda's `run_predefined`), which the `ExitRequested` hook below
+/// never sees, so the sidecar would outlive the window that owns it.
+fn build_app_menu(
     app: &AppHandle,
     autostart_checked: bool,
     updates_checked: bool,
 ) -> tauri::Result<Menu<tauri::Wry>> {
-    let data = MenuItem::with_id(app, "open-data", "Open data folder", true, None::<&str>)?;
-    let log = MenuItem::with_id(app, "open-log", "Open latest log", true, None::<&str>)?;
-    let run = MenuItem::with_id(app, "run-due", "Run due now", true, None::<&str>)?;
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
@@ -556,19 +569,90 @@ fn build_menu(
         updates_checked,
         None::<&str>,
     )?;
-    let check_now = MenuItem::with_id(app, "check-updates", "Check for updates now", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, Some("CmdOrCtrl+Q"))?;
+    let file = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[
+            &MenuItem::with_id(app, "open-data", "Open data folder", true, None::<&str>)?,
+            &MenuItem::with_id(app, "open-log", "Open latest log", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "quit", "Exit", true, Some("CmdOrCtrl+Q"))?,
+        ],
+    )?;
+    let run = Submenu::with_items(
+        app,
+        "Run",
+        true,
+        &[&MenuItem::with_id(app, "run-due", "Run due now", true, None::<&str>)?],
+    )?;
+    let settings = Submenu::with_items(
+        app,
+        "Settings",
+        true,
+        &[
+            &autostart,
+            &auto_update,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "check-updates", "Check for updates now", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "open-settings", "Open Settings…", true, Some("CmdOrCtrl+,"))?,
+        ],
+    )?;
+    let help = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[
+            &MenuItem::with_id(app, "docs", "Documentation", true, None::<&str>)?,
+            &MenuItem::with_id(app, "report-issue", "Report an issue", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::about(
+                app,
+                Some("About Skyhook"),
+                Some(AboutMetadata {
+                    name: Some("Skyhook".to_string()),
+                    version: Some(app.package_info().version.to_string()),
+                    comments: Some(
+                        "Self-hosted content seeder: discover, enrich, tag, and push web content \
+                         to your own database."
+                            .to_string(),
+                    ),
+                    copyright: Some("Copyright (c) 2026 seven-lynx, MIT licensed".to_string()),
+                    website: Some("https://github.com/seven-lynx/skyhook".to_string()),
+                    website_label: Some("GitHub".to_string()),
+                    ..Default::default()
+                }),
+            )?,
+        ],
+    )?;
+    Menu::with_items(app, &[&file, &run, &settings, &help])
+}
+
+/// The tray menu: the short list, flat.
+///
+/// A tray popup opens one level deep, so this is not the app menu with fewer separators — it is
+/// the handful of things worth reaching with no window in front of you. *Show Skyhook* is the
+/// same focus a second launch gets; *Start with Windows* is the one preference that matters
+/// there, so the update toggles stay in the window's *Settings*.
+fn build_tray_menu(app: &AppHandle, autostart_checked: bool) -> tauri::Result<Menu<tauri::Wry>> {
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "Start with Windows",
+        true,
+        autostart_checked,
+        None::<&str>,
+    )?;
     Menu::with_items(
         app,
         &[
-            &data,
-            &log,
-            &run,
+            &MenuItem::with_id(app, "show-window", "Show Skyhook", true, None::<&str>)?,
+            &MenuItem::with_id(app, "run-due", "Run due now", true, None::<&str>)?,
+            &MenuItem::with_id(app, "open-log", "Open latest log", true, None::<&str>)?,
             &autostart,
-            &auto_update,
-            &check_now,
             &PredefinedMenuItem::separator(app)?,
-            &quit,
+            &MenuItem::with_id(app, "quit", "Exit", true, Some("CmdOrCtrl+Q"))?,
         ],
     )
 }
@@ -581,16 +665,17 @@ fn autostart_enabled(app: &AppHandle) -> bool {
 /// Re-state both check marks on both menus that carry them, after a toggle.
 ///
 /// Each item exists twice — the window's menu bar and the tray's — because each is a separate
-/// menu. `TrayIcon` in tauri 2.12 offers `set_menu` and no getter (checked in the crate
-/// source, `tray/mod.rs:526`), so the tray's copy is replaced with a freshly built menu rather
-/// than read back; the window's copy is walked. Every mark is read from where its fact lives —
-/// *Start with Windows* from the OS's Run entry, *updates* from the shell's own flag file —
-/// because a mark that disagreed with its source would be the only copy of that fact anywhere.
+/// menu. Both are rebuilt rather than walked: the window's check items now sit inside a
+/// submenu, and `Menu::get` reads the top level only (`menu.rs:375-390`), so a walk would find
+/// nothing to update and the mark would stop following its source. The tray's copy had to be
+/// rebuilt anyway — `TrayIcon` in tauri 2.12 offers `set_menu` and no getter
+/// (`tray/mod.rs:526`). Every mark is read from where its fact lives — *Start with Windows* from
+/// the OS's Run entry, *updates* from the shell's own flag file — because a mark that disagreed
+/// with its source would be the only copy of that fact anywhere.
 fn sync_menu_checks(app: &AppHandle) {
     let autostart = autostart_enabled(app);
-    let updates = check_on_launch_enabled(app);
     if let Some(tray) = app.tray_by_id("skyhook") {
-        match build_menu(app, autostart, updates) {
+        match build_tray_menu(app, autostart) {
             Ok(menu) => {
                 if let Err(err) = tray.set_menu(Some(menu)) {
                     eprintln!("tray menu: {err}");
@@ -599,22 +684,21 @@ fn sync_menu_checks(app: &AppHandle) {
             Err(err) => eprintln!("tray menu: {err}"),
         }
     }
-    if let Some(menu) = app.menu() {
-        for item in menu.items().unwrap_or_default() {
-            let id = item.id().as_ref().to_string();
-            let wanted = match id.as_str() {
-                "autostart" => Some(autostart),
-                "auto-update" => Some(updates),
-                _ => None,
-            };
-            if let (Some(wanted), Some(check)) = (wanted, item.as_check_menuitem()) {
-                let _ = check.set_checked(wanted);
-            }
-        }
+    let rebuilt = build_app_menu(app, autostart, check_on_launch_enabled(app))
+        .and_then(|menu| menu.set_as_app_menu());
+    if let Err(err) = rebuilt {
+        eprintln!("app menu: {err}");
     }
 }
 
-/// Menu ids are the contract between this function and `build_menu`.
+/// Hand a URL to the system browser — the same verb `on_navigation` gives a link out of the page.
+fn open_url(app: &AppHandle, url: &str) {
+    if let Err(err) = app.opener().open_url(url, None::<String>) {
+        eprintln!("open {url}: {err}");
+    }
+}
+
+/// Menu ids are the contract between this function and `build_app_menu` / `build_tray_menu`.
 fn on_menu(app: &AppHandle, id: &str) {
     let session = app.state::<Session>();
     match id {
@@ -642,6 +726,27 @@ fn on_menu(app: &AppHandle, id: &str) {
             },
             None => eprintln!("run due: no session yet"),
         },
+        // The same focus a second launch gets, for a window behind another app.
+        "show-window" => match app.get_webview_window("main") {
+            Some(window) => {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            None => eprintln!("show window: no window yet"),
+        },
+        // The hash route the rail already uses, so the window lands on the page the shell
+        // would otherwise have to reimplement.
+        "open-settings" => match app.get_webview_window("main") {
+            Some(window) => {
+                if let Err(err) = window.eval("location.hash = '#/settings';") {
+                    eprintln!("open settings: {err}");
+                }
+            }
+            None => eprintln!("open settings: no window yet"),
+        },
+        "docs" => open_url(app, DOCS_URL),
+        "report-issue" => open_url(app, ISSUES_URL),
         // A per-user Run entry, written and read by the plugin: the OS keeps this
         // fact, so a reinstall or a manual edit of the registry shows through.
         "autostart" => {
@@ -690,7 +795,7 @@ fn kill_sidecar(app: &AppHandle) {
 }
 
 fn install_tray(app: &AppHandle) -> tauri::Result<()> {
-    let menu = build_menu(app, autostart_enabled(app), check_on_launch_enabled(app))?;
+    let menu = build_tray_menu(app, autostart_enabled(app))?;
     let mut tray = TrayIconBuilder::with_id("skyhook")
         .tooltip("Skyhook")
         .menu(&menu)
@@ -726,7 +831,7 @@ fn main() {
             let handle = app.handle().clone();
             // Menus are built here, not by `Builder::menu`: the autostart item reads
             // the plugin's state, and plugin state exists by the time `setup` runs.
-            build_menu(
+            build_app_menu(
                 &handle,
                 autostart_enabled(&handle),
                 check_on_launch_enabled(&handle),

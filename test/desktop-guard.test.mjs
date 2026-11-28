@@ -238,6 +238,35 @@ function scheduleWiring({ serverJs, scheduleJs, mainRs, capability }) {
 }
 
 /**
+ * The shape of the shell's two menus, read from the one file that builds them.
+ *
+ * The first build put every command at the top level of a single `Menu`, which on Windows
+ * renders as a row of unrelated buttons — the app menu *is* the menu bar there. So the window's
+ * menu is checked for its four submenus and the tray for staying one level deep, and the id
+ * contract is checked too: an item whose id has no arm in `on_menu` is a button that does
+ * nothing, which is exactly what a rebuilt menu makes easy to ship.
+ */
+function menuShape(mainRs) {
+  const between = (from, to) => {
+    const start = mainRs.indexOf(from);
+    const end = mainRs.indexOf(to);
+    return start >= 0 && end > start ? mainRs.slice(start, end) : "";
+  };
+  const appMenu = between("fn build_app_menu(", "fn build_tray_menu(");
+  const trayMenu = between("fn build_tray_menu(", "fn autostart_enabled(");
+  const onMenu = between("fn on_menu(", "fn kill_sidecar(");
+  const ids = [...mainRs.matchAll(/_id\(\s*app,\s*"([a-z-]+)"/g)].map((match) => match[1]);
+  return {
+    grouped: ["File", "Run", "Settings", "Help"].every(
+      (label) => appMenu.includes("Submenu::with_items(") && appMenu.includes(`"${label}"`),
+    ),
+    trayIsFlat: trayMenu.includes("Menu::with_items(") && !trayMenu.includes("Submenu::"),
+    about: appMenu.includes("PredefinedMenuItem::about("),
+    everyIdAnswered: ids.length > 0 && ids.every((id) => onMenu.includes(`"${id}" =>`)),
+  };
+}
+
+/**
  * Whether a workflow is *started* by a version-tag push — its `on:` header, read
  * before the first `jobs:` line.
  *
@@ -587,9 +616,10 @@ test("guard: the schedule rule refuses a shell that stopped owning the schedule"
   const withRunning = `${scheduleJs}\nconst again = await request("GET", "/api/running");\n`;
   assert.equal(wiring({ scheduleJs: withRunning }).noRunningRoundTrip, false);
 
-  // 5. The check item is gone, so the Run entry is unreachable from the app.
-  const noToggle = mainRs.replace('"Start with Windows"', "");
-  assert.notEqual(noToggle, mainRs, "the menu still offers the toggle");
+  // 5. The check item is gone from both menus, so the Run entry is unreachable from the app.
+  //    `replaceAll`: the window's menu and the tray each carry their own item.
+  const noToggle = mainRs.replaceAll('"Start with Windows"', "");
+  assert.notEqual(noToggle, mainRs, "the menus still offer the toggle");
   assert.equal(wiring({ mainRs: noToggle }).autostartToggle, false);
 
   // 6. The toggle is there but the capability never grants the plugin, so it fails
@@ -602,6 +632,48 @@ test("guard: the schedule rule refuses a shell that stopped owning the schedule"
     ),
   };
   assert.equal(wiring({ capability: noPermission }).autostartAllowed, false);
+});
+
+test("guard: the menu bar is grouped, and the tray stays one level deep", () => {
+  assert.deepEqual(
+    menuShape(readFileSync(shellMain, "utf8")),
+    {
+      grouped: true,
+      trayIsFlat: true,
+      about: true,
+      everyIdAnswered: true,
+    },
+    "the window's menu bar is File, Run, Settings and Help; the tray is the short list",
+  );
+});
+
+test("guard: the menu rule refuses a flat bar and an id with nothing behind it", () => {
+  const mainRs = readFileSync(shellMain, "utf8");
+
+  // 1. A group loses its name, so the bar is a list of commands again.
+  const flat = mainRs.replace('"Help",', '"Unused",');
+  assert.notEqual(flat, mainRs, "build_app_menu still names its groups");
+  assert.equal(menuShape(flat).grouped, false);
+
+  // 2. The tray grows a submenu, which a tray popup does not open well.
+  const traySignature =
+    "fn build_tray_menu(app: &AppHandle, autostart_checked: bool) -> tauri::Result<Menu<tauri::Wry>> {";
+  const nested = mainRs.replace(
+    traySignature,
+    `${traySignature}\n    let _more = Submenu::new(app, "More", true)?;`,
+  );
+  assert.notEqual(nested, mainRs, "build_tray_menu is still the flat list");
+  assert.equal(menuShape(nested).trayIsFlat, false);
+
+  // 3. Help loses its About dialog.
+  const noAbout = mainRs.replace("PredefinedMenuItem::about(", "");
+  assert.notEqual(noAbout, mainRs, "the Help menu still offers About");
+  assert.equal(menuShape(noAbout).about, false);
+
+  // 4. An item is created with no arm behind it: a menu entry that does nothing.
+  const orphan = mainRs.replace('"report-issue" => open_url(app, ISSUES_URL),', "");
+  assert.notEqual(orphan, mainRs, "on_menu still answers report-issue");
+  assert.equal(menuShape(orphan).everyIdAnswered, false);
 });
 
 test("guard: a fresh checkout carries every piece the installer build needs", () => {

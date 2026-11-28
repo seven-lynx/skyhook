@@ -10,6 +10,13 @@ once the desktop track ships — a signed installer.
 
 ## [Unreleased]
 
+### Changed
+
+- The desktop app's menu bar is grouped into *File*, *Run*, *Settings* and *Help* instead of one
+  flat list of seven commands: the update toggles and *Open Settings…* (`Ctrl+,`) moved into
+  *Settings*, and *Help* gained *Documentation*, *Report an issue* and a native *About* dialog.
+  The tray keeps a short list of its own, with *Show Skyhook* added.
+
 ## [0.5.0]
 
 ### Added
