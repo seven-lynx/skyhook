@@ -10,10 +10,14 @@ once the desktop track ships — a signed installer.
 
 ## [Unreleased]
 
+## [0.5.0]
+
 ### Added
 
-- A desktop application (Tauri + a bundled Node sidecar) on the desktop track,
-  not yet released: it ships in `v0.5.0`.
+- A desktop application (Tauri + a bundled Node sidecar): a WebView2 window
+  around the same server, the run schedule owned in-app on Windows, and a sidecar
+  the shell supervises and stops with the window. State lives in the app data
+  directory the shell passes to the sidecar, not the launch directory.
 - In-place updates for the desktop app: it checks `latest.json` on the Release once
   per launch behind a *Check for updates automatically* toggle, verifies the
   download's minisign signature and its signed version, then installs passively.

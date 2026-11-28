@@ -62,7 +62,7 @@ node bin/skyhook.js init --provider sqlite
 
 > **Not on npm.** Skyhook is distributed as a GitHub dependency — the `skyhook`
 > name on npm belongs to an unrelated project. Install via clone, or add
-> `github:seven-lynx/skyhook#v0.4.3` as a dependency. **On npm 12** add
+> `github:seven-lynx/skyhook#v0.5.0` as a dependency. **On npm 12** add
 > `--allow-git=all` to that install and then run
 > `npm install-scripts approve better-sqlite3`, because npm 12 blocks git fetches
 > and unapproved native builds by default; npm 11 and earlier need neither.
@@ -188,6 +188,17 @@ test/                   # smoke tests (node --test)
 ```
 
 ## Status
+
+**v0.5.0** — the desktop app ships: a Tauri/WebView2 window around the same server,
+a bundled Node 24 sidecar it supervises, and in-place updates — the app checks
+`latest.json` on the Release once per launch behind a *Check for updates
+automatically* toggle, verifies the download's minisign signature and its signed
+version, then installs passively. It owns the schedule on Windows (*Run due now*,
+*Start with Windows*, the tray) and keeps state in `%APPDATA%\com.sevenlynx.skyhook`.
+Alongside it: `/api/due`, `/api/status` and `/api/health` stop reporting a running
+seeder as due, the CORS preflight names `Authorization` and `x-skyhook-token`,
+`tag --max N` bounds the run rather than the lifetime checkpoint, and a failing CLI
+command prints one line instead of an unhandled-rejection stack.
 
 **v0.4.3** — the operator console is a workbench: a section rail with a
 per-section navigator, draggable panes (splitters, collapse to a head strip, `F6`

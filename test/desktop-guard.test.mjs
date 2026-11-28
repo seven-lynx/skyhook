@@ -756,7 +756,7 @@ function updaterWiring({ tauriConf, mainRs, distScript, latestScript, ciYaml }) 
     childStoppedFirst:
       mainRs.includes(".on_before_exit(before_exit)") && mainRs.includes("move || kill_sidecar(&app)"),
     manifestWritten:
-      distScript.includes("writeLatestJson(version, updaterZips[0]);") && distScript.includes("latestManifest({"),
+      distScript.includes("writeLatestJson(version, signedInstallers[0]);") && distScript.includes("latestManifest({"),
     manifestShape:
       latestScript.includes("pub_date:") && latestScript.includes("platforms:") && latestScript.includes("signature:"),
     secretsInCi:
@@ -810,7 +810,7 @@ test("guard: the updater rule refuses each way an installed copy would stop upda
   assert.notEqual(noPlugin, base.mainRs, "main.rs still registers the updater");
   assert.equal(wiring({ mainRs: noPlugin }).pluginRegistered, false);
 
-  // 2. The build stops creating the archive the updater downloads.
+  // 2. The build stops signing the artifact the updater downloads.
   assert.equal(
     wiring({
       tauriConf: { ...base.tauriConf, bundle: { ...base.tauriConf.bundle, createUpdaterArtifacts: false } },
@@ -852,7 +852,7 @@ test("guard: the updater rule refuses each way an installed copy would stop upda
 
   // 9. The wrapper ships the installer and forgets the manifest, so every installed copy
   // polls a URL that does not exist.
-  const noManifest = base.distScript.replace("writeLatestJson(version, updaterZips[0]);", "");
+  const noManifest = base.distScript.replace("writeLatestJson(version, signedInstallers[0]);", "");
   assert.notEqual(noManifest, base.distScript, "the wrapper still writes latest.json");
   assert.equal(wiring({ distScript: noManifest }).manifestWritten, false);
 

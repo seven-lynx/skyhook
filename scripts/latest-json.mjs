@@ -3,7 +3,7 @@
  *
  * `tauri-plugin-updater` fetches one static JSON and looks for its own
  * `{{target}}-{{arch}}` key under `platforms`. The signature in it is the minisign
- * signature the build produced beside the `.nsis.zip`, and the URL is where that zip
+ * signature the build produced beside the installer, and the URL is where that installer
  * is published — so every field here is copied from an artifact that already exists
  * on disk, never typed by hand. A release that published an installer without this
  * file is a dead end for everyone who installed the previous version.
